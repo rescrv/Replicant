@@ -34,14 +34,15 @@ extern "C"
 #endif /* __cplusplus */
 
 /* C */
+#include <stdint.h>
 #include <stdlib.h>
-
 
 struct replicant_state_machine_actions
 {
     void* ctx;
-    int (*set_response)(void* ctx, const char* data, size_t data_sz);
+    uint64_t (*client)(void* ctx);
     void (*log)(void* ctx, const char* msg);
+    int (*set_response)(void* ctx, const char* data, size_t data_sz);
 };
 
 typedef void* (*replicant_ctor)(struct replicant_state_machine_actions* actions);

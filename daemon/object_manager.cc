@@ -155,6 +155,19 @@ callback_set_response(void* ctx, const char* data, size_t data_sz)
     }
 }
 
+static uint64_t
+callback_client_cmd(void* ctx)
+{
+    command* cmd = static_cast<command*>(ctx);
+    return cmd->object();
+}
+
+static uint64_t
+callback_client_obj(void*)
+{
+    return 0;
+}
+
 static void
 callback_log_cmd(void* ctx, const char* msg)
 {
@@ -214,8 +227,9 @@ object_manager :: apply(e::intrusive_ptr<command> cmd)
         {
             replicant_state_machine_actions acts;
             acts.ctx = cmd.get();
-            acts.set_response = callback_set_response;
+            acts.client = callback_client_cmd;
             acts.log = callback_log_cmd;
+            acts.set_response = callback_set_response;
             rsms->func(&acts, obj->rsm(), data + cmd_sz + 1, data_sz - cmd_sz - 1);
             break;
         }
@@ -232,13 +246,20 @@ bool
 object_manager :: create(uint64_t o, const e::slice& p)
 {
     e::intrusive_ptr<object> obj(open_library(p));
+
+    if (!obj)
+    {
+        return false;
+    }
+
     std::pair<object_map::iterator, bool> inserted;
     inserted = m_objects.insert(std::make_pair(o, obj));
     assert(inserted.second);
     replicant_state_machine_actions acts;
     acts.ctx = reinterpret_cast<void*>(o);
-    acts.set_response = NULL;
+    acts.client = callback_client_obj;
     acts.log = callback_log_obj;
+    acts.set_response = NULL;
     void* rsm = obj->sym()->ctor(&acts);
 
     if (!rsm)
@@ -257,13 +278,20 @@ object_manager :: restore(uint64_t id,
                           const e::slice& snap)
 {
     e::intrusive_ptr<object> obj(open_library(path));
+
+    if (!obj)
+    {
+        return false;
+    }
+
     std::pair<object_map::iterator, bool> inserted;
     inserted = m_objects.insert(std::make_pair(id, obj));
     assert(inserted.second);
     replicant_state_machine_actions acts;
     acts.ctx = reinterpret_cast<void*>(id);
-    acts.set_response = NULL;
+    acts.client = callback_client_obj;
     acts.log = callback_log_obj;
+    acts.set_response = NULL;
     void* rsm = obj->sym()->rtor(&acts,
                                  reinterpret_cast<const char*>(snap.data()),
                                  snap.size());
@@ -292,8 +320,9 @@ object_manager :: take_snapshot(snapshot* snap,
     {
         replicant_state_machine_actions acts;
         acts.ctx = reinterpret_cast<void*>(it->first);
-        acts.set_response = NULL;
+        acts.client = callback_client_obj;
         acts.log = callback_log_obj;
+        acts.set_response = NULL;
         char* data = NULL;
         size_t sz = 0;
         it->second->sym()->snap(&acts, it->second->rsm(), &data, &sz);
