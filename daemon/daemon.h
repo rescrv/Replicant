@@ -136,7 +136,6 @@ class replicant_daemon
                            std::auto_ptr<e::buffer> msg);
         void acknowledge_command(const po6::net::location& from, uint64_t slot);
         void apply_command(e::intrusive_ptr<command> cmd);
-        void send_command_response(e::intrusive_ptr<command> cmd);
         void send_command_ack(uint64_t slot, const po6::net::location& dst);
 
     // Error-case chain functions
@@ -204,6 +203,10 @@ class replicant_daemon
         void periodic_nop(uint64_t now);
         void periodic_set_timeout(uint64_t now);
         void periodic_dump_config(uint64_t now);
+
+    //XXX: expose send response to object_manager threads
+    public:
+        void send_command_response(e::intrusive_ptr<command> cmd);
 
     private:
         settings m_s;

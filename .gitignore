@@ -64,3 +64,8 @@ stamp-h1
 tools/cli.o
 tools/create-object.o
 tools/.dirstamp
+e/
+po6/
+busybee/
+config.h.in~
+dependencies/

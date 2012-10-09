@@ -44,6 +44,12 @@
 // Replicant
 #include "daemon/command.h"
 
+#include <tr1/memory>
+
+//PO6
+#include <po6/threads/thread.h>
+
+class replicant_daemon;
 class object_manager
 {
     public:
@@ -70,7 +76,8 @@ class object_manager
 
     public:
         void apply(e::intrusive_ptr<command> cmd);
-        bool create(uint64_t object, const e::slice& path);
+        void append_cmd(e::intrusive_ptr<command> cmd);
+        bool create(uint64_t object, const e::slice& path, replicant_daemon* daemon);
         bool restore(uint64_t object, const e::slice& path, const e::slice& snapshot);
         void take_snapshot(snapshot* snap,
                            std::vector<std::pair<uint64_t, std::pair<e::slice, e::slice> > >* objects);
@@ -83,7 +90,9 @@ class object_manager
         e::intrusive_ptr<object> open_library(const e::slice& path);
 
     private:
+        typedef std::tr1::shared_ptr<po6::threads::thread> thread_ptr;
         object_map m_objects;
+        std::vector<thread_ptr> m_threads;
 };
 
 e::buffer::packer

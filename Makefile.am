@@ -57,10 +57,10 @@ replicantexecdir = $(exec_prefix)/libexec/$(PACKAGE)-$(VERSION)
 replicantexec_PROGRAMS = \
 			replicant-cli \
 			replicant-create-object \
-			replicant-daemon
+			replicant-daemon 
 
-replicant_SOURCES = \
-			replicant.cc
+replicant_SOURCES = replicant.cc
+			
 replicant_CPPFLAGS = \
 			-DREPLICANT_EXEC_DIR="\"$(replicantexecdir)\""
 
@@ -78,9 +78,15 @@ replicant_daemon_SOURCES = \
 			daemon/main.cc \
 			daemon/object_manager.cc \
 			daemon/settings.cc
-replicant_daemon_LDADD = -le -lbusybee-sta -lglog -lrt -ldl
+replicant_daemon_LDADD = -le -lbusybee-sta -lglog -lrt -ldl -lpthread
 
-libreplicant_la_CXXFLAGS = $(CXXFLAGS)
+libreplicant_la_CXXFLAGS = \
+			$(CXXFLAGS) \
+			$(AM_CXXFLAGS)
+
+libreplicant_la_LDFLAGS = \
+			$(AM_LDFLAGS)
+
 libreplicant_la_SOURCES = \
 			common/chain_node.cc \
 			common/configuration.cc \
@@ -97,3 +103,4 @@ replicant_cli_LDADD = libreplicant.la
 replicant_create_object_SOURCES = \
 			tools/create-object.cc
 replicant_create_object_LDADD = libreplicant.la
+
