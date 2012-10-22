@@ -65,10 +65,8 @@
     { \
         if (UNPACKER.error()) \
         { \
-            /* This is just to verify that MSGTYPE is correct */ \
-            replicant_network_msgtype x = REPLNET_ ## MSGTYPE; \
-            LOG(WARNING) << "received corrupt \"" xstr(MSGTYPE) "\" message"; \
-            x = REPLNET_NOP; \
+            replicant_network_msgtype CONCAT(_anon, __LINE__)(REPLNET_ ## MSGTYPE); \
+            LOG(WARNING) << "received corrupt \"" << CONCAT(_anon, __LINE__) << "\" message"; \
             return; \
         } \
     } while (0)
@@ -1583,8 +1581,6 @@ replicant_daemon :: process_healed(const po6::net::location& from,
 void
 replicant_daemon :: transfer_more_state()
 {
-    bool error = false;
-
     while (m_heal_next.state < heal_next::HEALTHY_SENT &&
            m_heal_next.proposed < m_commands.upper_bound_proposed() &&
            m_heal_next.proposed - m_heal_next.acknowledged <= m_s.TRANSFER_WINDOW)
@@ -1611,7 +1607,6 @@ replicant_daemon :: transfer_more_state()
         if (next == po6::net::location())
         {
             LOG(ERROR) << "performing transfer, but cannot lookup our next node";
-            error = true;
             break;
         }
 

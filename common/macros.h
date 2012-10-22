@@ -32,4 +32,7 @@
 #define xstr(x) str(x)
 #define stringify(x) case (x): lhs << xstr(x); break
 
+#define _CONCAT(x, y) x ## y
+#define CONCAT(x, y) _CONCAT(x, y)
+
 #endif // replicant_macros_h_
