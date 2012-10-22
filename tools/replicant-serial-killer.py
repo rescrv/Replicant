@@ -2,6 +2,7 @@ import paramiko
 import argparse
 import random
 import time
+import getpass
 
 class Remote(object):
     def __init__(self,host,user,path,coord=None,coordport=None):
@@ -54,7 +55,7 @@ parser = argparse.ArgumentParser(description='Start a cluster and kill random no
 parser.add_argument('--hosts', metavar='HOST', nargs='*',
                    help='a list of hosts',default = ['127.0.0.1:1982','127.0.0.1:1983'])
 parser.add_argument('--user', metavar='NAME', nargs='?',
-                   help='ssh username',default = 'roybatty')
+                   help='ssh username',default = getpass.getuser())
 parser.add_argument('--path', metavar='/path/to/replicant', nargs='?',
                    help='path to the replicant-daemon binary',default = '${HOME}/replicant')
 parser.add_argument('--interval', metavar='I', nargs='?',
