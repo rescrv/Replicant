@@ -31,6 +31,7 @@
 
 // POSIX
 #include <errno.h>
+#include <unistd.h>
 
 // Popt
 #include <popt.h>
