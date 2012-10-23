@@ -1313,39 +1313,45 @@ replicant_daemon :: apply_command(e::intrusive_ptr<command> cmd)
     if (cmd->object() == OBJECT_CLIENTS)
     {
         apply_command_clients(cmd);
+        send_command_response(cmd);
     }
     else if (cmd->object() == OBJECT_DEPART)
     {
         apply_command_depart(cmd);
+        send_command_response(cmd);
     }
     else if (cmd->object() == OBJECT_GARBAGE)
     {
         apply_command_garbage(cmd);
+        send_command_response(cmd);
     }
     else if (cmd->object() == OBJECT_CREATE)
     {
         apply_command_create(cmd);
+        send_command_response(cmd);
     }
     else if (cmd->object() == OBJECT_SNAP)
     {
         apply_command_snapshot(cmd);
+        send_command_response(cmd);
     }
     else
     {
-        m_objects.apply(cmd);
+        m_objects.append_cmd(cmd);
     }
 
-    assert(cmd->response());
-
-    if (m_confman.get_stable().head() == m_us)
-    {
-        send_command_response(cmd);
-    }
 }
 
 void
 replicant_daemon :: send_command_response(e::intrusive_ptr<command> cmd)
 {
+    assert(cmd->response());
+
+    if (m_confman.get_stable().head() != m_us)
+    {
+        return;
+    }
+
     client_manager::client_details* client_info = m_clients.get(cmd->client());
     po6::net::location host;
 
@@ -2127,7 +2133,7 @@ replicant_daemon :: apply_command_create(e::intrusive_ptr<command> cmd)
     {
         LOG(INFO) << "creating object " << new_object << " from " << pathstr.data();
 
-        if (!m_objects.create(new_object, pathstr))
+        if (!m_objects.create(new_object, pathstr, this))
         {
             LOG(ERROR) << "could not create object because the object itself failed to create";
             success = false;
@@ -2333,3 +2339,5 @@ replicant_daemon :: periodic_dump_config(uint64_t now)
               << " with " << (m_commands.upper_bound_proposed() - m_commands.upper_bound_acknowledged())
               << " outstanding\n" << m_confman;
 }
+
+

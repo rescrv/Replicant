@@ -25,11 +25,18 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
+//PO6
+#include <po6/threads/mutex.h>
+#include <po6/threads/thread.h>
+#include <po6/threads/cond.h>
+
 // POSIX
 #include <dlfcn.h>
 
 // STL
 #include <stdexcept>
+#include <list>
+#include <tr1/memory>
 
 // Google Log
 #include <glog/logging.h>
@@ -41,6 +48,7 @@
 #include "common/network_msgtype.h"
 #include "daemon/object_manager.h"
 #include "daemon/replicant_state_machine.h"
+#include "daemon/daemon.h"
 
 class object_manager::object
 {
@@ -53,6 +61,7 @@ class object_manager::object
         void* lib() const;
         replicant_state_machine* sym() const;
         void* rsm() const;
+        void run_cmds(replicant_daemon* daemon);
 
     public:
         void set_lib(void* lib);
@@ -61,6 +70,7 @@ class object_manager::object
 
     private:
         friend class e::intrusive_ptr<object>;
+        friend class object_manager;
 
     private:
         object(const object&);
@@ -73,11 +83,16 @@ class object_manager::object
         object& operator = (const object&);
 
     private:
+        typedef std::list<e::intrusive_ptr<command> > command_list;
         size_t m_ref;
         void* m_lib;
         replicant_state_machine* m_sym;
         void* m_rsm;
         po6::pathname m_path;
+        po6::threads::cond m_commands_avail;
+        po6::threads::mutex m_lock;
+        command_list m_cmds;
+        void get_next_cmds(std::list<e::intrusive_ptr<command> >& commands);
 };
 
 object_manager :: snapshot :: snapshot()
@@ -98,6 +113,7 @@ object_manager :: snapshot :: ~snapshot() throw ()
 
 object_manager :: object_manager()
     : m_objects()
+    , m_threads()
 {
 }
 
@@ -183,6 +199,100 @@ callback_log_obj(void* ctx, const char* msg)
 }
 
 void
+object_manager :: append_cmd(e::intrusive_ptr<command> cmd)
+{
+    object_map::iterator objiter = m_objects.find(cmd->object());
+    if (objiter == m_objects.end())
+    {
+        LOG_EVERY_N(WARNING, 1024) << "received operation for non-existent object " << cmd->object();
+        return;
+    }
+
+    e::intrusive_ptr<object> obj(objiter->second);
+    po6::threads::mutex::hold hold(&obj->m_lock);
+    std::list<e::intrusive_ptr<command> > tmp;
+    tmp.push_back(cmd);
+    obj->m_cmds.splice(obj->m_cmds.end(),tmp);
+    obj->m_commands_avail.signal();
+}
+
+void
+object_manager :: object :: get_next_cmds(std::list<e::intrusive_ptr<command> >& commands)
+{
+    po6::threads::mutex::hold hold(&m_lock);
+    while(m_cmds.empty())
+        m_commands_avail.wait();
+    commands.splice(commands.end(),m_cmds);
+}
+
+void
+object_manager :: object :: run_cmds(replicant_daemon* daemon)
+{
+    std::list<e::intrusive_ptr<command> > commands;
+    LOG(INFO) << "Starting thread for object";
+    while(true)
+    {
+        get_next_cmds(commands);
+        while(!commands.empty())
+        {
+            e::intrusive_ptr<command> cmd = commands.front();
+            commands.pop_front();
+
+            // The response
+            size_t sz = BUSYBEE_HEADER_SIZE
+                + pack_size(REPLNET_COMMAND_RESPONSE)
+                + sizeof(uint64_t) + sizeof(uint8_t);
+            std::auto_ptr<e::buffer> response(e::buffer::create(sz));
+            e::buffer::packer pa = response->pack_at(BUSYBEE_HEADER_SIZE);
+            pa = pa << REPLNET_COMMAND_RESPONSE
+                << cmd->nonce() << uint8_t(0);
+            cmd->set_response(response);
+
+            // Parse the request
+            size_t off = BUSYBEE_HEADER_SIZE
+                + pack_size(REPLNET_COMMAND_ISSUE)
+                + 4 * sizeof(uint64_t);
+            e::slice content = cmd->msg()->unpack_from(off).as_slice();
+            const char* data = reinterpret_cast<const char*>(content.data());
+            size_t data_sz = content.size();
+
+            size_t cmd_sz = strnlen(data, data_sz);
+
+            if (cmd_sz >= data_sz)
+            {
+                LOG(WARNING) << "cannot parse function name for " << cmd->object();
+                return;
+            }
+
+            replicant_state_machine_step* rsms = m_sym->steps;
+
+            while (rsms->name)
+            {
+                if (strcmp(data, rsms->name) == 0)
+                {
+                    replicant_state_machine_actions acts;
+                    acts.ctx = cmd.get();
+                    acts.client = callback_client_cmd;
+                    acts.log = callback_log_cmd;
+                    acts.set_response = callback_set_response;
+                    rsms->func(&acts, m_rsm, data + cmd_sz + 1, data_sz - cmd_sz - 1);
+                    break;
+                }
+
+                ++rsms;
+            }
+
+            pa = cmd->response()->pack_at(BUSYBEE_HEADER_SIZE);
+            pa = pa << REPLNET_COMMAND_RESPONSE
+                << cmd->nonce() << uint8_t(1);
+
+            daemon->send_command_response(cmd);
+        }
+    }
+}
+
+
+void
 object_manager :: apply(e::intrusive_ptr<command> cmd)
 {
     // The response
@@ -243,7 +353,7 @@ object_manager :: apply(e::intrusive_ptr<command> cmd)
 }
 
 bool
-object_manager :: create(uint64_t o, const e::slice& p)
+object_manager :: create(uint64_t o, const e::slice& p, replicant_daemon* daemon)
 {
     e::intrusive_ptr<object> obj(open_library(p));
 
@@ -261,7 +371,6 @@ object_manager :: create(uint64_t o, const e::slice& p)
     acts.log = callback_log_obj;
     acts.set_response = NULL;
     void* rsm = obj->sym()->ctor(&acts);
-
     if (!rsm)
     {
         LOG(ERROR) << "could not create replicated object";
@@ -269,6 +378,13 @@ object_manager :: create(uint64_t o, const e::slice& p)
     }
 
     obj->set_rsm(rsm);
+
+    std::tr1::function<void (object*, replicant_daemon*)> 
+        fobj(std::tr1::function<void (object*, replicant_daemon*)>(&object::run_cmds));
+    thread_ptr t(new po6::threads::thread(std::tr1::bind(fobj, obj.get(),daemon)));
+    t->start();
+    m_threads.push_back(t);
+
     return true;
 }
 
@@ -343,6 +459,7 @@ object_manager :: open_library(const e::slice& p)
     po6::pathname path(reinterpret_cast<const char*>(p.data()));
     e::intrusive_ptr<object> obj(new object(path));
     path = po6::join(po6::pathname(""), path);
+    std::cout << path.get() << std::endl;
     obj->set_lib(dlopen(path.get(), RTLD_NOW|RTLD_LOCAL));
 
     if (!obj->lib())
@@ -379,6 +496,9 @@ object_manager :: object :: object(const po6::pathname& p)
     , m_sym(NULL)
     , m_rsm(NULL)
     , m_path(p)
+    , m_cmds()
+    , m_lock()
+    , m_commands_avail(&m_lock)
 {
 }
 
