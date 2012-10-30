@@ -92,26 +92,28 @@ main(int argc, const char* argv[])
         ++num_args;
     }
 
-    if (num_args != 2)
+    if (num_args != 1)
     {
-        std::cerr << "please specify the library and object\n" << std::endl;
+        std::cerr << "please specify the object to delete\n" << std::endl;
         poptPrintUsage(poptcon, stderr, 0);
         return EXIT_FAILURE;
     }
 
     try
     {
-        replicant r(_connect_host, _connect_port);
+        replicant_client r(_connect_host, _connect_port);
         replicant_returncode re = REPLICANT_GARBAGE;
         replicant_returncode le = REPLICANT_GARBAGE;
         int64_t rid = 0;
         int64_t lid = 0;
+        const char* errmsg;
+        size_t errmsg_sz;
 
-        rid = r.create_object(args[0], strlen(args[0]), args[1], &re);
+        rid = r.del_object(args[0], strlen(args[0]), &re, &errmsg, &errmsg_sz);
 
         if (rid < 0)
         {
-            std::cerr << "could not create object: " << r.last_error_desc()
+            std::cerr << "could not destroy object: " << r.last_error_desc()
                       << " (" << re << ")" << std::endl;
             return EXIT_FAILURE;
         }
@@ -120,20 +122,20 @@ main(int argc, const char* argv[])
 
         if (lid < 0)
         {
-            std::cerr << "could not create object: " << r.last_error_desc()
+            std::cerr << "could not destroy object: " << r.last_error_desc()
                       << " (" << le << ")" << std::endl;
             return EXIT_FAILURE;
         }
 
         if (rid != lid)
         {
-            std::cerr << "could not create object: internal error" << std::endl;
+            std::cerr << "could not destroy object: internal error" << std::endl;
             return EXIT_FAILURE;
         }
 
         if (re != REPLICANT_SUCCESS)
         {
-            std::cerr << "could not create object: " << r.last_error_desc()
+            std::cerr << "could not destroy object: " << r.last_error_desc()
                       << " (" << re << ")" << std::endl;
             return EXIT_FAILURE;
         }

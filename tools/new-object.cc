@@ -28,9 +28,6 @@
 // C
 #include <cstdlib>
 
-// STL
-#include <string>
-
 // po6
 #include <po6/error.h>
 
@@ -41,23 +38,9 @@
 #include "client/replicant.h"
 #include "tools/common.h"
 
-const char* _object = "cli";
-const char* _function = "func";
-
-static struct poptOption obj_popts[] = {
-    {"object", 'o', POPT_ARG_STRING, &_object, 'o',
-     "manipulate a specific object (default: \"cli\")",
-     "object"},
-    {"function", 'f', POPT_ARG_STRING, &_function, 'f',
-     "call a specific function (default: \"func\")",
-     "function"},
-    POPT_TABLEEND
-};
-
 static struct poptOption popts[] = {
     POPT_AUTOHELP
     CONNECT_TABLE
-    {NULL, 0, POPT_ARG_INCLUDE_TABLE, obj_popts, 0, "Manipulate an object:", NULL},
     POPT_TABLEEND
 };
 
@@ -67,7 +50,7 @@ main(int argc, const char* argv[])
     poptContext poptcon;
     poptcon = poptGetContext(NULL, argc, argv, popts, POPT_CONTEXT_POSIXMEHARDER);
     e::guard g = e::makeguard(poptFreeContext, poptcon); g.use_variable();
-    poptSetOtherOptionHelp(poptcon, "[OPTIONS]");
+    poptSetOtherOptionHelp(poptcon, "[OPTIONS] <object-id> <library>");
     int rc;
 
     while ((rc = poptGetNextOpt(poptcon)) != -1)
@@ -85,10 +68,6 @@ main(int argc, const char* argv[])
                 {
                     return EXIT_FAILURE;
                 }
-                break;
-            case 'o':
-                break;
-            case 'f':
                 break;
             case POPT_ERROR_NOARG:
             case POPT_ERROR_BADOPT:
@@ -113,9 +92,9 @@ main(int argc, const char* argv[])
         ++num_args;
     }
 
-    if (num_args != 0)
+    if (num_args != 2)
     {
-        std::cerr << "extra arguments provided\n" << std::endl;
+        std::cerr << "please specify the library and object\n" << std::endl;
         poptPrintUsage(poptcon, stderr, 0);
         return EXIT_FAILURE;
     }
@@ -123,52 +102,42 @@ main(int argc, const char* argv[])
     try
     {
         replicant_client r(_connect_host, _connect_port);
-        std::string s;
+        replicant_returncode re = REPLICANT_GARBAGE;
+        replicant_returncode le = REPLICANT_GARBAGE;
+        int64_t rid = 0;
+        int64_t lid = 0;
+        const char* errmsg;
+        size_t errmsg_sz;
 
-        while (std::getline(std::cin, s))
+        rid = r.new_object(args[0], strlen(args[0]), args[1], &re, &errmsg, &errmsg_sz);
+
+        if (rid < 0)
         {
-            replicant_returncode re = REPLICANT_GARBAGE;
-            replicant_returncode le = REPLICANT_GARBAGE;
-            int64_t rid = 0;
-            int64_t lid = 0;
-            const char* output;
-            size_t output_sz;
+            std::cerr << "could not create object: " << r.last_error_desc()
+                      << " (" << re << ")" << std::endl;
+            return EXIT_FAILURE;
+        }
 
-            rid = r.send(_object, strlen(_object), _function, s.c_str(), s.size() + 1,
-                         &re, &output, &output_sz);
+        lid = r.loop(-1, &le);
 
-            if (rid < 0)
-            {
-                std::cerr << "could not send request: " << r.last_error_desc()
-                          << " (" << re << ")" << std::endl;
-                return EXIT_FAILURE;
-            }
+        if (lid < 0)
+        {
+            std::cerr << "could not create object: " << r.last_error_desc()
+                      << " (" << le << ")" << std::endl;
+            return EXIT_FAILURE;
+        }
 
-            lid = r.loop(-1, &le);
+        if (rid != lid)
+        {
+            std::cerr << "could not create object: internal error" << std::endl;
+            return EXIT_FAILURE;
+        }
 
-            if (lid < 0)
-            {
-                std::cerr << "could not loop: " << r.last_error_desc()
-                          << " (" << le << ")" << std::endl;
-                return EXIT_FAILURE;
-            }
-
-            if (rid != lid)
-            {
-                std::cerr << "could not process request: internal error" << std::endl;
-                return EXIT_FAILURE;
-            }
-
-            if (re != REPLICANT_SUCCESS)
-            {
-                std::cerr << "could not process request: " << r.last_error_desc()
-                          << " (" << re << ")" << std::endl;
-                return EXIT_FAILURE;
-            }
-
-            std::string out(output, output_sz);
-            std::cout << out << std::endl;
-            replicant_destroy_output(output, output_sz);
+        if (re != REPLICANT_SUCCESS)
+        {
+            std::cerr << "could not create object: " << r.last_error_desc()
+                      << " (" << re << ")" << std::endl;
+            return EXIT_FAILURE;
         }
 
         replicant_returncode e = r.disconnect();

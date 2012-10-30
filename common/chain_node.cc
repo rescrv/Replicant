@@ -30,10 +30,8 @@
 #include "packing.h"
 
 chain_node :: chain_node()
-    : address()
-    , incoming_port(0)
-    , outgoing_port(0)
-    , token(0)
+    : token()
+    , address()
 {
 }
 
@@ -41,54 +39,45 @@ chain_node :: ~chain_node() throw ()
 {
 }
 
-po6::net::location
-chain_node :: receiver() const
+bool
+operator < (const chain_node& lhs, const chain_node& rhs)
 {
-    return po6::net::location(address, incoming_port);
-}
+    if (lhs.token == rhs.token)
+    {
+        return lhs.address < rhs.address;
+    }
 
-po6::net::location
-chain_node :: sender() const
-{
-    return po6::net::location(address, outgoing_port);
+    return lhs.token < rhs.token;
 }
 
 bool
 operator == (const chain_node& lhs, const chain_node& rhs)
 {
-    return lhs.address == rhs.address &&
-           lhs.incoming_port == rhs.incoming_port &&
-           lhs.outgoing_port == rhs.outgoing_port &&
-           lhs.token == rhs.token;
+    return lhs.token == rhs.token &&
+           lhs.address == rhs.address;
 }
 
 std::ostream&
 operator << (std::ostream& lhs, const chain_node& rhs)
 {
-    return lhs << "chain_node(ip=" << rhs.address
-               << ", incoming_port=" << rhs.incoming_port
-               << ", outgoing_port=" << rhs.outgoing_port
+    return lhs << "chain_node(bind_to=" << rhs.address
                << ", token=" << rhs.token << ")";
 }
 
 e::buffer::packer
 operator << (e::buffer::packer lhs, const chain_node& rhs)
 {
-    return lhs << rhs.address
-               << rhs.incoming_port << rhs.outgoing_port
-               << rhs.token;
+    return lhs << rhs.token << rhs.address;
 }
 
 e::buffer::unpacker
 operator >> (e::buffer::unpacker lhs, chain_node& rhs)
 {
-    return lhs >> rhs.address
-               >> rhs.incoming_port >> rhs.outgoing_port
-               >> rhs.token;
+    return lhs >> rhs.token >> rhs.address;
 } 
 
 size_t
 pack_size(const chain_node& rhs)
 {
-    return pack_size(rhs.address) + 2 * sizeof(uint16_t) + sizeof(uint64_t);
+    return sizeof(uint64_t) + pack_size(rhs.address);
 }

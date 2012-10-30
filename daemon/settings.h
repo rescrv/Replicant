@@ -43,16 +43,11 @@ class settings
 
     public:
         uint64_t REPORT_INTERVAL;
-        uint64_t BECOME_SPARE_INTERVAL;
-        uint64_t BECOME_STANDBY_INTERVAL;
-        uint64_t BECOME_MEMBER_INTERVAL;
-        uint64_t HEAL_PREV_INTERVAL;
+        uint64_t JOIN_INTERVAL;
+        uint64_t MAINTAIN_INTERVAL;
+        uint64_t PING_INTERVAL;
+        uint64_t FAULT_TOLERANCE;
         uint64_t HEAL_NEXT_INTERVAL;
-        uint64_t GARBAGE_COLLECT_INTERVAL;
-        bool GARBAGE_COLLECT_LOG_DETAILS;
-        uint64_t GARBAGE_COLLECT_MIN_SLOTS;
-        uint64_t CLIENT_LIST_INTERVAL;
-        uint64_t CLIENT_DISCONNECT_INTERVAL;
         uint64_t TRANSFER_WINDOW;
         uint64_t CONNECTION_RETRY;
         uint64_t PERIODIC_SIZE_WARNING;
@@ -60,19 +55,14 @@ class settings
 
 inline
 settings :: settings()
-    : REPORT_INTERVAL(10 * SECONDS)
-    , BECOME_SPARE_INTERVAL(1 * SECONDS)
-    , BECOME_STANDBY_INTERVAL(1 * SECONDS)
-    , BECOME_MEMBER_INTERVAL(1 * SECONDS)
-    , HEAL_PREV_INTERVAL(1 * SECONDS)
+    : REPORT_INTERVAL(60 * SECONDS)
+    , JOIN_INTERVAL(1 * SECONDS)
+    , MAINTAIN_INTERVAL(50 * MILLIS)
+    , PING_INTERVAL(50 * MILLIS)
+    , FAULT_TOLERANCE(2)
     , HEAL_NEXT_INTERVAL(1 * SECONDS)
-    , GARBAGE_COLLECT_INTERVAL(1 * SECONDS)
-    , GARBAGE_COLLECT_LOG_DETAILS(false)
-    , GARBAGE_COLLECT_MIN_SLOTS(1024)
-    , CLIENT_LIST_INTERVAL(5 * SECONDS)
-    , CLIENT_DISCONNECT_INTERVAL(30 * SECONDS)
     , TRANSFER_WINDOW(512)
-    , CONNECTION_RETRY(1 * SECONDS)
+    , CONNECTION_RETRY(50 * MILLIS)
     , PERIODIC_SIZE_WARNING(16)
 {
 }
@@ -81,14 +71,5 @@ settings :: settings()
 #undef MILLIS
 #undef MICROS
 #undef NANOS
-
-e::buffer::packer
-operator << (e::buffer::packer lhs, const settings& rhs);
-
-e::buffer::unpacker
-operator >> (e::buffer::unpacker lhs, settings& rhs);
-
-size_t
-pack_size(const settings& rhs);
 
 #endif // replicant_settings_h_

@@ -25,95 +25,132 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
-//PO6
-#include <po6/threads/mutex.h>
-#include <po6/threads/thread.h>
-#include <po6/threads/cond.h>
+// C
+#include <cstdio>
 
 // POSIX
 #include <dlfcn.h>
 
 // STL
-#include <stdexcept>
 #include <list>
-#include <tr1/memory>
+#include <memory>
 
 // Google Log
 #include <glog/logging.h>
+
+// po6
+#include <po6/io/fd.h>
+#include <po6/threads/cond.h>
+#include <po6/threads/mutex.h>
+#include <po6/threads/thread.h>
+
+// e
+#include <e/buffer.h>
+#include <e/endian.h>
 
 // BusyBee
 #include <busybee_constants.h>
 
 // Replicant
 #include "common/network_msgtype.h"
+#include "common/special_objects.h"
+#include "daemon/daemon.h"
 #include "daemon/object_manager.h"
 #include "daemon/replicant_state_machine.h"
-#include "daemon/daemon.h"
+#include "daemon/replicant_state_machine_context.h"
+
+using replicant::object_manager;
+
+///////////////////////////////// Command Class ////////////////////////////////
+
+class object_manager::command
+{
+    public:
+        command();
+        ~command() throw ();
+
+    public:
+        uint64_t slot;
+        uint64_t client;
+        uint64_t nonce;
+        e::slice data;
+        std::string backing;
+};
+
+object_manager :: command :: command()
+    : slot(0)
+    , client(0)
+    , nonce(0)
+    , data()
+    , backing()
+{
+}
+
+object_manager :: command :: ~command() throw ()
+{
+}
+
+///////////////////////////////// Object Class /////////////////////////////////
 
 class object_manager::object
 {
     public:
-        object(const po6::pathname& path);
+        object();
         ~object() throw ();
 
     public:
-        const po6::pathname& path() const;
-        void* lib() const;
-        replicant_state_machine* sym() const;
-        void* rsm() const;
-        void run_cmds(replicant_daemon* daemon);
-
-    public:
-        void set_lib(void* lib);
-        void set_sym(void* sym);
-        void set_rsm(void* rsm);
-
-    private:
-        friend class e::intrusive_ptr<object>;
-        friend class object_manager;
+        std::auto_ptr<po6::threads::thread> thread;
+        po6::threads::mutex mtx;
+        po6::threads::cond commands_avail;
+        std::list<command> commands;
+        uint64_t slot;
+        void* lib;
+        replicant_state_machine* sym;
+        void* rsm;
+        bool shutdown;
 
     private:
         object(const object&);
-
-    private:
-        void inc() { ++m_ref; }
-        void dec() { if (--m_ref == 0) delete this; }
-
-    private:
         object& operator = (const object&);
 
     private:
-        typedef std::list<e::intrusive_ptr<command> > command_list;
+        friend class e::intrusive_ptr<object>;
+        void inc() { ++m_ref; }
+        void dec() { assert(m_ref > 0); if (--m_ref == 0) delete this; }
         size_t m_ref;
-        void* m_lib;
-        replicant_state_machine* m_sym;
-        void* m_rsm;
-        po6::pathname m_path;
-        po6::threads::cond m_commands_avail;
-        po6::threads::mutex m_lock;
-        command_list m_cmds;
-        void get_next_cmds(std::list<e::intrusive_ptr<command> >& commands);
 };
 
-object_manager :: snapshot :: snapshot()
-    : m_backings()
+object_manager :: object :: object()
+    : thread()
+    , mtx()
+    , commands_avail(&mtx)
+    , commands()
+    , slot(0)
+    , lib(NULL)
+    , sym(NULL)
+    , rsm(NULL)
+    , shutdown(false)
+    , m_ref(0)
 {
 }
 
-object_manager :: snapshot :: ~snapshot() throw ()
+object_manager :: object :: ~object() throw ()
 {
-    for (size_t i = 0; i < m_backings.size(); ++i)
+    if (lib)
     {
-        if (m_backings[i])
-        {
-            free(m_backings[i]);
-        }
+        dlclose(lib);
     }
 }
 
+///////////////////////////////// Public Class /////////////////////////////////
+
 object_manager :: object_manager()
-    : m_objects()
-    , m_threads()
+    : m_daemon()
+    , m_daemon_cb()
+    , m_objects()
+    , m_cleanup_protect()
+    , m_cleanup_queued()
+    , m_cleanup_ready()
 {
 }
 
@@ -121,429 +158,265 @@ object_manager :: ~object_manager() throw ()
 {
 }
 
-bool
-object_manager :: exists(uint64_t o) const
+void
+object_manager :: set_callback(replicant_daemon* d, void (replicant_daemon::*func)(uint64_t slot, uint64_t client, uint64_t nonce, response_returncode rc, const e::slice& data))
 {
-    return m_objects.find(o) != m_objects.end();
+    m_daemon = d;
+    m_daemon_cb = func;
 }
 
-bool
-object_manager :: valid_path(const e::slice& pathstr) const
+void
+object_manager :: enqueue(uint64_t slot, uint64_t obj_id,
+                          uint64_t client, uint64_t nonce,
+                          const e::slice& data, std::string* backing)
 {
-    if (pathstr.size() + 3 >= PATH_MAX)
+    if (obj_id == OBJECT_OBJ_NEW)
     {
-        return false;
-    }
+        e::slice lib;
 
-    for (size_t i = 0; i < pathstr.size(); ++i)
-    {
-        if (!isalnum(pathstr.data()[i]) &&
-            pathstr.data()[i] != '-' &&
-            pathstr.data()[i] != '_' &&
-            pathstr.data()[i] != '.' &&
-            pathstr.data()[i] != '\x00')
+        if (data.size() < sizeof(uint64_t))
         {
-            return false;
+            return send_error_response(slot, client, nonce, RESPONSE_MALFORMED);
         }
-    }
 
-    return true;
-}
+        e::unpack64be(data.data(), &obj_id);
+        lib = data;
+        lib.advance(sizeof(uint64_t));
+        object_map_t::iterator it = m_objects.find(obj_id);
 
-static int
-callback_set_response(void* ctx, const char* data, size_t data_sz)
-{
-    try
-    {
-        command* cmd = static_cast<command*>(ctx);
-        size_t sz = BUSYBEE_HEADER_SIZE
-                  + pack_size(REPLNET_COMMAND_RESPONSE)
-                  + sizeof(uint64_t) + sizeof(uint8_t)
-                  + data_sz;
-        std::auto_ptr<e::buffer> response(e::buffer::create(sz));
-        response->pack_at(sz - data_sz).copy(e::slice(data, data_sz));
-        cmd->set_response(response);
-        return 1;
-    }
-    catch (std::bad_alloc& a)
-    {
-        return 0;
-    }
-}
-
-static uint64_t
-callback_client_cmd(void* ctx)
-{
-    command* cmd = static_cast<command*>(ctx);
-    return cmd->object();
-}
-
-static uint64_t
-callback_client_obj(void*)
-{
-    return 0;
-}
-
-static void
-callback_log_cmd(void* ctx, const char* msg)
-{
-    command* cmd = static_cast<command*>(ctx);
-    LOG(INFO) << "log message for object " << cmd->object() << ": " << msg;
-}
-
-static void
-callback_log_obj(void* ctx, const char* msg)
-{
-    uint64_t obj = reinterpret_cast<uint64_t>(ctx);
-    LOG(INFO) << "log message for object " << obj << ": " << msg;
-}
-
-void
-object_manager :: append_cmd(e::intrusive_ptr<command> cmd)
-{
-    object_map::iterator objiter = m_objects.find(cmd->object());
-    if (objiter == m_objects.end())
-    {
-        LOG_EVERY_N(WARNING, 1024) << "received operation for non-existent object " << cmd->object();
-        return;
-    }
-
-    e::intrusive_ptr<object> obj(objiter->second);
-    po6::threads::mutex::hold hold(&obj->m_lock);
-    std::list<e::intrusive_ptr<command> > tmp;
-    tmp.push_back(cmd);
-    obj->m_cmds.splice(obj->m_cmds.end(),tmp);
-    obj->m_commands_avail.signal();
-}
-
-void
-object_manager :: object :: get_next_cmds(std::list<e::intrusive_ptr<command> >& commands)
-{
-    po6::threads::mutex::hold hold(&m_lock);
-    while(m_cmds.empty())
-        m_commands_avail.wait();
-    commands.splice(commands.end(),m_cmds);
-}
-
-void
-object_manager :: object :: run_cmds(replicant_daemon* daemon)
-{
-    std::list<e::intrusive_ptr<command> > commands;
-    LOG(INFO) << "Starting thread for object";
-    while(true)
-    {
-        get_next_cmds(commands);
-        while(!commands.empty())
+        if (it != m_objects.end())
         {
-            e::intrusive_ptr<command> cmd = commands.front();
-            commands.pop_front();
+            return send_error_response(slot, client, nonce, RESPONSE_OBJ_EXIST);
+        }
 
-            // The response
-            size_t sz = BUSYBEE_HEADER_SIZE
-                + pack_size(REPLNET_COMMAND_RESPONSE)
-                + sizeof(uint64_t) + sizeof(uint8_t);
-            std::auto_ptr<e::buffer> response(e::buffer::create(sz));
-            e::buffer::packer pa = response->pack_at(BUSYBEE_HEADER_SIZE);
-            pa = pa << REPLNET_COMMAND_RESPONSE
-                << cmd->nonce() << uint8_t(0);
-            cmd->set_response(response);
+        e::intrusive_ptr<object> obj = new object();
+        po6::threads::mutex::hold hold(&obj->mtx);
+        char buf[38 /*strlen("./libreplicant<slot \lt 2**64>.so\x00")*/];
+        sprintf(buf, "./libreplicant%lu.so", slot);
+        po6::io::fd tmplib(open(buf, O_WRONLY|O_CREAT|O_EXCL, S_IRWXU));
 
-            // Parse the request
-            size_t off = BUSYBEE_HEADER_SIZE
-                + pack_size(REPLNET_COMMAND_ISSUE)
-                + 4 * sizeof(uint64_t);
-            e::slice content = cmd->msg()->unpack_from(off).as_slice();
-            const char* data = reinterpret_cast<const char*>(content.data());
-            size_t data_sz = content.size();
+        if (tmplib.get() < 0)
+        {
+            PLOG(ERROR) << "could not open temporary library for slot " << slot;
+            abort();
+        }
 
-            size_t cmd_sz = strnlen(data, data_sz);
+        if (tmplib.xwrite(lib.data(), lib.size()) != static_cast<ssize_t>(lib.size()))
+        {
+            PLOG(ERROR) << "could not write temporary ibrary for slot " << slot;
+            abort();
+        }
 
-            if (cmd_sz >= data_sz)
+        obj->slot = slot;
+        obj->lib = dlopen(buf, RTLD_NOW|RTLD_LOCAL);
+
+        if (unlink(buf) < 0)
+        {
+            PLOG(ERROR) << "could not unlink temporary ibrary for slot " << slot;
+            abort();
+        }
+
+        // At this point, any unexpected failures are user error.  We should not
+        // fail the server
+        obj->thread.reset(new po6::threads::thread(std::tr1::bind(&object_manager::worker_thread, this, obj_id, obj)));
+        obj->thread->start();
+        m_objects.insert(std::make_pair(obj_id, obj));
+
+        if (!obj->lib)
+        {
+            const char* err = dlerror();
+            LOG(ERROR) << "could not load library for slot " << slot
+                       << ": " << err << "; delete the object and try again";
+            return send_error_msg_response(slot, client, nonce, RESPONSE_DLOPEN_FAIL, err);
+        }
+
+        obj->sym = static_cast<replicant_state_machine*>(dlsym(obj->lib, "rsm"));
+
+        if (!obj->sym)
+        {
+            const char* err = dlerror();
+            LOG(ERROR) << "could not find \"rsm\" symbol in library for slot "
+                       << slot << ": " << err
+                       << "; delete the object and try again";
+            return send_error_msg_response(slot, client, nonce, RESPONSE_DLSYM_FAIL, err);
+        }
+
+        if (!obj->sym->ctor)
+        {
+            LOG(WARNING) << "library for slot " << slot << " does not specify a constructor; delete the object and try again";
+            return send_error_response(slot, client, nonce, RESPONSE_NO_CTOR);
+        }
+
+        if (!obj->sym->rtor)
+        {
+            LOG(WARNING) << "library for slot " << slot << " does not specify a reconstructor; delete the object and try again";
+            return send_error_response(slot, client, nonce, RESPONSE_NO_RTOR);
+        }
+
+        if (!obj->sym->dtor)
+        {
+            LOG(WARNING) << "library for slot " << slot << " does not specify a deconstructor; delete the object and try again";
+            return send_error_response(slot, client, nonce, RESPONSE_NO_DTOR);
+        }
+
+        if (!obj->sym->snap)
+        {
+            LOG(WARNING) << "library for slot " << slot << " does not specify a snapshot function; delete the object and try again";
+            return send_error_response(slot, client, nonce, RESPONSE_NO_SNAP);
+        }
+
+        replicant_state_machine_context ctx;
+        ctx.object = obj_id;
+        ctx.client = client;
+        obj->rsm = obj->sym->ctor(&ctx);
+        return send_response(slot, client, nonce, RESPONSE_SUCCESS, e::slice());
+    }
+    else if (obj_id == OBJECT_OBJ_DEL)
+    {
+        if (data.size() < sizeof(uint64_t))
+        {
+            return send_error_response(slot, client, nonce, RESPONSE_MALFORMED);
+        }
+
+        e::unpack64be(data.data(), &obj_id);
+        object_map_t::iterator it = m_objects.find(obj_id);
+
+        if (it == m_objects.end())
+        {
+            return send_error_response(slot, client, nonce, RESPONSE_OBJ_NOT_EXIST);
+        }
+
+        e::intrusive_ptr<object> obj = it->second;
+        m_objects.erase(it);
+        po6::threads::mutex::hold hold(&obj->mtx);
+        obj->shutdown = true;
+        obj->commands_avail.signal();
+        return send_response(slot, client, nonce, RESPONSE_SUCCESS, e::slice());
+    }
+    else if (!IS_SPECIAL_OBJECT(obj_id))
+    {
+        object_map_t::iterator it = m_objects.find(obj_id);
+
+        if (it == m_objects.end())
+        {
+            return send_error_response(slot, client, nonce, RESPONSE_OBJ_NOT_EXIST);
+        }
+
+        e::intrusive_ptr<object> obj = it->second;
+        // Allocate the command object
+        std::list<command> tmp;
+        tmp.push_back(command());
+        tmp.back().slot = slot;
+        tmp.back().client = client;
+        tmp.back().nonce = nonce;
+        tmp.back().data = data;
+        tmp.back().backing.swap(*backing);
+        // Push it onto the object's queue
+        po6::threads::mutex::hold hold(&obj->mtx);
+        obj->commands.splice(obj->commands.end(), tmp, tmp.begin());
+        obj->commands_avail.signal();
+    }
+    else
+    {
+        LOG(ERROR) << "object_manager asked to work on special object " << obj_id;
+        return send_error_response(slot, client, nonce, RESPONSE_SERVER_ERROR);
+    }
+}
+
+void
+object_manager :: send_error_response(uint64_t slot, uint64_t client, uint64_t nonce, response_returncode rc)
+{
+    ((*m_daemon).*m_daemon_cb)(slot, client, nonce, rc, e::slice("", 0));
+}
+
+void
+object_manager :: send_error_msg_response(uint64_t slot, uint64_t client, uint64_t nonce, response_returncode rc, const char* resp)
+{
+    size_t resp_sz = strlen(resp) + 1;
+    ((*m_daemon).*m_daemon_cb)(slot, client, nonce, rc, e::slice(resp, resp_sz));
+}
+
+void
+object_manager :: send_response(uint64_t slot, uint64_t client, uint64_t nonce, response_returncode rc, const e::slice& resp)
+{
+    ((*m_daemon).*m_daemon_cb)(slot, client, nonce, rc, resp);
+}
+
+void
+object_manager :: worker_thread(uint64_t obj_id, e::intrusive_ptr<object> obj)
+{
+    bool shutdown = false;
+
+    while (!shutdown)
+    {
+        std::list<command> commands;
+
+        {
+            po6::threads::mutex::hold hold(&obj->mtx);
+
+            while (obj->commands.empty() && !obj->shutdown)
             {
-                LOG(WARNING) << "cannot parse function name for " << cmd->object();
-                return;
+                obj->commands_avail.wait();
             }
 
-            replicant_state_machine_step* rsms = m_sym->steps;
+            if (!obj->commands.empty())
+            {
+                commands.splice(commands.begin(), obj->commands);
+            }
+
+            shutdown = obj->shutdown;
+        }
+
+        while (!commands.empty())
+        {
+            command& cmd(commands.front());
+            const char* func = reinterpret_cast<const char*>(cmd.data.data());
+            size_t func_sz = strnlen(func, cmd.data.size());
+
+            if (func_sz >= cmd.data.size())
+            {
+                send_error_response(cmd.slot, cmd.client, cmd.nonce, RESPONSE_MALFORMED);
+                commands.pop_front();
+                continue;
+            }
+
+            replicant_state_machine_step* rsms = obj->sym->steps;
+            replicant_state_machine_step* trans = NULL;
 
             while (rsms->name)
             {
-                if (strcmp(data, rsms->name) == 0)
+                if (strcmp(func, rsms->name) == 0)
                 {
-                    replicant_state_machine_actions acts;
-                    acts.ctx = cmd.get();
-                    acts.client = callback_client_cmd;
-                    acts.log = callback_log_cmd;
-                    acts.set_response = callback_set_response;
-                    rsms->func(&acts, m_rsm, data + cmd_sz + 1, data_sz - cmd_sz - 1);
+                    trans = rsms;
                     break;
                 }
 
                 ++rsms;
             }
 
-            pa = cmd->response()->pack_at(BUSYBEE_HEADER_SIZE);
-            pa = pa << REPLNET_COMMAND_RESPONSE
-                << cmd->nonce() << uint8_t(1);
+            if (trans)
+            {
+                replicant_state_machine_context ctx;
+                ctx.object = obj_id;
+                ctx.client = cmd.client;
+                const char* data = func + func_sz + 1;
+                size_t data_sz = cmd.data.size() - func_sz - 1;
+                trans->func(&ctx, obj->rsm, data, data_sz);
 
-            daemon->send_command_response(cmd);
+                if (!ctx.response)
+                {
+                    ctx.response = "";
+                    ctx.response_sz = 0;
+                }
+
+                send_response(cmd.slot, cmd.client, cmd.nonce, RESPONSE_SUCCESS, e::slice(ctx.response, ctx.response_sz));
+            }
+            else
+            {
+                send_error_response(cmd.slot, cmd.client, cmd.nonce, RESPONSE_NO_FUNC);
+            }
+
+            commands.pop_front();
         }
     }
-}
-
-
-void
-object_manager :: apply(e::intrusive_ptr<command> cmd)
-{
-    // The response
-    size_t sz = BUSYBEE_HEADER_SIZE
-              + pack_size(REPLNET_COMMAND_RESPONSE)
-              + sizeof(uint64_t) + sizeof(uint8_t);
-    std::auto_ptr<e::buffer> response(e::buffer::create(sz));
-    e::buffer::packer pa = response->pack_at(BUSYBEE_HEADER_SIZE);
-    pa = pa << REPLNET_COMMAND_RESPONSE
-            << cmd->nonce() << uint8_t(0);
-    cmd->set_response(response);
-
-    // Parse the request
-    size_t off = BUSYBEE_HEADER_SIZE
-               + pack_size(REPLNET_COMMAND_ISSUE)
-               + 4 * sizeof(uint64_t);
-    e::slice content = cmd->msg()->unpack_from(off).as_slice();
-    const char* data = reinterpret_cast<const char*>(content.data());
-    size_t data_sz = content.size();
-    object_map::iterator objiter = m_objects.find(cmd->object());
-
-    if (objiter == m_objects.end())
-    {
-        LOG_EVERY_N(WARNING, 1024) << "received operation for non-existent object " << cmd->object();
-        return;
-    }
-
-    size_t cmd_sz = strnlen(data, data_sz);
-
-    if (cmd_sz >= data_sz)
-    {
-        LOG(WARNING) << "cannot parse function name for " << cmd->object();
-        return;
-    }
-
-    e::intrusive_ptr<object> obj(objiter->second);
-    replicant_state_machine_step* rsms = obj->sym()->steps;
-
-    while (rsms->name)
-    {
-        if (strcmp(data, rsms->name) == 0)
-        {
-            replicant_state_machine_actions acts;
-            acts.ctx = cmd.get();
-            acts.client = callback_client_cmd;
-            acts.log = callback_log_cmd;
-            acts.set_response = callback_set_response;
-            rsms->func(&acts, obj->rsm(), data + cmd_sz + 1, data_sz - cmd_sz - 1);
-            break;
-        }
-
-        ++rsms;
-    }
-
-    pa = cmd->response()->pack_at(BUSYBEE_HEADER_SIZE);
-    pa = pa << REPLNET_COMMAND_RESPONSE
-            << cmd->nonce() << uint8_t(1);
-}
-
-bool
-object_manager :: create(uint64_t o, const e::slice& p, replicant_daemon* daemon)
-{
-    e::intrusive_ptr<object> obj(open_library(p));
-
-    if (!obj)
-    {
-        return false;
-    }
-
-    std::pair<object_map::iterator, bool> inserted;
-    inserted = m_objects.insert(std::make_pair(o, obj));
-    assert(inserted.second);
-    replicant_state_machine_actions acts;
-    acts.ctx = reinterpret_cast<void*>(o);
-    acts.client = callback_client_obj;
-    acts.log = callback_log_obj;
-    acts.set_response = NULL;
-    void* rsm = obj->sym()->ctor(&acts);
-    if (!rsm)
-    {
-        LOG(ERROR) << "could not create replicated object";
-        return false;
-    }
-
-    obj->set_rsm(rsm);
-
-    std::tr1::function<void (object*, replicant_daemon*)> 
-        fobj(std::tr1::function<void (object*, replicant_daemon*)>(&object::run_cmds));
-    thread_ptr t(new po6::threads::thread(std::tr1::bind(fobj, obj.get(),daemon)));
-    t->start();
-    m_threads.push_back(t);
-
-    return true;
-}
-
-bool
-object_manager :: restore(uint64_t id,
-                          const e::slice& path,
-                          const e::slice& snap)
-{
-    e::intrusive_ptr<object> obj(open_library(path));
-
-    if (!obj)
-    {
-        return false;
-    }
-
-    std::pair<object_map::iterator, bool> inserted;
-    inserted = m_objects.insert(std::make_pair(id, obj));
-    assert(inserted.second);
-    replicant_state_machine_actions acts;
-    acts.ctx = reinterpret_cast<void*>(id);
-    acts.client = callback_client_obj;
-    acts.log = callback_log_obj;
-    acts.set_response = NULL;
-    void* rsm = obj->sym()->rtor(&acts,
-                                 reinterpret_cast<const char*>(snap.data()),
-                                 snap.size());
-
-    if (!rsm)
-    {
-        LOG(ERROR) << "could not create replicated object";
-        return false;
-    }
-
-    obj->set_rsm(rsm);
-    return true;
-}
-
-void
-object_manager :: take_snapshot(snapshot* snap,
-                                std::vector<std::pair<uint64_t, std::pair<e::slice, e::slice> > >* objects)
-{
-    objects->clear();
-    objects->reserve(m_objects.size());
-    snap->m_backings.clear();
-    snap->m_backings.reserve(m_objects.size());
-
-    for (object_map::iterator it = m_objects.begin();
-            it != m_objects.end(); ++it)
-    {
-        replicant_state_machine_actions acts;
-        acts.ctx = reinterpret_cast<void*>(it->first);
-        acts.client = callback_client_obj;
-        acts.log = callback_log_obj;
-        acts.set_response = NULL;
-        char* data = NULL;
-        size_t sz = 0;
-        it->second->sym()->snap(&acts, it->second->rsm(), &data, &sz);
-
-        if (data)
-        {
-            snap->m_backings.push_back(data);
-        }
-
-        e::slice path(it->second->path().get(), strlen(it->second->path().get()) + 1);
-        objects->push_back(std::make_pair(it->first, std::make_pair(path, e::slice(data, sz))));
-    }
-}
-
-e::intrusive_ptr<object_manager::object>
-object_manager :: open_library(const e::slice& p)
-{
-    po6::pathname path(reinterpret_cast<const char*>(p.data()));
-    e::intrusive_ptr<object> obj(new object(path));
-    path = po6::join(po6::pathname(""), path);
-    std::cout << path.get() << std::endl;
-    obj->set_lib(dlopen(path.get(), RTLD_NOW|RTLD_LOCAL));
-
-    if (!obj->lib())
-    {
-        LOG(ERROR) << "could not dlopen library " << dlerror();
-        return NULL;
-    }
-
-    obj->set_sym(dlsym(obj->lib(), "rsm"));
-
-    if (!obj->sym())
-    {
-        LOG(ERROR) << "could not retrieve symbol \"rsm\" from library \""
-                   << path.get() << "\":  " << dlerror();
-        return NULL;
-    }
-
-    if (!obj->sym()->ctor ||
-        !obj->sym()->rtor ||
-        !obj->sym()->dtor ||
-        !obj->sym()->snap)
-    {
-        LOG(ERROR) << "symbol \"rsm\" from library \""
-                   << path.get() << "\" contains one or more NULL functions";
-        return NULL;
-    }
-
-    return obj;
-}
-
-object_manager :: object :: object(const po6::pathname& p)
-    : m_ref(0)
-    , m_lib(NULL)
-    , m_sym(NULL)
-    , m_rsm(NULL)
-    , m_path(p)
-    , m_cmds()
-    , m_lock()
-    , m_commands_avail(&m_lock)
-{
-}
-
-object_manager :: object :: ~object() throw ()
-{
-}
-
-const po6::pathname&
-object_manager :: object :: path() const
-{
-    return m_path;
-}
-
-void*
-object_manager :: object :: lib() const
-{
-    return m_lib;
-}
-
-replicant_state_machine*
-object_manager :: object :: sym() const
-{
-    return m_sym;
-}
-
-void*
-object_manager :: object :: rsm() const
-{
-    return m_rsm;
-}
-
-void
-object_manager :: object :: set_lib(void* l)
-{
-    m_lib = l;
-}
-
-void
-object_manager :: object :: set_sym(void* s)
-{
-    m_sym = static_cast<replicant_state_machine*>(s);
-}
-
-void
-object_manager :: object :: set_rsm(void* r)
-{
-    m_rsm = r;
 }

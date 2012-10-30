@@ -25,20 +25,32 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
-#ifndef replicant_special_objects_h_
-#define replicant_special_objects_h_
+#ifndef replicant_daemon_mapper_h_
+#define replicant_daemon_mapper_h_
 
-#define IS_SPECIAL_OBJECT(X) ((X & 0xff00000000000000ULL) == 0x5f00000000000000ULL)
+// BusyBee
+#include <busybee_mapper.h>
 
-// Here's some Python to generate the numbers:
-//
-// >>> print '0x%sULL' % ''.join(['%02x' % ord(c) for c in '_clients'])
-// 0x5f636c69656e7473ULL
+// replicant
+#include "common/chain_node.h"
 
-// Special objects
-#define OBJECT_CLI_REG 0x5f636c695f726567ULL /*_cli_reg*/
-#define OBJECT_CLI_DIE 0x5f636c695f646965ULL /*_cli_die*/
-#define OBJECT_OBJ_NEW 0x5f6f626a5f6e6577ULL /*_obj_new*/
-#define OBJECT_OBJ_DEL 0x5f6f626a5f64656cULL /*_obj_del*/
+namespace replicant
+{
 
-#endif // replicant_special_objects_h_
+class mapper : public busybee_mapper
+{
+    public:
+        mapper();
+        ~mapper() throw ();
+
+    public:
+        virtual bool lookup(uint64_t server_id, po6::net::location* bound_to);
+        void set(const chain_node& n);
+
+    private:
+        chain_node m_cache;
+};
+
+} // namespace replicant
+
+#endif // replicant_daemon_mapper_h_

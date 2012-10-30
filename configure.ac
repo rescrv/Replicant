@@ -75,5 +75,18 @@ if test x"${enable_log_commands}" = xyes; then
     AC_DEFINE([REPL_LOG_COMMANDS], [], [Log all commands that are submitted, issued and acknowledged])
 fi
 
+
+AC_ARG_ENABLE([log-suspicions], [AS_HELP_STRING([--enable-log-suspicions],
+              [enable code to log suspicions @<:@default: no@:>@])],
+              [enable_log_suspicions=${enableval}], [enable_log_suspicions=no])
+if test x"${enable_log_suspicions}" = xyes; then
+    AC_DEFINE([REPL_LOG_SUSPICIONS], [], [Log the suspicion level of other nodes])
+fi
+
+AC_ARG_ENABLE([example_state_machines], [AS_HELP_STRING([--enable-example-state-machines],
+              [build Python bindings @<:@default: no@:>@])],
+              [example_state_machines=${enableval}], [example_state_machines=no])
+AM_CONDITIONAL([ENABLE_EXAMPLES], [test x"${example_state_machines}" = xyes])
+
 AC_CONFIG_FILES([Makefile])
 AC_OUTPUT

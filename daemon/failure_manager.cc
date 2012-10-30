@@ -25,74 +25,84 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
-#define __STDC_LIMIT_MACROS
-
-// e
-#include <e/endian.h>
+// STL
+#include <algorithm>
 
 // Replicant
-#include "client/command.h"
+#include "daemon/failure_manager.h"
 
-replicant_client :: command :: command(replicant_returncode* st,
-                                       uint64_t n,
-                                       std::auto_ptr<e::buffer> m,
-                                       const char** output,
-                                       size_t* output_sz)
-    : m_ref(0)
-    , m_nonce(n)
-    , m_clientid(n)
-    , m_request(m)
-    , m_status(st)
-    , m_output(output)
-    , m_output_sz(output_sz)
-    , m_sent_to()
-    , m_last_error_desc()
-    , m_last_error_file()
-    , m_last_error_line()
+using replicant::failure_manager;
+
+failure_manager :: failure_manager()
+    : m_fds()
 {
-    *st = REPLICANT_GARBAGE;
 }
 
-replicant_client :: command :: ~command() throw ()
+failure_manager :: ~failure_manager() throw ()
 {
 }
 
 void
-replicant_client :: command :: set_nonce(uint64_t n)
+failure_manager :: heartbeat(uint64_t token, uint64_t now)
 {
-    m_nonce = n;
-}
+    failure_detector_map_t::iterator it = m_fds.find(token);
 
-void
-replicant_client :: command :: set_sent_to(const chain_node& s)
-{
-    m_sent_to = s;
-}
-
-void
-replicant_client :: command :: fail(replicant_returncode status)
-{
-    *m_status = status;
-}
-
-void
-replicant_client :: command :: succeed(std::auto_ptr<e::buffer> backing,
-                                       const e::slice& resp,
-                                       replicant_returncode status)
-{
-    if (m_output)
+    if (it != m_fds.end())
     {
-        char* base = reinterpret_cast<char*>(backing.get());
-        const char* data = reinterpret_cast<const char*>(resp.data());
-        assert(data >= base);
-        assert(data - base < UINT16_MAX);
-        uint16_t diff = data - base;
-        assert(diff >= 2);
-        e::pack16le(diff, base + diff - 2);
-        *m_output = data;
-        *m_output_sz = resp.size();
-        backing.release();
+        it->second->heartbeat(now);
+    }
+}
+
+void
+failure_manager :: get_all_suspicions(uint64_t now, std::vector<std::pair<uint64_t, double> >* suspicions)
+{
+    suspicions->clear();
+
+    for (failure_detector_map_t::iterator it = m_fds.begin(); it != m_fds.end(); ++it)
+    {
+        suspicions->push_back(std::make_pair(it->first, it->second->suspicion(now)));
+    }
+}
+
+void
+failure_manager :: record_suspicions(uint64_t seqno, const std::vector<std::pair<uint64_t, double> >& suspicions)
+{
+    // XXX
+}
+
+void
+failure_manager :: reset(const std::vector<chain_node>& _nodes)
+{
+    std::vector<uint64_t> nodes;
+
+    for (size_t i = 0; i < _nodes.size(); ++i)
+    {
+        nodes.push_back(_nodes[i].token);
     }
 
-    *m_status = status;
+    std::sort(nodes.begin(), nodes.end());
+
+    for (size_t i = 0; i < nodes.size(); ++i)
+    {
+        if (m_fds.find(nodes[i]) == m_fds.end())
+        {
+            std::tr1::shared_ptr<failure_detector> ptr(new failure_detector());
+            m_fds.insert(std::make_pair(nodes[i], ptr));
+        }
+    }
+
+    failure_detector_map_t::iterator it = m_fds.begin();
+
+    while (it != m_fds.end())
+    {
+        if (!std::binary_search(nodes.begin(), nodes.end(), it->first))
+        {
+            m_fds.erase(it);
+            it = m_fds.begin();
+        }
+        else
+        {
+            ++it;
+        }
+    }
 }

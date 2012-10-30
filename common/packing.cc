@@ -93,3 +93,21 @@ pack_size(const po6::net::ipaddr&)
 {
     return 17; // One byte for family, and 4/16 for address
 }
+
+e::buffer::packer
+operator << (e::buffer::packer lhs, const po6::net::location& rhs)
+{
+    return lhs << rhs.address << rhs.port;
+}
+
+e::buffer::unpacker
+operator >> (e::buffer::unpacker lhs, po6::net::location& rhs)
+{
+    return lhs >> rhs.address >> rhs.port;
+}
+
+size_t
+pack_size(const po6::net::location& rhs)
+{
+    return pack_size(rhs.address) + sizeof(uint16_t);
+}

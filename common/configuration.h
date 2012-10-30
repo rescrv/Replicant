@@ -42,45 +42,45 @@ class configuration
 
     public:
         uint64_t version() const;
+        uint64_t prev_token() const;
+        uint64_t this_token() const;
         bool quorum_of(const configuration& other) const;
         bool validate() const;
+        const chain_node& get(uint64_t token) const;
+        uint64_t fault_tolerance() const;
+        uint64_t servers_needed_for(uint64_t f) const;
 
     // Chain facts
     public:
         const chain_node& head() const;
-        const chain_node& config_tail() const;
         const chain_node& command_tail() const;
+        const chain_node& config_tail() const;
+        bool has_prev(const chain_node& node) const;
         const chain_node& prev(const chain_node& node) const;
+        bool has_next(const chain_node& node) const;
         const chain_node& next(const chain_node& node) const;
-        const chain_node& first_standby() const;
-        bool in_chain(const chain_node& node) const;
-        bool in_chain_sender(const po6::net::location& host) const;
-        bool is_member(const chain_node& node) const;
-        bool is_standby(const chain_node& node) const;
-        bool is_spare(const chain_node& node) const;
-        bool chain_full() const;
-        bool spares_full() const;
 
     // Iterate over differnt types of nodes
     public:
+        bool in_cluster(const chain_node& node) const;
+        bool is_member(const chain_node& node) const;
         const chain_node* members_begin() const;
         const chain_node* members_end() const;
+        bool is_standby(const chain_node& node) const;
         const chain_node* standbys_begin() const;
         const chain_node* standbys_end() const;
+        bool is_spare(const chain_node& node) const;
         const chain_node* spares_begin() const;
         const chain_node* spares_end() const;
 
     // Modify the configuration
     public:
+        bool may_add_spare() const;
         void add_spare(const chain_node& node);
-        void add_standby(const chain_node& node);
-        void bump_version();
-        void convert_standby(const chain_node& node);
-        // These don't do const chain_node& because doing so means that node
-        // would possibly change mid-post
-        void remove_spare(chain_node node);
-        void remove_standby(chain_node node);
-        void remove_member(chain_node node);
+        bool may_promote_spare() const;
+        void promote_spare(const chain_node& node);
+        bool may_promote_standby() const;
+        void promote_standby();
 
     private:
         friend bool operator == (const configuration& lhs, const configuration& rhs);
@@ -113,6 +113,9 @@ operator << (e::buffer::packer lhs, const configuration& rhs);
 
 e::buffer::unpacker
 operator >> (e::buffer::unpacker lhs, configuration& rhs);
+
+char*
+pack_config(const configuration& config, char* ptr);
 
 size_t
 pack_size(const configuration& rhs);

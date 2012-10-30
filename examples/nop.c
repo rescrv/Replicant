@@ -30,38 +30,38 @@
 #include <replicant_state_machine.h>
 
 void*
-nop_create(struct replicant_state_machine_actions* actions)
+nop_create(struct replicant_state_machine_context* ctx)
 {
     return malloc(sizeof(int));
 }
 
 void*
-nop_recreate(struct replicant_state_machine_actions* actions,
+nop_recreate(struct replicant_state_machine_context* ctx,
              const char* data, size_t sz)
 {
     return malloc(sizeof(int));
 }
 
 void
-nop_destroy(void* f)
+nop_destroy(struct replicant_state_machine_context* ctx,
+            void* f)
 {
     free(f);
 }
 
 void
-nop_snapshot(struct replicant_state_machine_actions* actions,
+nop_snapshot(struct replicant_state_machine_context* ctx,
              void* obj,
-             char** data, size_t* sz)
+             const char** data, size_t* sz)
 {
     *data = NULL;
     *sz = 0;
 }
 
 void
-nop_nop(struct replicant_state_machine_actions* actions,
+nop_nop(struct replicant_state_machine_context* ctx,
         void* obj,
-        const char* data,
-        size_t data_sz)
+        const char* data, size_t data_sz)
 {
 }
 

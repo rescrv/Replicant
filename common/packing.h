@@ -30,6 +30,7 @@
 
 // po6
 #include <po6/net/ipaddr.h>
+#include <po6/net/location.h>
 
 // e
 #include <e/buffer.h>
@@ -42,5 +43,14 @@ operator >> (e::buffer::unpacker lhs, po6::net::ipaddr& rhs);
 
 size_t
 pack_size(const po6::net::ipaddr& rhs);
+
+e::buffer::packer
+operator << (e::buffer::packer lhs, const po6::net::location& rhs);
+
+e::buffer::unpacker
+operator >> (e::buffer::unpacker lhs, po6::net::location& rhs);
+
+size_t
+pack_size(const po6::net::location& rhs);
 
 #endif // replicant_packing_h_

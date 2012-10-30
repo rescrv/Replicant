@@ -30,40 +30,40 @@
 #include <replicant_state_machine.h>
 
 void*
-echo_create(struct replicant_state_machine_actions* actions)
+echo_create(struct replicant_state_machine_context* ctx)
 {
     return malloc(sizeof(int));
 }
 
 void*
-echo_recreate(struct replicant_state_machine_actions* actions,
-              const char* data, size_t sz)
+echo_recreate(struct replicant_state_machine_context* ctx,
+              const char* data, size_t data_sz)
 {
     return malloc(sizeof(int));
 }
 
 void
-echo_destroy(void* f)
+echo_destroy(struct replicant_state_machine_context* ctx,
+             void* f)
 {
     free(f);
 }
 
 void
-echo_snapshot(struct replicant_state_machine_actions* actions,
+echo_snapshot(struct replicant_state_machine_context* ctx,
               void* obj,
-              char** data, size_t* sz)
+              const char** data, size_t* sz)
 {
     *data = NULL;
     *sz = 0;
 }
 
 void
-echo_echo(struct replicant_state_machine_actions* actions,
+echo_echo(struct replicant_state_machine_context* ctx,
           void* obj,
-          const char* data,
-          size_t data_sz)
+          const char* data, size_t data_sz)
 {
-    actions->set_response(actions->ctx, data, data_sz);
+    replicant_state_machine_set_response(ctx, data, data_sz);
 }
 
 struct replicant_state_machine rsm = {

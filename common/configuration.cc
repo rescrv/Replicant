@@ -25,6 +25,10 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
+// STL
+#include <memory>
+
+// Google Log
 #include <glog/logging.h>
 
 // Replicant
@@ -63,56 +67,68 @@ configuration :: version() const
     return m_version;
 }
 
+uint64_t
+configuration :: prev_token() const
+{
+    return 0xdeadbeefcafebabeULL;
+}
+
+uint64_t
+configuration :: this_token() const
+{
+    return 0xdeadbeefcafebabeULL;
+}
+
 bool
 configuration :: quorum_of(const configuration& other) const
 {
+    assert(validate());
+    assert(other.validate());
     size_t count = 0;
-    const chain_node* seq = other.members_begin();
 
     for (const chain_node* n = members_begin(); n < members_end(); ++n)
     {
-        bool match_in_chain = false;
+        bool found = false;
 
-        for (const chain_node* o = seq; o < other.members_end(); ++o)
+        for (const chain_node* o = other.members_begin(); !found && o < other.members_end(); ++o)
         {
             if (*n == *o)
             {
                 ++count;
-                match_in_chain = true;
-                seq = o;
-                break;
+                found = true;
             }
         }
 
-        // The first member of our chain not in other's chain prevents us from
-        // counting any other members of our chain in the quorum if they exist
-        // in other's chain.  This guarantees that we can only remove nodes from
-        // other's chain and add them to standby, not insert them at arbitrary
-        // locations.
-        if (!match_in_chain)
+        for (const chain_node* o = other.standbys_begin(); !found && o < other.standbys_end(); ++o)
         {
-            seq = other.members_end();
-
-            if (other.is_standby(*n))
+            if (*n == *o)
             {
                 ++count;
+                found = true;
             }
         }
     }
 
     for (const chain_node* n = standbys_begin(); n < standbys_end(); ++n)
     {
-        if (other.in_chain(*n))
-        {
-            ++count;
-        }
-    }
+        bool found = false;
 
-    for (const chain_node* s = spares_begin(); s != spares_end(); ++s)
-    {
-        if (other.in_chain(*s))
+        for (const chain_node* o = other.members_begin(); !found && o < other.members_end(); ++o)
         {
-            ++count;
+            if (*n == *o)
+            {
+                ++count;
+                found = true;
+            }
+        }
+
+        for (const chain_node* o = other.standbys_begin(); !found && o < other.standbys_end(); ++o)
+        {
+            if (*n == *o)
+            {
+                ++count;
+                found = true;
+            }
         }
     }
 
@@ -123,16 +139,19 @@ configuration :: quorum_of(const configuration& other) const
 bool
 configuration :: validate() const
 {
-    if (m_member_sz > m_standby_sz)
+    for (const chain_node* n = members_begin(); n < members_end(); ++n)
     {
-        return false;
-    }
-
-    for (const chain_node* n = members_begin(); n < standbys_end(); ++n)
-    {
-        for (const chain_node* m = n + 1; m < standbys_end(); ++m)
+        for (const chain_node* m = n + 1; m < members_end(); ++m)
         {
-            if (*n == *m)
+            if (n->address == m->address || n->token == m->token)
+            {
+                return false;
+            }
+        }
+
+        for (const chain_node* s = standbys_begin(); s < standbys_end(); ++s)
+        {
+            if (n->address == s->address || n->token == s->token)
             {
                 return false;
             }
@@ -140,20 +159,106 @@ configuration :: validate() const
 
         for (const chain_node* s = spares_begin(); s < spares_end(); ++s)
         {
-            if (*n == *s)
+            if (n->address == s->address || n->token == s->token)
             {
                 return false;
             }
         }
     }
 
-    return true;
+    for (const chain_node* n = standbys_begin(); n < standbys_end(); ++n)
+    {
+        for (const chain_node* s = n + 1; s < standbys_end(); ++s)
+        {
+            if (n->address == s->address || n->token == s->token)
+            {
+                return false;
+            }
+        }
+
+        for (const chain_node* s = spares_begin(); s < spares_end(); ++s)
+        {
+            if (n->address == s->address || n->token == s->token)
+            {
+                return false;
+            }
+        }
+    }
+
+    return m_member_sz <= m_standby_sz;
+}
+
+const chain_node&
+configuration :: get(uint64_t token) const
+{
+    for (const chain_node* n = members_begin(); n < members_end(); ++n)
+    {
+        if (n->token == token)
+        {
+            return *n;
+        }
+    }
+
+    for (const chain_node* n = standbys_begin(); n < standbys_end(); ++n)
+    {
+        if (n->token == token)
+        {
+            return *n;
+        }
+    }
+
+    for (const chain_node* n = spares_begin(); n < spares_end(); ++n)
+    {
+        if (n->token == token)
+        {
+            return *n;
+        }
+    }
+
+    return m_chain[REPL_CONFIG_SZ];
+}
+
+uint64_t
+configuration :: fault_tolerance() const
+{
+    return (m_standby_sz - 1) / 2;
+}
+
+uint64_t
+configuration :: servers_needed_for(uint64_t f) const
+{
+    uint64_t needed = f * 2 + 1;
+
+    if (needed < m_standby_sz)
+    {
+        return 0;
+    }
+    else
+    {
+        return needed - m_standby_sz;
+    }
 }
 
 const chain_node&
 configuration :: head() const
 {
+    if (m_member_sz == 0)
+    {
+        return m_chain[REPL_CONFIG_SZ];
+    }
+
     return m_chain[0];
+}
+
+const chain_node&
+configuration :: command_tail() const
+{
+    if (m_member_sz == 0)
+    {
+        return m_chain[REPL_CONFIG_SZ];
+    }
+
+    return m_chain[m_member_sz - 1];
 }
 
 const chain_node&
@@ -167,15 +272,10 @@ configuration :: config_tail() const
     return m_chain[m_standby_sz - 1];
 }
 
-const chain_node&
-configuration :: command_tail() const
+bool
+configuration :: has_prev(const chain_node& node) const
 {
-    if (m_member_sz == 0)
-    {
-        return m_chain[REPL_CONFIG_SZ];
-    }
-
-    return m_chain[m_member_sz - 1];
+    return prev(node) != chain_node();
 }
 
 const chain_node&
@@ -198,6 +298,12 @@ configuration :: prev(const chain_node& node) const
     return m_chain[REPL_CONFIG_SZ];
 }
 
+bool
+configuration :: has_next(const chain_node& node) const
+{
+    return next(node) != chain_node();
+}
+
 const chain_node&
 configuration :: next(const chain_node& node) const
 {
@@ -218,39 +324,10 @@ configuration :: next(const chain_node& node) const
     return m_chain[REPL_CONFIG_SZ];
 }
 
-const chain_node&
-configuration :: first_standby() const
-{
-    assert(standbys_begin() != standbys_end());
-    return *standbys_begin();
-}
-
 bool
-configuration :: in_chain(const chain_node& node) const
+configuration :: in_cluster(const chain_node& node) const
 {
-    for (const chain_node* n = members_begin(); n != standbys_end(); ++n)
-    {
-        if (*n == node)
-        {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-bool
-configuration :: in_chain_sender(const po6::net::location& host) const
-{
-    for (const chain_node* n = members_begin(); n != standbys_end(); ++n)
-    {
-        if (n->sender() == host)
-        {
-            return true;
-        }
-    }
-
-    return false;
+    return is_member(node) || is_standby(node);
 }
 
 bool
@@ -267,6 +344,18 @@ configuration :: is_member(const chain_node& node) const
     return false;
 }
 
+const chain_node*
+configuration :: members_begin() const
+{
+    return m_chain + 0;
+}
+
+const chain_node*
+configuration :: members_end() const
+{
+    return m_chain + m_member_sz;
+}
+
 bool
 configuration :: is_standby(const chain_node& node) const
 {
@@ -279,6 +368,18 @@ configuration :: is_standby(const chain_node& node) const
     }
 
     return false;
+}
+
+const chain_node*
+configuration :: standbys_begin() const
+{
+    return m_chain + m_member_sz;
+}
+
+const chain_node*
+configuration :: standbys_end() const
+{
+    return m_chain + m_standby_sz;
 }
 
 bool
@@ -295,158 +396,78 @@ configuration :: is_spare(const chain_node& node) const
     return false;
 }
 
-bool
-configuration :: chain_full() const
-{
-    return m_standby_sz >= REPL_CONFIG_SZ;
-}
-
-bool
-configuration :: spares_full() const
-{
-    return m_spare_sz >= REPL_CONFIG_SZ;
-}
-
-const chain_node*
-configuration :: members_begin() const
-{
-    return &m_chain[0];
-}
-
-const chain_node*
-configuration :: members_end() const
-{
-    return &m_chain[m_member_sz];
-}
-
-const chain_node*
-configuration :: standbys_begin() const
-{
-    return &m_chain[m_member_sz];
-}
-
-const chain_node*
-configuration :: standbys_end() const
-{
-    return &m_chain[m_standby_sz];
-}
-
 const chain_node*
 configuration :: spares_begin() const
 {
-    return &m_spare[0];
+    return m_spare + 0;
 }
 
 const chain_node*
 configuration :: spares_end() const
 {
-    return &m_spare[m_spare_sz];
+    return m_spare + m_spare_sz;
+}
+
+bool
+configuration :: may_add_spare() const
+{
+    return m_spare_sz < REPL_CONFIG_SZ;
 }
 
 void
 configuration :: add_spare(const chain_node& node)
 {
-    assert(m_spare_sz < REPL_CONFIG_SZ);
+    assert(may_add_spare());
+    assert(!in_cluster(node));
     assert(!is_spare(node));
     m_spare[m_spare_sz] = node;
     ++m_spare_sz;
-}
-
-void
-configuration :: add_standby(const chain_node& node)
-{
-    assert(m_standby_sz < REPL_CONFIG_SZ);
-    assert(!is_standby(node));
-    m_chain[m_standby_sz] = node;
-    ++m_standby_sz;
-    remove_spare(node);
-}
-
-void
-configuration :: bump_version()
-{
-    m_version = m_version + 1;
-}
-
-void
-configuration :: convert_standby(const chain_node& node)
-{
-    assert(m_standby_sz < REPL_CONFIG_SZ);
-    assert(m_member_sz < m_standby_sz);
-    ++m_member_sz;
-    remove_spare(node);
-}
-
-void
-configuration :: remove_spare(chain_node node)
-{
-    size_t i = 0;
-
-    while (i < m_spare_sz)
-    {
-        if (m_spare[i] == node)
-        {
-            m_spare[i] = m_spare[m_spare_sz - 1];
-            --m_spare_sz;
-        }
-        else
-        {
-            ++i;
-        }
-    }
-}
-
-void
-configuration :: remove_standby(chain_node node)
-{
-    size_t i = m_member_sz;
-
-    while (i < m_standby_sz)
-    {
-        if (m_chain[i] == node)
-        {
-            for (size_t j = i; j + 1 < m_standby_sz; ++j)
-            {
-                m_chain[j] = m_chain[j + 1];
-            }
-
-            --m_standby_sz;
-        }
-        else
-        {
-            ++i;
-        }
-    }
-}
-
-void
-configuration :: remove_member(chain_node node)
-{
-    size_t i = 0;
-
-    while (i < m_member_sz)
-    {
-        if (m_chain[i] == node)
-        {
-            for (size_t j = i; j + 1 < m_standby_sz; ++j)
-            {
-                m_chain[j] = m_chain[j + 1];
-            }
-
-            --m_standby_sz;
-            --m_member_sz;
-        }
-        else
-        {
-            ++i;
-        }
-    }
+    ++m_version;
 }
 
 bool
-operator < (const configuration& lhs, const configuration& rhs)
+configuration :: may_promote_spare() const
 {
-    return lhs.version() < rhs.version();
+    return m_standby_sz < REPL_CONFIG_SZ && m_spare_sz > 0;
+}
+
+void
+configuration :: promote_spare(const chain_node& node)
+{
+    assert(may_promote_spare());
+    assert(!in_cluster(node));
+    assert(is_spare(node));
+
+    for (size_t i = 0; i < m_spare_sz; ++i)
+    {
+        if (m_spare[i] == node)
+        {
+            for (size_t j = i + 1; j < m_spare_sz; ++j)
+            {
+                m_spare[j - 1] = m_spare[j];
+            }
+
+            --m_spare_sz;
+            m_chain[m_standby_sz] = node;
+            ++m_standby_sz;
+        }
+    }
+
+    ++m_version;
+}
+
+bool
+configuration :: may_promote_standby() const
+{
+    return m_member_sz < m_standby_sz;
+}
+
+void
+configuration :: promote_standby()
+{
+    assert(may_promote_standby());
+    ++m_member_sz;
+    ++m_version;
 }
 
 bool
@@ -460,7 +481,15 @@ operator == (const configuration& lhs, const configuration& rhs)
         return false;
     }
 
-    for (size_t i = 0; i < lhs.m_standby_sz; ++i)
+    for (size_t i = 0; i < lhs.m_member_sz; ++i)
+    {
+        if (lhs.m_chain[i] != rhs.m_chain[i])
+        {
+            return false;
+        }
+    }
+
+    for (size_t i = lhs.m_member_sz; i < lhs.m_standby_sz; ++i)
     {
         if (lhs.m_chain[i] != rhs.m_chain[i])
         {
@@ -542,7 +571,12 @@ operator >> (e::buffer::unpacker lhs, configuration& rhs)
               >> rhs.m_standby_sz
               >> rhs.m_spare_sz;
 
-    for (size_t i = 0; i < rhs.m_standby_sz; ++i)
+    for (size_t i = 0; i < rhs.m_member_sz; ++i)
+    {
+        lhs = lhs >> rhs.m_chain[i];
+    }
+
+    for (size_t i = rhs.m_member_sz; i < rhs.m_standby_sz; ++i)
     {
         lhs = lhs >> rhs.m_chain[i];
     }
@@ -553,6 +587,16 @@ operator >> (e::buffer::unpacker lhs, configuration& rhs)
     }
 
     return lhs;
+}
+
+char*
+pack_config(const configuration& config, char* ptr)
+{
+    // XXX inefficient, lazy hack
+    std::auto_ptr<e::buffer> msg(e::buffer::create(pack_size(config)));
+    msg->pack_at(0) << config;
+    memmove(ptr, msg->data(), msg->size());
+    return ptr + msg->size();
 }
 
 size_t

@@ -33,38 +33,38 @@
 #include <replicant_state_machine.h>
 
 void*
-log_create(struct replicant_state_machine_actions* actions)
+log_create(struct replicant_state_machine_context* ctx)
 {
     return malloc(sizeof(int));
 }
 
 void*
-log_recreate(struct replicant_state_machine_actions* actions,
-             const char* data, size_t sz)
+log_recreate(struct replicant_state_machine_context* ctx,
+             const char* data, size_t data_sz)
 {
     return malloc(sizeof(int));
 }
 
 void
-log_destroy(void* f)
+log_destroy(struct replicant_state_machine_context* ctx,
+            void* f)
 {
     free(f);
 }
 
 void
-log_snapshot(struct replicant_state_machine_actions* actions,
+log_snapshot(struct replicant_state_machine_context* ctx,
              void* obj,
-             char** data, size_t* sz)
+             const char** data, size_t* data_sz)
 {
     *data = NULL;
-    *sz = 0;
+    *data_sz = 0;
 }
 
 void
-log_log(struct replicant_state_machine_actions* actions,
+log_log(struct replicant_state_machine_context* ctx,
         void* obj,
-        const char* data,
-        size_t data_sz)
+        const char* data, size_t data_sz)
 {
     int is_print = 1;
     int saw_null = 0;
@@ -84,11 +84,11 @@ log_log(struct replicant_state_machine_actions* actions,
 
     if (is_print && saw_null)
     {
-        actions->log(actions->ctx, data);
+        replicant_state_machine_log_error(ctx, data);
     }
     else
     {
-        actions->log(actions->ctx, "will not log unprintable characters");
+        replicant_state_machine_log_error(ctx, "will not log unprintable characters");
     }
 }
 

@@ -50,13 +50,13 @@
 
 // BusyBee
 #include <busybee_constants.h>
-#include <busybee_sta.h>
+#include <busybee_mta.h>
 
 // Replicant
+#include "common/bootstrap.h"
 #include "common/macros.h"
 #include "common/network_msgtype.h"
 #include "common/special_objects.h"
-#include "daemon/command.h"
 #include "daemon/daemon.h"
 #include "daemon/heal_next.h"
 
@@ -66,7 +66,8 @@
         if (UNPACKER.error()) \
         { \
             replicant_network_msgtype CONCAT(_anon, __LINE__)(REPLNET_ ## MSGTYPE); \
-            LOG(WARNING) << "received corrupt \"" << CONCAT(_anon, __LINE__) << "\" message"; \
+            LOG(WARNING) << "received corrupt \"" \
+                         << CONCAT(_anon, __LINE__) << "\" message"; \
             return; \
         } \
     } while (0)
@@ -80,36 +81,33 @@ exit_on_signal(int /*signum*/)
     s_continue = false;
 }
 
-replicant_daemon :: replicant_daemon(po6::net::ipaddr bind_to,
-                                     in_port_t incoming,
-                                     in_port_t outgoing)
+replicant_daemon :: replicant_daemon(po6::net::location bind_to)
     : m_s()
-    , m_busybee(bind_to, incoming, outgoing)
+    , m_busybee_mapper()
+    , m_busybee(&m_busybee_mapper, bind_to, 0, 0/*we don't use pause/unpause*/)
     , m_us()
-    , m_confman()
-    , m_commands()
-    , m_clients()
-    , m_objects()
+    , m_config_manager()
+    , m_failure_manager()
+    , m_object_manager()
     , m_periodic()
     , m_heal_next()
-    , m_heal_prev(false)
-    , m_disconnected_iteration(0)
-    , m_disconnected()
-    , m_disconnected_times()
-    , m_marked_for_gc(0)
-    , m_snapshots()
+    , m_ping_seqno(0)
+    , m_disrupted_unhandled()
+    , m_disrupted_backoff()
+    , m_disrupted_times()
+    , m_fs()
 {
+    m_busybee.set_timeout(1);
     m_us.address = bind_to;
-    m_us.incoming_port = incoming;
-    m_us.outgoing_port = m_busybee.outbound().port;
-    trip_periodic(0, &replicant_daemon::periodic_dump_config);
-    trip_periodic(0, &replicant_daemon::periodic_garbage_collect_commands_start);
-    trip_periodic(0, &replicant_daemon::periodic_list_clients);
-    trip_periodic(0, &replicant_daemon::periodic_detach_clients);
+    m_object_manager.set_callback(this, &replicant_daemon::record_execution);
+    trip_periodic(0, &replicant_daemon::periodic_join_cluster);
+    trip_periodic(0, &replicant_daemon::periodic_describe_cluster);
+    trip_periodic(0, &replicant_daemon::periodic_exchange);
 }
 
 replicant_daemon :: ~replicant_daemon() throw ()
 {
+    m_fs.close();
 }
 
 int
@@ -120,7 +118,21 @@ replicant_daemon :: run(bool d)
         return EXIT_FAILURE;
     }
 
+    if (d)
+    {
+        google::SetLogDestination(google::INFO, "replicant-");
+    }
+    else
+    {
+        google::LogToStderr();
+    }
+
     if (!generate_identifier_token())
+    {
+        return EXIT_FAILURE;
+    }
+
+    if (!m_fs.open(po6::pathname(".")))
     {
         return EXIT_FAILURE;
     }
@@ -130,25 +142,20 @@ replicant_daemon :: run(bool d)
         return EXIT_FAILURE;
     }
 
-    m_busybee.set_timeout(1);
-
-    if (d)
-    {
-        if (!daemonize())
-        {
-            return EXIT_FAILURE;
-        }
-    }
-    else
-    {
-        google::LogToStderr();
-    }
-
-    if (!loop())
+    if (d && !daemonize())
     {
         return EXIT_FAILURE;
     }
 
+    replicant::connection conn;
+    std::auto_ptr<e::buffer> msg;
+
+    while (recv(&conn, &msg))
+    {
+        process_message(conn, msg);
+    }
+
+    LOG(INFO) << "replicant is exiting safely";
     return EXIT_SUCCESS;
 }
 
@@ -160,7 +167,21 @@ replicant_daemon :: run(bool d, po6::net::hostname existing)
         return EXIT_FAILURE;
     }
 
+    if (d)
+    {
+        google::SetLogDestination(google::INFO, "replicant-");
+    }
+    else
+    {
+        google::LogToStderr();
+    }
+
     if (!generate_identifier_token())
+    {
+        return EXIT_FAILURE;
+    }
+
+    if (!m_fs.open(po6::pathname(".")))
     {
         return EXIT_FAILURE;
     }
@@ -170,26 +191,20 @@ replicant_daemon :: run(bool d, po6::net::hostname existing)
         return EXIT_FAILURE;
     }
 
-    m_busybee.set_timeout(5000);
-    trip_periodic(0, &replicant_daemon::periodic_set_timeout);
-
-    if (d)
-    {
-        if (!daemonize())
-        {
-            return EXIT_FAILURE;
-        }
-    }
-    else
-    {
-        google::LogToStderr();
-    }
-
-    if (!loop())
+    if (d && !daemonize())
     {
         return EXIT_FAILURE;
     }
 
+    replicant::connection conn;
+    std::auto_ptr<e::buffer> msg;
+
+    while (recv(&conn, &msg))
+    {
+        process_message(conn, msg);
+    }
+
+    LOG(INFO) << "replicant is exiting safely";
     return EXIT_SUCCESS;
 }
 
@@ -225,34 +240,44 @@ replicant_daemon :: install_signal_handler(int signum, void (*func)(int))
 }
 
 bool
-replicant_daemon :: generate_identifier_token()
+replicant_daemon :: generate_token(uint64_t* token)
 {
-    LOG(INFO) << "generating random token";
     po6::io::fd sysrand(open("/dev/urandom", O_RDONLY));
 
     if (sysrand.get() < 0)
     {
-        PLOG(ERROR) << "could not open /dev/urandom";
         return false;
     }
 
-    if (sysrand.read(&m_us.token, sizeof(m_us.token)) != sizeof(m_us.token))
+    if (sysrand.read(token, sizeof(*token)) != sizeof(*token))
     {
-        PLOG(ERROR) << "could not read from /dev/urandom";
         return false;
     }
 
-    LOG(INFO) << "random token:  " << m_us.token;
+    return true;
+}
+
+bool
+replicant_daemon :: generate_identifier_token()
+{
+    if (!generate_token(&m_us.token))
+    {
+        PLOG(ERROR) << "could not read random token from /dev/urandom";
+        return false;
+    }
+
+    LOG(INFO) << "generated random token:  " << m_us.token;
+    m_busybee.set_id(m_us.token);
     return true;
 }
 
 bool
 replicant_daemon :: start_new_cluster()
 {
-    configuration zero(0, m_us);
     configuration initial(1, m_us);
-    m_confman.reset(zero);
-    m_confman.add_proposed(initial);
+    m_config_manager.reset(initial);
+    m_fs.inform_configuration(initial);
+    LOG(INFO) << "started new cluster " << initial;
     accept_config(initial);
     return true;
 }
@@ -260,22 +285,37 @@ replicant_daemon :: start_new_cluster()
 bool
 replicant_daemon :: connect_to_cluster(po6::net::hostname hn)
 {
-    po6::net::location loc = hn.lookup(SOCK_STREAM, IPPROTO_TCP);
-    LOG(INFO) << "connecting to existing cluster " << hn
-              << " which resolves to " << loc;
-    std::auto_ptr<e::buffer> msg(e::buffer::create(BUSYBEE_HEADER_SIZE + sizeof(uint8_t)));
-    msg->pack_at(BUSYBEE_HEADER_SIZE) << static_cast<uint8_t>(REPLNET_JOIN);
-    // Don't use "send" here because the only acceptable outcome is SUCCESS and
-    // there is nothing to do but fail if this doesn't fail.
-    busybee_returncode rc = m_busybee.send(loc, msg);
+    configuration initial;
+    replicant::bootstrap_returncode rc = replicant::bootstrap(hn, &initial);
 
-    if (rc != BUSYBEE_SUCCESS)
+    switch (rc)
     {
-        LOG(ERROR) << "failed to send \"JOIN\" request to the existing cluster:  " << rc;
-        return false;
+        case replicant::BOOTSTRAP_SUCCESS:
+            break;
+        case replicant::BOOTSTRAP_SEE_ERRNO:
+            PLOG(ERROR) << "could not join existing cluster at " << hn;
+            return false;
+        case replicant::BOOTSTRAP_COMM_FAIL:
+            LOG(ERROR) << "could not join existing cluster at " << hn << ":  could not communicate with server";
+            return false;
+        case replicant::BOOTSTRAP_CORRUPT_INFORM:
+            LOG(ERROR) << "could not join existing cluster at " << hn << ":  the remote host sent a bad \"INFORM\" message";
+            return false;
+        case replicant::BOOTSTRAP_TIMEOUT:
+            LOG(ERROR) << "could not join existing cluster at " << hn << ":  the connection timed out";
+            return false;
+        case replicant::BOOTSTRAP_NOT_CLUSTER_MEMBER:
+            LOG(ERROR) << "could not join existing cluster at " << hn << ":  the remote host is not a cluster member";
+            return false;
+        default:
+            LOG(ERROR) << "could not join existing cluster at " << hn << ":  an unknown error occurred";
+            return false;
     }
 
-    LOG(INFO) << "sent \"JOIN\" request to the existing cluster";
+    m_config_manager.reset(initial);
+    m_fs.inform_configuration(initial);
+    LOG(INFO) << "joined existing cluster " << initial;
+    accept_config(initial);
     return true;
 }
 
@@ -293,54 +333,10 @@ replicant_daemon :: daemonize()
     return true;
 }
 
-bool
-replicant_daemon :: loop()
-{
-    while (s_continue)
-    {
-        po6::net::location from;
-        std::auto_ptr<e::buffer> msg;
-        busybee_returncode rc = m_busybee.recv(&from, &msg);
-
-        switch (rc)
-        {
-            case BUSYBEE_SUCCESS:
-                process_message(from, msg);
-                break;
-            case BUSYBEE_TIMEOUT:
-                if (m_confman.unconfigured())
-                {
-                    LOG(ERROR) << "failed to \"JOIN\" the existing cluster:  connection timed out";
-                    s_continue = false;
-                }
-                break;
-            case BUSYBEE_DISCONNECT:
-            case BUSYBEE_CONNECTFAIL:
-                handle_disconnect(from);
-                break;
-            case BUSYBEE_POLLFAILED:
-            case BUSYBEE_ADDFDFAIL:
-                LOG(ERROR) << "XXX CASE " << rc; // XXX
-                break;
-            case BUSYBEE_SHUTDOWN:
-            case BUSYBEE_QUEUED:
-            case BUSYBEE_BUFFERFULL:
-            case BUSYBEE_EXTERNAL:
-            default:
-                abort();
-        }
-
-        run_periodic();
-    }
-
-    return true;
-}
-
 void
-replicant_daemon :: process_message(const po6::net::location& from,
+replicant_daemon :: process_message(const replicant::connection& conn,
                                     std::auto_ptr<e::buffer> msg)
 {
-    assert(from != po6::net::location());
     assert(msg.get());
     replicant_network_msgtype mt = REPLNET_NOP;
     e::buffer::unpacker up = msg->unpack_from(BUSYBEE_HEADER_SIZE);
@@ -350,65 +346,56 @@ replicant_daemon :: process_message(const po6::net::location& from,
     {
         case REPLNET_NOP:
             break;
-        case REPLNET_JOIN:
-            process_join(from, msg, up);
+        case REPLNET_BOOTSTRAP:
+            process_bootstrap(conn, msg, up);
             break;
         case REPLNET_INFORM:
-            process_inform(from, msg, up);
+            process_inform(conn, msg, up);
             break;
-        case REPLNET_BECOME_SPARE:
-            process_become_spare(from, msg, up);
-            break;
-        case REPLNET_BECOME_STANDBY:
-            process_become_standby(from, msg, up);
-            break;
-        case REPLNET_BECOME_MEMBER:
-            process_become_member(from, msg, up);
+        case REPLNET_JOIN:
+            process_join(conn, msg, up);
             break;
         case REPLNET_CONFIG_PROPOSE:
-            process_config_propose(from, msg, up);
+            process_config_propose(conn, msg, up);
             break;
         case REPLNET_CONFIG_ACCEPT:
-            process_config_accept(from, msg, up);
+            process_config_accept(conn, msg, up);
             break;
         case REPLNET_CONFIG_REJECT:
-            process_config_reject(from, msg, up);
+            process_config_reject(conn, msg, up);
             break;
-        case REPLNET_IDENTIFY:
-            process_identify(from, msg, up);
+        case REPLNET_CLIENT_REGISTER:
+            process_client_register(conn, msg, up);
             break;
-        case REPLNET_IDENTIFIED:
-            LOG(WARNING) << "dropping \"IDENTIFIED\" received by server";
-            break;
-        case REPLNET_CLIENT_LIST:
-            process_client_list(from, msg, up);
+        case REPLNET_CLIENT_DISCONNECT:
+            process_client_disconnect(conn, msg, up);
             break;
         case REPLNET_COMMAND_SUBMIT:
-            process_command_submit(from, msg, up);
+            process_command_submit(conn, msg, up);
             break;
         case REPLNET_COMMAND_ISSUE:
-            process_command_issue(from, msg, up);
+            process_command_issue(conn, msg, up);
             break;
         case REPLNET_COMMAND_ACK:
-            process_command_ack(from, msg, up);
+            process_command_ack(conn, msg, up);
             break;
         case REPLNET_COMMAND_RESPONSE:
             LOG(WARNING) << "dropping \"RESPONSE\" received by server";
             break;
-        case REPLNET_COMMAND_RESEND:
-            LOG(WARNING) << "dropping \"RESEND\" received by server";
+        case REPLNET_HEAL_REQ:
+            process_heal_req(conn, msg, up);
             break;
-        case REPLNET_REQ_STATE:
-            process_req_state(from, msg, up);
+        case REPLNET_HEAL_RESP:
+            process_heal_resp(conn, msg, up);
             break;
-        case REPLNET_RESP_STATE:
-            process_resp_state(from, msg, up);
+        case REPLNET_HEAL_DONE:
+            process_heal_done(conn, msg, up);
             break;
-        case REPLNET_SNAPSHOT:
-            process_snapshot(from, msg, up);
+        case REPLNET_PING:
+            process_ping(conn, msg, up);
             break;
-        case REPLNET_HEALED:
-            process_healed(from, msg, up);
+        case REPLNET_PONG:
+            process_pong(conn, msg, up);
             break;
         default:
             LOG(WARNING) << "unknown message type; here's some hex:  " << msg->hex();
@@ -417,25 +404,23 @@ replicant_daemon :: process_message(const po6::net::location& from,
 }
 
 void
-replicant_daemon :: process_join(const po6::net::location& from,
-                                 std::auto_ptr<e::buffer>,
-                                 e::buffer::unpacker)
+replicant_daemon :: process_bootstrap(const replicant::connection& conn,
+                                      std::auto_ptr<e::buffer>,
+                                      e::buffer::unpacker)
 {
-    const configuration& config(m_confman.get_stable());
+    LOG(INFO) << "providing configuration to " << conn.token
+              << " as part of the bootstrap process";
+    const configuration& config(m_config_manager.stable());
     size_t sz = BUSYBEE_HEADER_SIZE
               + pack_size(REPLNET_INFORM)
               + pack_size(config);
     std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
     msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_INFORM << config;
-
-    if (!send(from, msg))
-    {
-        LOG(WARNING) << "Could not send \"INFORM\" message";
-    }
+    send(conn, msg);
 }
 
 void
-replicant_daemon :: process_inform(const po6::net::location&,
+replicant_daemon :: process_inform(const replicant::connection&,
                                    std::auto_ptr<e::buffer>,
                                    e::buffer::unpacker up)
 {
@@ -443,408 +428,450 @@ replicant_daemon :: process_inform(const po6::net::location&,
     up = up >> new_config;
     CHECK_UNPACK(INFORM, up);
 
-    if (m_confman.get_latest().version() < new_config.version())
+    if (m_config_manager.latest().version() < new_config.version())
     {
-        LOG(INFO) << "informed about configuration " << new_config.version()
-                  << " which replaces configuration " << m_confman.get_latest().version();
-        m_confman.reset(new_config);
+        LOG(INFO) << "informed about configuration "
+                  << new_config.version()
+                  << " which replaces configuration "
+                  << m_config_manager.latest().version();
+        m_config_manager.reset(new_config);
+        m_fs.inform_configuration(new_config);
         accept_config(new_config);
     }
+    else
+    {
+        LOG(INFO) << "received stale \"INFORM\" message for " << new_config.version();
+    }
 }
 
 void
-replicant_daemon :: process_become_spare(const po6::net::location& from,
-                                         std::auto_ptr<e::buffer>,
-                                         e::buffer::unpacker up)
+replicant_daemon :: process_join(const replicant::connection& conn,
+                                 std::auto_ptr<e::buffer>,
+                                 e::buffer::unpacker up)
 {
-    chain_node new_spare;
-    up = up >> new_spare;
-    CHECK_UNPACK(BECOME_SPARE, up);
-
-    if (from != new_spare.sender())
-    {
-        LOG(INFO) << "dropping \"BECOME_SPARE\" message because the sender doesn't match the node";
-        return;
-    }
-
-    configuration new_config = m_confman.get_latest();
-
-    if (new_config.in_chain(new_spare))
-    {
-        LOG(INFO) << "dropping \"BECOME_SPARE\" message because the requester is in the chain";
-        return;
-    }
-
-    if (new_config.is_spare(new_spare))
-    {
-        LOG(INFO) << "dropping \"BECOME_SPARE\" message because the requester is already a spare";
-        size_t sz = BUSYBEE_HEADER_SIZE
-                  + pack_size(REPLNET_INFORM)
-                  + pack_size(m_confman.get_stable());
-        std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
-        msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_INFORM << m_confman.get_stable();
-        send(from, msg); // ignore return
-        return;
-    }
-
-    if (new_config.spares_full())
-    {
-        LOG(INFO) << "dropping \"BECOME_SPARE\" message because there are too many spare nodes";
-        return;
-    }
-
-    new_config.add_spare(new_spare);
-    new_config.bump_version();
-    propose_config(new_config); // ignore return, they'll retry
-}
-
-void
-replicant_daemon :: process_become_standby(const po6::net::location& from,
-                                           std::auto_ptr<e::buffer>,
-                                           e::buffer::unpacker up)
-{
-    chain_node new_standby;
-    up = up >> new_standby;
-    CHECK_UNPACK(BECOME_STANDBY, up);
-
-    if (from != new_standby.sender())
-    {
-        LOG(INFO) << "dropping \"BECOME_STANDBY\" message because the sender doesn't match the node";
-        return;
-    }
-
-    configuration new_config = m_confman.get_latest();
-
-    if (new_config.in_chain(new_standby))
-    {
-        LOG(INFO) << "dropping \"BECOME_STANDBY\" message because the requester is in the chain";
-        return;
-    }
-
-    if (new_config.chain_full())
-    {
-        LOG(INFO) << "dropping \"BECOME_STANDBY\" message because there are too many chain nodes";
-        return;
-    }
-
-    new_config.add_standby(new_standby);
-    new_config.bump_version();
-    propose_config(new_config); // ignore return, they'll retry
-}
-
-void
-replicant_daemon :: process_become_member(const po6::net::location& from,
-                                          std::auto_ptr<e::buffer>,
-                                          e::buffer::unpacker up)
-{
-    chain_node new_member;
-    up = up >> new_member;
-    CHECK_UNPACK(BECOME_MEMBER, up);
-
-    if (from != new_member.sender())
-    {
-        LOG(INFO) << "dropping \"BECOME_MEMBER\" message because the sender doesn't match the node";
-        return;
-    }
-
-    configuration new_config = m_confman.get_latest();
-
-    if (new_config.is_member(new_member))
-    {
-        LOG(INFO) << "dropping \"BECOME_MEMBER\" message because the requester is a chain member";
-        return;
-    }
-
-    if (!new_config.is_standby(new_member))
-    {
-        LOG(INFO) << "dropping \"BECOME_MEMBER\" message because the requester is not on standby";
-        return;
-    }
-
-    if (new_config.first_standby() != new_member)
-    {
-        LOG(INFO) << "dropping \"BECOME_MEMBER\" message because the requester is not the first on standby";
-        return;
-    }
-
-    if (new_config.chain_full())
-    {
-        LOG(INFO) << "dropping \"BECOME_MEMBER\" message because there are too many chain nodes";
-        return;
-    }
-
-    new_config.convert_standby(new_member);
-    new_config.bump_version();
-    propose_config(new_config); // ignore return, they'll retry
-}
-
-void
-replicant_daemon :: process_config_propose(const po6::net::location& from,
-                                           std::auto_ptr<e::buffer>,
-                                           e::buffer::unpacker up)
-{
-    std::vector<configuration> config_chain;
-    up = up >> config_chain;
+    chain_node sender;
+    up = up >> sender;
     CHECK_UNPACK(CONFIG_PROPOSE, up);
+    LOG(INFO) << "received \"JOIN\" message from " << conn.token
+              << " claiming to be " << sender;
 
-    if (config_chain.size() < 2)
+    if (!conn.matches(sender))
     {
-        LOG(ERROR) << "received corrupt \"PROPOSE\" message (too few configurations)";
+        LOG(ERROR) << "not processing the \"JOIN\" message because the tokens "
+                   << "don't match (file a bug)";
         return;
     }
 
-    bool reject = false;
-    uint64_t oldest_version = m_confman.get_stable().version();
-    uint64_t latest_version = m_confman.get_latest().version();
-
-    // If all of the configs fall outside the range we've already got, then we
-    // should reject.
-    if ((config_chain.front().version() < oldest_version &&
-         config_chain.back().version()  < oldest_version) ||
-        (config_chain.front().version() > latest_version &&
-         config_chain.back().version()  > latest_version))
+    if (m_config_manager.in_any_cluster(sender))
     {
-        // This should never happen, so it's an error
-        LOG(ERROR) << "rejecting \"PROPOSE\" message that doesn't intersect our history";
+        LOG(INFO) << "not processing the \"JOIN\" message because " << sender
+                  << " is already in a cluster configuration";
+        return;
+    }
+
+    if (m_config_manager.is_any_spare(sender))
+    {
+        LOG(INFO) << "not processing the \"JOIN\" message because " << sender
+                  << " is already a spare in a cluster configuration";
+        return;
+    }
+
+    if (m_config_manager.stable().head() != m_us)
+    {
+        LOG(INFO) << "not processing the \"JOIN\" message because we are not the head";
+        return;
+    }
+
+    configuration new_config = m_config_manager.latest();
+
+    if (new_config.may_add_spare())
+    {
+        chain_node n = new_config.get(sender.token);
+
+        if (n == chain_node() || n == sender)
+        {
+            LOG(INFO) << "adding " << sender << " as a spare node";
+            new_config.add_spare(sender);
+            propose_config(new_config);
+        }
+        else
+        {
+            LOG(INFO) << "not processing the \"JOIN\" message from " << sender
+                      << " because of a duplicate token";
+        }
+    }
+    else
+    {
+        LOG(INFO) << "not processing the \"JOIN\" message from " << sender
+                  << " because we have no space for spare servers";
+    }
+}
+
+#define SEND_CONFIG_RESP(NODE, ACTION, ID, TIME, US) \
+    do \
+    { \
+        size_t CONCAT(_sz, __LINE__) = BUSYBEE_HEADER_SIZE \
+                                     + pack_size(REPLNET_CONFIG_ ## ACTION) \
+                                     + 2 * sizeof(uint64_t) \
+                                     + pack_size(US); \
+        std::auto_ptr<e::buffer> CONCAT(_msg, __LINE__)( \
+                e::buffer::create(CONCAT(_sz, __LINE__))); \
+        CONCAT(_msg, __LINE__)->pack_at(BUSYBEE_HEADER_SIZE) \
+            << (REPLNET_CONFIG_ ## ACTION) << ID << TIME << US; \
+        send(NODE, CONCAT(_msg, __LINE__)); \
+    } \
+    while(0)
+
+void
+replicant_daemon :: process_config_propose(const replicant::connection& conn,
+                                           std::auto_ptr<e::buffer>,
+                                           e::buffer::unpacker up)
+{
+    uint64_t proposal_id;
+    uint64_t proposal_time;
+    chain_node sender;
+    std::vector<configuration> config_chain;
+    up = up >> proposal_id >> proposal_time >> sender >> config_chain;
+    CHECK_UNPACK(CONFIG_PROPOSE, up);
+    LOG(INFO) << "proposal " << proposal_id << ":" << proposal_time << " received";
+
+    if (config_chain.empty())
+    {
+        LOG(ERROR) << "dropping proposal " << proposal_id << ":" << proposal_time
+                   << " because it is empty (file a bug)";
+        return;
+    }
+
+    if (!conn.matches(sender))
+    {
+        LOG(ERROR) << "dropping \"CONFIG_PROPOSE\" message because the tokens "
+                   << "don't match (file a bug)";
+        return;
+    }
+
+    size_t idx_stable = 0;
+
+    while (idx_stable < config_chain.size() &&
+           config_chain[idx_stable] != m_config_manager.stable())
+    {
+        ++idx_stable;
+    }
+
+    if (idx_stable == config_chain.size() && config_chain[0].version() > m_config_manager.stable().version())
+    {
+        LOG(INFO) << "proposal " << proposal_id << ":" << proposal_time
+                  << " is rooted in a stable configuration that supercedes our own;"
+                  << " treating it as an inform message";
+        m_config_manager.reset(config_chain[0]);
+        m_fs.inform_configuration(config_chain[0]);
+        accept_config(config_chain[0]);
+        idx_stable = 0;
+    }
+    else if (idx_stable == config_chain.size())
+    {
+        LOG(ERROR) << "dropping proposal " << proposal_id << ":" << proposal_time
+                   << " that does not contain our stable configuration";
+        return;
+    }
+
+    if (m_fs.is_rejected_configuration(proposal_id, proposal_time))
+    {
+        SEND_CONFIG_RESP(sender, REJECT, proposal_id, proposal_time, m_us);
+        return;
+    }
+
+    if (m_fs.is_accepted_configuration(proposal_id, proposal_time))
+    {
+        SEND_CONFIG_RESP(sender, ACCEPT, proposal_id, proposal_time, m_us);
+        return;
+    }
+
+    configuration* configs = &config_chain.front() + idx_stable;
+    size_t configs_sz = config_chain.size() - idx_stable;
+    m_fs.propose_configuration(proposal_id, proposal_time, configs, configs_sz);
+    bool reject = false;
+
+    // Make sure that we could propose it
+    if (!m_config_manager.is_compatible(configs, configs_sz))
+    {
+        LOG(INFO) << "rejecting proposal " << proposal_id << ":" << proposal_time
+                  << " that does not merge with current proposals";
         reject = true;
     }
 
-    for (size_t i = 0; i < config_chain.size(); ++i)
+    for (size_t i = 0; i < configs_sz; ++i)
     {
-        uint64_t version = config_chain[i].version();
-
-        // It should validate
-        if (!config_chain[i].validate())
+        // Check that the configs are valid
+        if (!configs[i].validate())
         {
-            // This should never happen, so it's an error
-            LOG(ERROR) << "rejecting \"PROPOSE\" message with corrupt config";
+            LOG(ERROR) << "rejecting proposal " << proposal_id << ":" << proposal_time
+                       << " that contains a corrupt configuration";
             reject = true;
         }
 
-        // If we should manage this config and don't, that's grounds for
-        // rejection
-        if (oldest_version <= version && version <= latest_version &&
-            !m_confman.manages(config_chain[i]))
+        // Check the sequential links
+        if (i + 1 < configs_sz &&
+            (configs[i].version() + 1 != configs[i + 1].version() ||
+             configs[i].this_token() != configs[i + 1].prev_token()))
         {
-            // This is allowable, so it's just an INFO message
-            LOG(INFO) << "reject \"PROPOSE\" message with divergent history";
+            LOG(ERROR) << "rejecting proposal " << proposal_id << ":" << proposal_time
+                       << " that violates the configuration chain invariant";
             reject = true;
         }
 
-        if (i + 1 < config_chain.size() &&
-            config_chain[i].version() + 1 != config_chain[i + 1].version())
+        // Check that the proposed chain meets the quorum requirement
+        for (size_t j = i + 1; j < configs_sz; ++j)
         {
-            // This should never happen, so it's an error
-            LOG(ERROR) << "rejecting \"PROPOSE\" message with out-of-order configs";
-            reject = true;
-        }
-
-        for (size_t j = i + 1; j < config_chain.size(); ++j)
-        {
-            if (!config_chain[j].quorum_of(config_chain[i]))
+            if (!configs[j].quorum_of(configs[i]))
             {
                 // This should never happen, so it's an error
-                LOG(ERROR) << "rejecting \"PROPOSE\" message that violates the quorum requirement";
+                LOG(ERROR) << "rejecting proposal " << proposal_id << ":" << proposal_time
+                           << " that violates the configuration quorum invariant";
                 reject = true;
             }
         }
-
-        // We only care about >latest_version.  If <=latest_version, then either
-        // we're <oldest_version (and don't care) or >= oldest_version, and
-        // covered by the m_confman.manages() check above.
-        if (version > latest_version &&
-            !m_confman.quorum_for_all(config_chain[i]))
-        {
-            // This should never happen, so it's an error
-            LOG(ERROR) << "rejecting \"PROPOSE\" message that violates the quorum requirement";
-            reject = true;
-        }
     }
 
-    // All proposals must come from our "prev" in the latest config
-    if (config_chain.back().prev(m_us).sender() != from)
+    if (configs[configs_sz - 1].prev(m_us) != sender)
     {
         // This should never happen, so it's an error
-        LOG(ERROR) << "rejecting \"PROPOSE\" message that didn't come from the previous node";
+        LOG(ERROR) << "rejecting proposal " << proposal_id << ":" << proposal_time
+                   << " that did not propagate along the chain";
         reject = true;
     }
 
-    // It's at this point that we have to decide what to reject.
-    // We reject everything that is >= to oldest_version that is not managed by
-    // the chain.
     if (reject)
     {
-        std::vector<configuration> rejectable;
-
-        // Not worth saving this info above.  "reject" should be rare and
-        // therefore it doesn't matter if it is slow the 1 in 10M+ times it
-        // happens
-        for (size_t i = 0; i < config_chain.size(); ++i)
+        m_fs.reject_configuration(proposal_id, proposal_time);
+        SEND_CONFIG_RESP(sender, REJECT, proposal_id, proposal_time, m_us);
+        return;
+    }
+    else
+    {
+        if (configs_sz == 1)
         {
-            if ((config_chain[i].version() >= oldest_version &&
-                 !m_confman.manages(config_chain[i])) ||
-                !config_chain[i].validate())
+            m_fs.accept_configuration(proposal_id, proposal_time);
+            // no need to run hooks
+            SEND_CONFIG_RESP(sender, ACCEPT, proposal_id, proposal_time, m_us);
+        }
+        else if (m_config_manager.latest().version() < configs[configs_sz - 1].version())
+        {
+            m_config_manager.merge(proposal_id, proposal_time, configs, configs_sz);
+
+            if (configs[configs_sz - 1].config_tail() == m_us)
             {
-                rejectable.push_back(config_chain[i]);
+                m_fs.accept_configuration(proposal_id, proposal_time);
+                accept_config(configs[configs_sz - 1]);
+                SEND_CONFIG_RESP(sender, ACCEPT, proposal_id, proposal_time, m_us);
+            }
+            else
+            {
+                LOG(INFO) << "proposal " << proposal_id << ":" << proposal_time << " set as pending";
+
+                // We must send the whole config_chain and cannot fall back on
+                // configs.
+                size_t sz = BUSYBEE_HEADER_SIZE
+                          + pack_size(REPLNET_CONFIG_PROPOSE)
+                          + 2 * sizeof(uint64_t)
+                          + pack_size(m_us)
+                          + pack_size(config_chain);
+                std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
+                msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_CONFIG_PROPOSE
+                                                  << proposal_id << proposal_time
+                                                  << m_us << config_chain;
+                send(config_chain.back().next(m_us), msg);
             }
         }
-
-        std::sort(rejectable.begin(), rejectable.end());
-        std::vector<configuration>::iterator it;
-        it = std::unique(rejectable.begin(), rejectable.end());
-        rejectable.resize(it - rejectable.begin());
-
-        size_t sz = BUSYBEE_HEADER_SIZE
-                  + pack_size(REPLNET_CONFIG_REJECT)
-                  + pack_size(rejectable);
-        std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
-        msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_CONFIG_REJECT << rejectable;
-
-        // We can use "from" here safely.  If from == the sender we expected,
-        // then the chain unwinds.  If from != the sender we expected, then we
-        // allow them to clean up and hopefully heal.
-        if (!send(from, msg))
-        {
-            LOG(WARNING) << "Could not send \"REJECT\" message";
-        }
-
-        return;
-    }
-
-    // If this is a retransmission, we need to retransmit the accept
-    if (config_chain.back().version() == oldest_version)
-    {
-        send_config_accept(config_chain.back());
-    }
-
-    // Propose all the new configurations
-    for (size_t i = 0; i < config_chain.size(); ++i)
-    {
-        if (latest_version < config_chain[i].version())
-        {
-            propose_config(config_chain[i]);
-        }
     }
 }
 
 void
-replicant_daemon :: process_config_accept(const po6::net::location& from,
-                                          std::auto_ptr<e::buffer> msg,
-                                          e::buffer::unpacker up)
-{
-    configuration accepted;
-    up = up >> accepted;
-    CHECK_UNPACK(CONFIG_ACCEPT, up);
-
-    if (accepted.version() >= m_confman.get_stable().version() &&
-        !m_confman.manages(accepted))
-    {
-        // This should never happen, so it's an error
-        LOG(ERROR) << "dropping \"ACCEPT\" message for a config we haven't seen";
-        return;
-    }
-
-    if (accepted.next(m_us).sender() != from)
-    {
-        LOG(INFO) << "dropping \"ACCEPT\" message because the sender doesn't match the next node";
-        return;
-    }
-
-    accept_config(accepted);
-    po6::net::location prev(accepted.prev(m_us).receiver());
-
-    if (prev != po6::net::location())
-    {
-        if (!send(prev, msg))
-        {
-            LOG(WARNING) << "Could not send \"ACCEPT\" message";
-        }
-    }
-}
-
-void
-replicant_daemon :: process_config_reject(const po6::net::location& from,
+replicant_daemon :: process_config_accept(const replicant::connection& conn,
                                           std::auto_ptr<e::buffer>,
                                           e::buffer::unpacker up)
 {
-    std::vector<configuration> rejected;
-    up = up >> rejected;
-    CHECK_UNPACK(CONFIG_REJECT, up);
+    uint64_t proposal_id;
+    uint64_t proposal_time;
+    chain_node sender;
+    up = up >> proposal_id >> proposal_time >> sender;
+    CHECK_UNPACK(CONFIG_ACCEPT, up);
 
-    if (rejected.empty())
+    if (!conn.matches(sender))
     {
-        // This means we sent something that had all valid configs, but they
-        // were out-of-order or some such nonesense.  Only with a bug present
-        // would this ever happen.
-        LOG(ERROR) << "dropping \"REJECT\" message with no configs";
+        LOG(ERROR) << "dropping \"CONFIG_ACCEPT\" message because the tokens "
+                   << "don't match (file a bug)";
         return;
     }
 
-    for (size_t i = 0; i < rejected.size(); ++i)
+    if (!m_fs.is_proposed_configuration(proposal_id, proposal_time))
     {
-        if (rejected[i].next(m_us).sender() == from &&
-            m_confman.manages(rejected[i]))
-        {
-            m_confman.reject(rejected[i].version());
-            send_config_reject(rejected[i]);
-        }
+        // This should never happen, so it's an error
+        LOG(ERROR) << "dropping \"CONFIG_ACCEPT\" message for proposal we haven't seen";
+        return;
+    }
+
+    if (m_fs.is_accepted_configuration(proposal_id, proposal_time))
+    {
+        // This is a duplicate accept, so we can drop it
+        return;
+    }
+
+    if (m_fs.is_rejected_configuration(proposal_id, proposal_time))
+    {
+        // This should never happen, so it's an error
+        LOG(ERROR) << "dropping \"CONFIG_ACCEPT\" message for proposal we rejected";
+        return;
+    }
+
+    configuration new_config;
+
+    if (!m_config_manager.get_proposal(proposal_id, proposal_time, &new_config))
+    {
+        LOG(ERROR) << "could not get proposal despite knowing it was proposed (file a bug)";
+        return;
+    }
+
+    if (!new_config.has_next(m_us) || new_config.next(m_us) != sender)
+    {
+        LOG(ERROR) << "dropping \"CONFIG_ACCEPT\" message that comes from the wrong place";
+        return;
+    }
+
+    LOG(INFO) << "accepting proposal " << proposal_id << ":" << proposal_time;
+    m_fs.accept_configuration(proposal_id, proposal_time);
+    accept_config(new_config);
+
+    if (new_config.has_prev(m_us))
+    {
+        SEND_CONFIG_RESP(new_config.prev(m_us), ACCEPT, proposal_id, proposal_time, m_us);
     }
 }
 
 void
+replicant_daemon :: process_config_reject(const replicant::connection& conn,
+                                          std::auto_ptr<e::buffer>,
+                                          e::buffer::unpacker up)
+{
+    uint64_t proposal_id;
+    uint64_t proposal_time;
+    chain_node sender;
+    up = up >> proposal_id >> proposal_time >> sender;
+    CHECK_UNPACK(CONFIG_REJECT, up);
+
+    if (!conn.matches(sender))
+    {
+        LOG(ERROR) << "dropping \"CONFIG_REJECT\" message because the tokens "
+                   << "don't match (file a bug)";
+        return;
+    }
+
+    if (!m_fs.is_proposed_configuration(proposal_id, proposal_time))
+    {
+        // This should never happen, so it's an error
+        LOG(ERROR) << "dropping \"CONFIG_REJECT\" message for proposal we haven't seen";
+        return;
+    }
+
+    if (m_fs.is_accepted_configuration(proposal_id, proposal_time))
+    {
+        // This should never happen, so it's an error
+        LOG(ERROR) << "dropping \"CONFIG_REJECT\" message for proposal we accepted";
+        return;
+    }
+
+    if (m_fs.is_rejected_configuration(proposal_id, proposal_time))
+    {
+        // This is a duplicate accept, so we can drop it
+        return;
+    }
+
+    configuration new_config;
+
+    if (!m_config_manager.get_proposal(proposal_id, proposal_time, &new_config))
+    {
+        LOG(ERROR) << "could not get proposal despite knowing it was proposed (file a bug)";
+        return;
+    }
+
+    if (!new_config.has_next(m_us) || new_config.next(m_us) != sender)
+    {
+        LOG(ERROR) << "dropping \"CONFIG_REJECT\" message that comes from the wrong place";
+        return;
+    }
+
+    LOG(INFO) << "rejecting proposal " << proposal_id << ":" << proposal_time;
+    m_fs.reject_configuration(proposal_id, proposal_time);
+    m_config_manager.reject(proposal_id, proposal_time);
+
+    if (new_config.has_prev(m_us))
+    {
+        SEND_CONFIG_RESP(new_config.prev(m_us), REJECT, proposal_id, proposal_time, m_us);
+    }
+}
+
+// caller must enforce quorum and chaining invariants
+void
 replicant_daemon :: propose_config(const configuration& config)
 {
-    if (!config.validate())
-    {
-        LOG(FATAL) << "proposed configuration is invalid; file a bug";
-        return;
-    }
+    assert(config.validate());
+    uint64_t proposal_id = 0xdeadbeefcafebabeULL;
+    uint64_t proposal_time = e::time();
+    generate_token(&proposal_id);
+    std::vector<configuration> config_chain;
+    m_config_manager.get_config_chain(&config_chain);
+    config_chain.push_back(config);
 
-    if (!m_confman.quorum_for_all(config))
-    {
-        LOG(WARNING) << "cannot propose new config because it does not contain"
-                     << " a quorum of proposed configurations";
-        return;
-    }
+    configuration* configs = &config_chain.front();
+    size_t configs_sz = config_chain.size();
+    assert(configs_sz > 1);
+    assert(configs[configs_sz - 1] == config);
+    assert(configs[configs_sz - 1].head() == m_us);
+    m_fs.propose_configuration(proposal_id, proposal_time, configs, configs_sz);
+    m_config_manager.merge(proposal_id, proposal_time, configs, configs_sz);
+    LOG(INFO) << "proposing " << proposal_id << ":" << proposal_time << " " << config;
 
-    LOG(INFO) << "proposing new configuration " << config.version();
-    m_confman.add_proposed(config);
-
-    if (config.config_tail() == m_us)
+    if (configs[configs_sz - 1].config_tail() == m_us)
     {
-        accept_config(config);
-        send_config_accept(config);
+        m_fs.accept_configuration(proposal_id, proposal_time);
+        accept_config(configs[configs_sz - 1]);
     }
     else
     {
         size_t sz = BUSYBEE_HEADER_SIZE
                   + pack_size(REPLNET_CONFIG_PROPOSE)
-                  + pack_size(m_confman);
+                  + 2 * sizeof(uint64_t)
+                  + pack_size(m_us)
+                  + pack_size(config_chain);
         std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
-        msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_CONFIG_PROPOSE << m_confman;
-        send(config.next(m_us).receiver(), msg);
+        msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_CONFIG_PROPOSE
+                                          << proposal_id << proposal_time
+                                          << m_us << config_chain;
+        send(config_chain.back().next(m_us), msg);
     }
 }
 
 void
 replicant_daemon :: accept_config(const configuration& new_config)
 {
-    assert(m_confman.manages(new_config));
-    configuration old_config(m_confman.get_stable());
-    LOG(INFO) << "accepting new configuration " << new_config.version()
-              << " which replaces configuration " << old_config.version();
-    m_confman.adopt(new_config.version());
-    trip_periodic(0, &replicant_daemon::periodic_become_spare);
-    accept_config_inform_spares(old_config, new_config);
-    accept_config_inform_clients(old_config, new_config);
-    accept_config_reset_healing(old_config, new_config);
-    // XXX reset last_seen for all clients
+    LOG(INFO) << "accepted new configuration " << new_config;
+    trip_periodic(0, &replicant_daemon::periodic_join_cluster);
+    trip_periodic(0, &replicant_daemon::periodic_maintain_cluster);
+    trip_periodic(0, &replicant_daemon::periodic_describe_cluster);
+    configuration old_config(m_config_manager.stable());
+    m_config_manager.advance(new_config);
+    accept_config_inform_spares(old_config);
+    accept_config_inform_clients(old_config);
+    accept_config_reset_healing(old_config);
+    std::vector<chain_node> nodes;
+    m_config_manager.get_all_nodes(&nodes);
+    m_failure_manager.reset(nodes);
 }
 
 void
-replicant_daemon :: accept_config_inform_spares(const configuration&,
-                                                const configuration& new_config)
+replicant_daemon :: accept_config_inform_spares(const configuration& /*old_config*/)
 {
+    const configuration& new_config(m_config_manager.stable());
+
     for (const chain_node* spare = new_config.spares_begin();
             spare != new_config.spares_end(); ++spare)
     {
@@ -853,734 +880,561 @@ replicant_daemon :: accept_config_inform_spares(const configuration&,
                   + pack_size(new_config);
         std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
         msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_INFORM << new_config;
-        send(spare->receiver(), msg); // ignore return
+        send(*spare, msg);
     }
 }
 
 void
-replicant_daemon :: accept_config_inform_clients(const configuration&,
-                                                 const configuration& new_config)
+replicant_daemon :: periodic_join_cluster(uint64_t now)
 {
-    std::vector<po6::net::location> clients;
-    m_clients.get(&clients);
+    if (m_config_manager.in_any_cluster(m_us))
+    {
+        return;
+    }
+
+    trip_periodic(now + m_s.JOIN_INTERVAL, &replicant_daemon::periodic_join_cluster);
+
+    for (const chain_node* n = m_config_manager.stable().members_begin();
+            n != m_config_manager.stable().members_end(); ++n)
+    {
+        size_t sz = BUSYBEE_HEADER_SIZE
+                  + pack_size(REPLNET_JOIN)
+                  + pack_size(m_us);
+        std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
+        msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_JOIN << m_us;
+
+        if (send(*n, msg))
+        {
+            return;
+        };
+    }
+
+    LOG(WARNING) << "having a little trouble joining the cluster; it seems no one wants to talk to us";
+}
+
+void
+replicant_daemon :: periodic_maintain_cluster(uint64_t now)
+{
+    trip_periodic(now + m_s.MAINTAIN_INTERVAL, &replicant_daemon::periodic_maintain_cluster);
+    // desired fault tolerance level
+    uint64_t f_d = m_s.FAULT_TOLERANCE;
+    // current fault tolerance level
+    uint64_t f_c = m_config_manager.latest().fault_tolerance();
+
+    while (f_c < f_d &&
+           m_config_manager.latest().head() == m_us &&
+           m_config_manager.latest().may_promote_spare())
+    {
+        configuration new_config(m_config_manager.latest());
+        LOG(INFO) << "promoting spare " << *new_config.spares_begin() << " to restore fault tolerance";
+        new_config.promote_spare(*new_config.spares_begin());
+        propose_config(new_config);
+        f_c = m_config_manager.latest().fault_tolerance();
+    }
+
+    if (m_config_manager.stable().version() == m_config_manager.latest().version())
+    {
+        while (m_config_manager.latest().head() == m_us &&
+               m_config_manager.latest().may_promote_standby())
+        {
+            configuration new_config(m_config_manager.latest());
+            LOG(INFO) << "promoting standby " << *new_config.standbys_begin() << " to restore fault tolerance";
+            new_config.promote_standby();
+            propose_config(new_config);
+            f_c = m_config_manager.latest().fault_tolerance();
+        }
+    }
+}
+
+void
+replicant_daemon :: periodic_describe_cluster(uint64_t now)
+{
+    trip_periodic(now + m_s.REPORT_INTERVAL, &replicant_daemon::periodic_describe_cluster);
+    LOG(INFO) << "the latest proposed configuration is " << m_config_manager.latest();
+    uint64_t f_d = m_s.FAULT_TOLERANCE;
+    uint64_t f_c = m_config_manager.latest().fault_tolerance();
+
+    if (f_c < f_d)
+    {
+        LOG(WARNING) << "the most recently proposed configuration can tolerate at most "
+                     << f_c << " failures which is less than the " << f_d
+                     << " failures the cluster is expected to tolerate; "
+                     << "bring " << m_config_manager.latest().servers_needed_for(f_d)
+                     << " more servers online to restore "
+                     << f_d << "-fault tolerance";
+    }
+    else
+    {
+        LOG(INFO) << "the most recently proposed configuration can tolerate the expected " << f_d << " failures";
+    }
+}
+
+void
+replicant_daemon :: process_client_register(const replicant::connection& conn,
+                                            std::auto_ptr<e::buffer>,
+                                            e::buffer::unpacker up)
+{
+    uint64_t client;
+    up = up >> client;
+    CHECK_UNPACK(CLIENT_REGISTER, up);
+    bool success = true;
+
+    if (conn.is_cluster_member)
+    {
+        LOG(WARNING) << "rejecting registration for client that comes from a cluster member";
+        success = false;
+    }
+
+    if (m_fs.is_client(client))
+    {
+        LOG(WARNING) << "rejecting registration for client that comes from a dead client";
+        success = false;
+    }
+
+    if (conn.token != client)
+    {
+        LOG(WARNING) << "rejecting registration for client (" << client
+                     << ") that does not match its token (" << conn.token << ")";
+        success = false;
+    }
+
+    if (m_config_manager.stable().head() != m_us)
+    {
+        LOG(WARNING) << "rejecting registration for client because we are not the head";
+        success = false;
+    }
+
+    if (!success)
+    {
+        replicant::response_returncode rc = replicant::RESPONSE_REGISTRATION_FAIL;
+        size_t sz = BUSYBEE_HEADER_SIZE
+                  + pack_size(REPLNET_COMMAND_RESPONSE)
+                  + sizeof(uint64_t)
+                  + pack_size(rc);
+        std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
+        msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_COMMAND_RESPONSE << uint64_t(0) << rc;
+        send(conn, msg);
+        return;
+    }
+
+    uint64_t slot = m_fs.next_slot_to_issue();
+    issue_command(slot, OBJECT_CLI_REG, client, 0, e::slice("", 0));
+}
+
+void
+replicant_daemon :: process_client_disconnect(const replicant::connection& conn,
+                                              std::auto_ptr<e::buffer>,
+                                              e::buffer::unpacker up)
+{
+    uint64_t nonce;
+    up = up >> nonce;
+    CHECK_UNPACK(CLIENT_REGISTER, up);
+
+    if (!conn.is_client)
+    {
+        LOG(WARNING) << "rejecting \"CLIENT_DISCONNECT\" that doesn't come from a client";
+        return;
+    }
+
+    if (m_config_manager.stable().head() != m_us)
+    {
+        LOG(WARNING) << "rejecting \"CLIENT_DISCONNECT\" because we are not the head";
+        return;
+    }
+
+    size_t sz = BUSYBEE_HEADER_SIZE
+              + pack_size(REPLNET_CLIENT_DISCONNECT);
+    std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
+    msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_CLIENT_DISCONNECT;
+    uint64_t slot = m_fs.next_slot_to_issue();
+    issue_command(slot, OBJECT_CLI_DIE, conn.token, nonce, e::slice("", 0));
+}
+
+void
+replicant_daemon :: accept_config_inform_clients(const configuration& /*old_config*/)
+{
+    const configuration& new_config(m_config_manager.stable());
+    std::vector<uint64_t> clients;
+    m_fs.get_all_clients(&clients);
 
     for (size_t i = 0; i < clients.size(); ++i)
     {
         size_t sz = BUSYBEE_HEADER_SIZE
                   + pack_size(REPLNET_INFORM)
-                  + pack_size(m_confman.get_stable());
+                  + pack_size(m_config_manager.stable());
         std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
         msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_INFORM << new_config;
-        send(clients[i], msg); // ignore return
+        send(clients[i], msg);
     }
 }
 
 void
-replicant_daemon :: send_config_accept(const configuration& config)
-{
-    po6::net::location prev(config.prev(m_us).receiver());
-
-    if (prev != po6::net::location())
-    {
-        size_t sz = BUSYBEE_HEADER_SIZE
-                  + pack_size(REPLNET_CONFIG_ACCEPT)
-                  + pack_size(config);
-        std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
-        msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_CONFIG_ACCEPT << config;
-        send(prev, msg);
-    }
-}
-
-void
-replicant_daemon :: send_config_reject(const configuration& config)
-{
-    po6::net::location prev(config.prev(m_us).receiver());
-
-    if (prev != po6::net::location())
-    {
-        size_t sz = BUSYBEE_HEADER_SIZE
-                  + pack_size(REPLNET_CONFIG_REJECT)
-                  + pack_size(config);
-        std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
-        msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_CONFIG_REJECT << config;
-        send(prev, msg);
-    }
-}
-
-void
-replicant_daemon :: periodic_become_spare(uint64_t now)
-{
-    const configuration& stable(m_confman.get_stable());
-
-    if (stable.is_member(m_us))
-    {
-        return;
-    }
-
-    if (stable.is_standby(m_us))
-    {
-        trip_periodic(0, &replicant_daemon::periodic_become_chain_member);
-        return;
-    }
-
-    if (stable.is_spare(m_us))
-    {
-        trip_periodic(0, &replicant_daemon::periodic_become_standby);
-        return;
-    }
-
-    if (m_confman.unconfigured())
-    {
-        return;
-    }
-
-    trip_periodic(now + m_s.BECOME_SPARE_INTERVAL, &replicant_daemon::periodic_become_spare);
-    po6::net::location loc(stable.head().receiver());
-    size_t sz = BUSYBEE_HEADER_SIZE
-              + pack_size(REPLNET_BECOME_SPARE)
-              + pack_size(m_us);
-    std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
-    msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_BECOME_SPARE << m_us;
-    send(loc, msg);
-    LOG(INFO) << "asking " << loc << " to make us a spare in the existing chain";
-}
-
-void
-replicant_daemon :: periodic_become_standby(uint64_t now)
-{
-    const configuration& stable(m_confman.get_stable());
-
-    if (stable.is_member(m_us))
-    {
-        return;
-    }
-
-    if (stable.is_standby(m_us))
-    {
-        trip_periodic(0, &replicant_daemon::periodic_become_chain_member);
-        return;
-    }
-
-    if (!stable.is_spare(m_us))
-    {
-        trip_periodic(0, &replicant_daemon::periodic_become_spare);
-        return;
-    }
-
-    trip_periodic(now + m_s.BECOME_STANDBY_INTERVAL, &replicant_daemon::periodic_become_standby);
-    po6::net::location loc(stable.head().receiver());
-    size_t sz = BUSYBEE_HEADER_SIZE
-              + pack_size(REPLNET_BECOME_STANDBY)
-              + pack_size(m_us);
-    std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
-    msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_BECOME_STANDBY << m_us;
-    send(loc, msg);
-    LOG(INFO) << "asking " << loc << " to make us a standby in the existing chain";
-}
-
-void
-replicant_daemon :: periodic_become_chain_member(uint64_t now)
-{
-    const configuration& stable(m_confman.get_stable());
-
-    if (stable.is_member(m_us))
-    {
-        return;
-    }
-
-    if (!stable.is_standby(m_us))
-    {
-        trip_periodic(now, &replicant_daemon::periodic_become_standby);
-        return;
-    }
-
-    if (*stable.standbys_begin() != m_us)
-    {
-        trip_periodic(now + m_s.BECOME_MEMBER_INTERVAL, &replicant_daemon::periodic_become_chain_member);
-        return;
-    }
-
-    if (!m_heal_prev)
-    {
-        trip_periodic(now + m_s.BECOME_MEMBER_INTERVAL, &replicant_daemon::periodic_become_chain_member);
-        return;
-    }
-
-    trip_periodic(now + m_s.BECOME_MEMBER_INTERVAL, &replicant_daemon::periodic_become_chain_member);
-    po6::net::location loc(stable.head().receiver());
-    size_t sz = BUSYBEE_HEADER_SIZE
-              + pack_size(REPLNET_BECOME_MEMBER)
-              + pack_size(m_us);
-    std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
-    msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_BECOME_MEMBER << m_us;
-    send(loc, msg);
-    LOG(INFO) << "asking " << loc << " to make us a member of the existing chain";
-}
-
-void
-replicant_daemon :: process_command_submit(const po6::net::location& from,
+replicant_daemon :: process_command_submit(const replicant::connection& conn,
                                            std::auto_ptr<e::buffer> msg,
                                            e::buffer::unpacker up)
 {
-    // Here we play a dirty trick.  Because all of these variables are necessary
-    // for when a command propagates, we force the user to send all of them so
-    // that when we forward message, we do no allocation and almost 0 copying.
-    //
-    // "garbage" denotes the lowest nonce still in use by the client.  All
-    // others less than this may be garbage collected.  When the message is
-    // sent, the "garbage" value becomes the "slot" value.
-    uint64_t client = 0;
-    uint64_t nonce = 0;
-    uint64_t garbage = 0;
-    uint64_t object = 0;
-    up = up >> client >> nonce >> garbage >> object;
+    uint64_t object;
+    uint64_t client;
+    uint64_t nonce;
+    up = up >> object >> client >> nonce;
     CHECK_UNPACK(COMMAND_SUBMIT, up);
+    e::slice data = up.as_slice();
 
-    const configuration& config(m_confman.get_stable());
-    client_manager::client_details* client_info = m_clients.get(client);
-
-    // If this is not a registration request and the client doesn't match the
-    // one who identified with us
-    if (object != OBJECT_CLIENTS && client_info == NULL)
+    // Check for special objects that a client tries to affect directly
+    if (object != OBJECT_OBJ_NEW && object != OBJECT_OBJ_DEL &&
+        IS_SPECIAL_OBJECT(object) && !conn.is_cluster_member)
     {
-        LOG(INFO) << "dropping \"COMMAND_SUBMIT\" from unknown client";
+        LOG(INFO) << "dropping \"COMMAND_SUBMIT\" for special object that "
+                  << "was not sent by a cluster member";
         return;
     }
 
-    if (object != OBJECT_CLIENTS &&
-        client_info->location() != from &&
-        !config.in_chain_sender(from))
+    if (!conn.is_cluster_member && !conn.is_client)
     {
-        LOG(INFO) << "dropping \"COMMAND_SUBMIT\" from unknown location for a known client";
+        LOG(INFO) << "dropping \"COMMAND_SUBMIT\" from " << conn.token
+                  << " because it is not a client or cluster member";
         return;
     }
 
-    // If we are not the head, bounce the message
-    if (object != OBJECT_CLIENTS && config.head() != m_us)
+    if (conn.is_client && conn.token != client)
     {
-        send(config.head().receiver(), msg);
-        return;
-    }
-    else if (config.head() != m_us)
-    {
-        LOG(INFO) << "dropping \"COMMAND_SUBMIT\" because we'd bounce a client registration";
+        LOG(INFO) << "dropping \"COMMAND_SUBMIT\" from " << conn.token
+                  << " because it uses the wrong token";
         return;
     }
 
-    if (object == OBJECT_CLIENTS)
+    uint64_t slot = 0;
+
+    if (m_fs.get_slot(client, nonce, &slot))
     {
-        if (client_info != NULL || client == 0)
+        assert(slot > 0);
+        replicant::response_returncode rc;
+        std::string backing;
+
+        if (m_fs.get_exec(slot, &rc, &data, &backing))
         {
-            // immediately indicate failure
             size_t sz = BUSYBEE_HEADER_SIZE
                       + pack_size(REPLNET_COMMAND_RESPONSE)
-                      + sizeof(uint8_t);
-            std::auto_ptr<e::buffer> response(e::buffer::create(sz));
-            response->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_COMMAND_RESPONSE << uint8_t(0);
-            send(from, response);
-            return;
+                      + sizeof(uint64_t)
+                      + pack_size(rc)
+                      + data.size();
+            msg.reset(e::buffer::create(sz));
+            e::buffer::packer pa = msg->pack_at(BUSYBEE_HEADER_SIZE);
+            pa = pa << REPLNET_COMMAND_RESPONSE << nonce << rc;
+            pa = pa.copy(data);
+            send(client, msg);
         }
-        else
-        {
-            client_info = m_clients.create(client);
-            client_info->set_location(from);
-        }
+        // else: drop it, it's proposed, but not executed
+
+        return;
     }
-    else
+
+    // If we are not the head
+    if (m_config_manager.stable().head() != m_us)
     {
-        assert(client_info != NULL);
-
-        if (nonce < client_info->lower_bound_nonce())
-        {
-            LOG(INFO) << "dropping \"COMMAND_SUBMIT\" with nonce less than the client's lower bound";
-            return;
-        }
-
-        uint64_t slot = client_info->slot_for(nonce);
-
-        if (slot > 0 && m_commands.is_acknowledged(slot))
-        {
-            // resend the response
-            e::intrusive_ptr<command> cmd = m_commands.lookup_acknowledged(slot);
-            assert(cmd);
-            send_command_response(cmd);
-            return;
-        }
-        else if (slot > 0)
-        {
-            // drop it, it's proposed
-            return;
-        }
-
-        if (nonce < client_info->upper_bound_nonce())
-        {
-            size_t sz = BUSYBEE_HEADER_SIZE
-                      + pack_size(REPLNET_COMMAND_RESEND)
-                      + 2 * sizeof(uint64_t);
-            std::auto_ptr<e::buffer> response(e::buffer::create(sz));
-            response->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_COMMAND_RESEND
-                                                   << client << nonce;
-            send(client_info->location(), response);
-            return;
-        }
+        // bounce the message
+        send(m_config_manager.stable().head(), msg);
+        return;
     }
 
-    client_info->set_lower_bound(garbage);
-    uint64_t slot = m_commands.upper_bound_proposed();
-    msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_COMMAND_ISSUE
-                                      << client << nonce << slot << object;
-
-#ifdef REPL_LOG_COMMANDS
-    LOG(INFO) << "SUBMIT " << slot;
-#endif
-
-    issue_command(po6::net::location(), client, nonce, slot, object, msg);
+    slot = m_fs.next_slot_to_issue();
+    issue_command(slot, object, client, nonce, data);
 }
 
 void
-replicant_daemon :: process_command_issue(const po6::net::location& from,
-                                          std::auto_ptr<e::buffer> msg,
+replicant_daemon :: process_command_issue(const replicant::connection& conn,
+                                          std::auto_ptr<e::buffer>,
                                           e::buffer::unpacker up)
 {
-    uint64_t client = 0;
-    uint64_t nonce = 0;
     uint64_t slot = 0;
     uint64_t object = 0;
-    up = up >> client >> nonce >> slot >> object;
+    uint64_t client = 0;
+    uint64_t nonce = 0;
+    up = up >> slot >> object >> client >> nonce;
     CHECK_UNPACK(COMMAND_ISSUE, up);
+    e::slice data = up.as_slice();
 
-    if (m_confman.get_stable().prev(m_us).sender() != from)
+    if (!conn.is_prev)
     {
         LOG(INFO) << "dropping \"COMMAND_ISSUE\" which didn't come from the right host";
         return;
     }
 
-    if (slot < m_commands.upper_bound_proposed())
+    if (m_fs.is_acknowledged_slot(slot))
     {
-        LOG(ERROR) << "dropping \"COMMAND_ISSUE\" which violates monotonicity (proposed="
-                   << slot << ", expected=" << m_commands.upper_bound_proposed() << ")";
+        size_t sz = BUSYBEE_HEADER_SIZE
+                  + pack_size(REPLNET_COMMAND_ACK)
+                  + sizeof(uint64_t);
+        std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
+        msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_COMMAND_ACK << slot;
+        send(conn, msg);
         return;
     }
 
-#ifdef REPL_LOG_COMMANDS
-    LOG(INFO) << "PROPOSED " << slot;
-#endif
+    if (m_fs.is_issued_slot(slot))
+    {
+        // just drop it, we're waiting for an ACK ourselves
+        return;
+    }
 
-    issue_command(from, client, nonce, slot, object, msg);
+    issue_command(slot, object, client, nonce, data);
 }
 
 void
-replicant_daemon :: process_command_ack(const po6::net::location& from,
+replicant_daemon :: process_command_ack(const replicant::connection& conn,
                                         std::auto_ptr<e::buffer>,
                                         e::buffer::unpacker up)
 {
     uint64_t slot = 0;
     up = up >> slot;
     CHECK_UNPACK(COMMAND_ACK, up);
-    acknowledge_command(from, slot);
-}
 
-void
-replicant_daemon :: issue_command(const po6::net::location& from,
-                                  uint64_t client,
-                                  uint64_t nonce,
-                                  uint64_t slot,
-                                  uint64_t object,
-                                  std::auto_ptr<e::buffer> msg)
-{
-    if (m_commands.is_acknowledged(slot))
-    {
-        send_command_ack(slot, from);
-    }
-    else
-    {
-        e::intrusive_ptr<command> cmd = m_commands.lookup_proposed(slot);
-        bool preexisting = false;
-
-        if (cmd)
-        {
-            preexisting = true;
-        }
-        else
-        {
-            cmd = new command(client, nonce, slot, object, msg);
-        }
-
-        if (!preexisting)
-        {
-            m_commands.append(cmd);
-
-            if (client != 0)
-            {
-                // use "create" here because the client may not have identified
-                // yet
-                client_manager::client_details* client_info = m_clients.create(client);
-
-                if (client_info != NULL)
-                {
-                    client_info->set_slot(nonce, slot);
-                }
-            }
-
-            po6::net::location next(m_confman.get_stable().next(m_us).receiver());
-
-            if (next != po6::net::location())
-            {
-                if (m_heal_next.state >= heal_next::HEALTHY_SENT)
-                {
-                    std::auto_ptr<e::buffer> copy(cmd->msg()->copy());
-
-                    // If we fail to send, we need to fall back to healing the
-                    // chain.  This likely means "BUFFER_FULL".
-                    if (!send(next, copy))
-                    {
-                        LOG(INFO) << "normal chain operation failed; falling back to state transfer";
-                        m_heal_next.state = heal_next::HEALING;
-                        m_heal_next.acknowledged = m_commands.upper_bound_acknowledged();
-                        m_heal_next.proposed = cmd->slot();
-                        trip_periodic(0, &replicant_daemon::periodic_heal_next);
-                    }
-                }
-            }
-
-            if (m_confman.get_stable().command_tail() == m_us)
-            {
-                acknowledge_command(m_us.sender(), cmd->slot());
-            }
-
-            if (m_confman.get_stable().is_standby(m_us))
-            {
-                acknowledge_command(m_us.sender(), cmd->slot());
-            }
-        }
-    }
-}
-
-void
-replicant_daemon :: acknowledge_command(const po6::net::location& from, uint64_t slot)
-{
-
-    if (!(m_confman.get_stable().next(m_us).sender() == from) &&
-        !(m_confman.get_stable().command_tail() == m_us && from == m_us.sender()) &&
-        !(m_confman.get_stable().is_standby(m_us)))
+    if (!conn.is_next)
     {
         LOG(INFO) << "dropping \"COMMAND_ACK\" which didn't come from the right host";
         return;
     }
 
+    if (!m_fs.is_issued_slot(slot))
+    {
+        LOG(WARNING) << "dropping \"COMMAND_ACK\" for slot that was not issued";
+        return;
+    }
+
+    acknowledge_command(slot);
+}
+
+void
+replicant_daemon :: issue_command(uint64_t slot,
+                                  uint64_t object,
+                                  uint64_t client,
+                                  uint64_t nonce,
+                                  const e::slice& data)
+{
+    if (slot != m_fs.next_slot_to_issue())
+    {
+        LOG(WARNING) << "dropping command issue that violates monotonicity "
+                     << "slot=" << slot << " expected=" << m_fs.next_slot_to_issue();
+        return;
+    }
+
+#ifdef REPL_LOG_COMMANDS
+    LOG(INFO) << "ISSUE " << slot << " " << data.hex();
+#endif
+
+    m_fs.issue_slot(slot, object, client, nonce, data);
+
+    if (m_config_manager.stable().has_next(m_us))
+    {
+        if (m_heal_next.state >= heal_next::HEALTHY_SENT)
+        {
+            size_t sz = BUSYBEE_HEADER_SIZE
+                      + pack_size(REPLNET_COMMAND_ISSUE)
+                      + 4 * sizeof(uint64_t)
+                      + data.size();
+            std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
+            e::buffer::packer pa = msg->pack_at(BUSYBEE_HEADER_SIZE);
+            pa = pa << REPLNET_COMMAND_ISSUE
+                    << slot << object << client << nonce;
+            pa.copy(data);
+            send(m_config_manager.stable().next(m_us), msg);
+        }
+    }
+
+    if (m_config_manager.stable().command_tail() == m_us)
+    {
+        acknowledge_command(slot);
+    }
+}
+
+void
+replicant_daemon :: acknowledge_command(uint64_t slot)
+{
     if (m_heal_next.state != heal_next::HEALTHY)
     {
-        m_heal_next.acknowledged = slot;
+        m_heal_next.acknowledged = std::max(m_heal_next.acknowledged, slot + 1);
         transfer_more_state();
     }
 
-    if (m_commands.is_acknowledged(slot))
+    if (m_fs.is_acknowledged_slot(slot))
     {
         // eliminate the dupe silently
         return;
     }
 
-    if (m_commands.upper_bound_acknowledged() != slot)
+    if (slot != m_fs.next_slot_to_ack())
     {
-        LOG(ERROR) << "dropping \"COMMAND_ACK\" which violates monotonicity";
+        LOG(WARNING) << "dropping command ACK that violates monotonicity "
+                     << "slot=" << slot << " expected=" << m_fs.next_slot_to_issue();
         return;
     }
 
-    e::intrusive_ptr<command> cmd = m_commands.lookup_proposed(slot);
+    uint64_t object;
+    uint64_t client;
+    uint64_t nonce;
+    e::slice data;
+    std::string backing;
 
-    if (!cmd)
+    if (!m_fs.get_slot(slot, &object, &client, &nonce, &data, &backing))
     {
-        LOG(ERROR) << "dropping \"COMMAND_ACK\" for " << slot << " because we cannot find the command object";
+        LOG(ERROR) << "cannot ack slot " << slot << " because there are gaps in our history (file a bug)";
+        abort();
         return;
-    }
-
-    m_commands.acknowledge(slot);
-    apply_command(cmd);
-
-    if (m_confman.get_stable().head() != m_us)
-    {
-        send_command_ack(slot, m_confman.get_stable().prev(m_us).receiver());
     }
 
 #ifdef REPL_LOG_COMMANDS
     LOG(INFO) << "ACK " << slot;
 #endif
-}
 
-void
-replicant_daemon :: apply_command(e::intrusive_ptr<command> cmd)
-{
-    if (cmd->object() == OBJECT_CLIENTS)
+    m_fs.ack_slot(slot);
+
+    if (m_config_manager.stable().has_prev(m_us))
     {
-        apply_command_clients(cmd);
-        send_command_response(cmd);
+        size_t sz = BUSYBEE_HEADER_SIZE
+                  + pack_size(REPLNET_COMMAND_ACK)
+                  + sizeof(uint64_t);
+        std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
+        msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_COMMAND_ACK << slot;
+        send(m_config_manager.stable().prev(m_us), msg);
     }
-    else if (cmd->object() == OBJECT_DEPART)
+
+    if (object == OBJECT_CLI_REG || object == OBJECT_CLI_DIE)
     {
-        apply_command_depart(cmd);
-        send_command_response(cmd);
-    }
-    else if (cmd->object() == OBJECT_GARBAGE)
-    {
-        apply_command_garbage(cmd);
-        send_command_response(cmd);
-    }
-    else if (cmd->object() == OBJECT_CREATE)
-    {
-        apply_command_create(cmd);
-        send_command_response(cmd);
-    }
-    else if (cmd->object() == OBJECT_SNAP)
-    {
-        apply_command_snapshot(cmd);
-        send_command_response(cmd);
+        if (object == OBJECT_CLI_REG)
+        {
+            m_fs.reg_client(client);
+        }
+        else
+        {
+            m_fs.die_client(client);
+        }
+
+        size_t sz = BUSYBEE_HEADER_SIZE
+                  + pack_size(REPLNET_COMMAND_RESPONSE)
+                  + sizeof(uint64_t) + pack_size(replicant::RESPONSE_SUCCESS);
+        std::auto_ptr<e::buffer> response(e::buffer::create(sz));
+        response->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_COMMAND_RESPONSE << nonce << replicant::RESPONSE_SUCCESS;
+        send(client, response);
     }
     else
     {
-        m_objects.append_cmd(cmd);
+        m_object_manager.enqueue(slot, object, client, nonce, data, &backing);
     }
-
 }
 
 void
-replicant_daemon :: send_command_response(e::intrusive_ptr<command> cmd)
+replicant_daemon :: record_execution(uint64_t slot, uint64_t client, uint64_t nonce, replicant::response_returncode rc, const e::slice& data)
 {
-    assert(cmd->response());
+    size_t sz = BUSYBEE_HEADER_SIZE
+              + pack_size(REPLNET_COMMAND_RESPONSE)
+              + sizeof(uint64_t)
+              + pack_size(rc)
+              + data.size();
+    std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
+    e::buffer::packer pa = msg->pack_at(BUSYBEE_HEADER_SIZE);
+    pa = pa << REPLNET_COMMAND_RESPONSE << nonce << rc;
+    pa = pa.copy(data);
+    send(client, msg);
+    m_fs.exec_slot(slot, rc, data);
+}
 
-    if (m_confman.get_stable().head() != m_us)
+void
+replicant_daemon :: process_heal_req(const replicant::connection& conn,
+                                     std::auto_ptr<e::buffer>,
+                                     e::buffer::unpacker up)
+{
+    uint64_t version;
+    up = up >> version;
+    CHECK_UNPACK(HEAL_REQ, up);
+
+    if (m_config_manager.stable().version() > version)
     {
+        LOG(INFO) << "dropping \"HEAL_REQ\" for older version=" << version;
         return;
     }
 
-    client_manager::client_details* client_info = m_clients.get(cmd->client());
-    po6::net::location host;
-
-    if (client_info != NULL)
+    if (m_config_manager.stable().version() < version)
     {
-        host = client_info->location();
+        LOG(ERROR) << "dropping \"HEAL_REQ\" for newer version=" << version << " (file a bug)";
+        return;
     }
 
-    if (host != po6::net::location())
+    if (!m_config_manager.stable().has_prev(m_us) ||
+        m_config_manager.stable().prev(m_us).token != conn.token)
     {
-        std::auto_ptr<e::buffer> msg(cmd->response()->copy());
-        send(host, msg);
+        LOG(INFO) << "dropping \"HEAL_REQ\" that isn't from our predecessor";
+        return;
     }
+
+    uint64_t to_ack = m_fs.next_slot_to_ack();
+
+    size_t sz = BUSYBEE_HEADER_SIZE
+              + pack_size(REPLNET_HEAL_RESP)
+              + 2 * sizeof(uint64_t);
+    std::auto_ptr<e::buffer> resp(e::buffer::create(sz));
+    resp->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_HEAL_RESP << version << to_ack;
+    send(conn, resp);
 }
 
 void
-replicant_daemon :: send_command_ack(uint64_t slot, const po6::net::location& dst)
-{
-    size_t sz = BUSYBEE_HEADER_SIZE + sizeof(uint8_t) + sizeof(uint64_t);
-    std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
-    msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_COMMAND_ACK << slot;
-    send(dst, msg); // ignore return
-}
-
-void
-replicant_daemon :: process_req_state(const po6::net::location& from,
+replicant_daemon :: process_heal_resp(const replicant::connection& conn,
                                       std::auto_ptr<e::buffer>,
                                       e::buffer::unpacker up)
 {
     uint64_t version;
-    up = up >> version;
-    CHECK_UNPACK(REQ_STATE, up);
+    uint64_t to_ack;
+    up = up >> version >> to_ack;
+    CHECK_UNPACK(HEAL_RESP, up);
 
-    if (m_confman.get_stable().version() < version)
+    if (version != m_config_manager.stable().version())
     {
-        LOG(INFO) << "dropping \"REQ_STATE\" for older version";
-        return;
-    }
-
-    if (m_confman.get_stable().version() > version)
-    {
-        LOG(ERROR) << "dropping \"REQ_STATE\" for newer version (file a bug)";
-        return;
-    }
-
-    if (m_confman.get_stable().prev(m_us).sender() != from)
-    {
-        LOG(INFO) << "dropping \"REQ_STATE\" that isn't from our predecessor";
-        return;
-    }
-
-    uint64_t acknowledged = m_commands.upper_bound_acknowledged();
-    uint64_t proposed = m_commands.upper_bound_proposed();
-    size_t sz = BUSYBEE_HEADER_SIZE
-              + pack_size(REPLNET_RESP_STATE)
-              + 3 * sizeof(uint64_t);
-    std::auto_ptr<e::buffer> resp(e::buffer::create(sz));
-    resp->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_RESP_STATE
-                                       << acknowledged << proposed << version;
-
-    if (send(m_confman.get_stable().prev(m_us).receiver(), resp))
-    {
-        m_heal_prev = false;
-    }
-}
-
-void
-replicant_daemon :: process_resp_state(const po6::net::location& from,
-                                       std::auto_ptr<e::buffer>,
-                                       e::buffer::unpacker up)
-{
-    uint64_t acknowledged;
-    uint64_t proposed;
-    uint64_t version;
-    up = up >> acknowledged >> proposed >> version;
-    CHECK_UNPACK(RESP_STATE, up);
-
-    if (version != m_confman.get_stable().version())
-    {
-        LOG(INFO) << "dropping \"RESP_STATE\" for an old healing process";
+        LOG(INFO) << "dropping \"HEAL_RESP\" for an old healing process";
         return;
     }
 
     if (m_heal_next.state != heal_next::REQUEST_SENT)
     {
-        LOG(INFO) << "dropping \"RESP_STATE\" that we weren't expecting";
+        LOG(INFO) << "dropping \"HEAL_RESP\" that we weren't expecting";
         return;
     }
 
-    if (m_confman.get_stable().next(m_us).sender() != from)
+    if (!m_config_manager.stable().has_next(m_us) ||
+        m_config_manager.stable().next(m_us).token != conn.token)
     {
         LOG(INFO) << "dropping \"RESP_STATE\" that isn't from our successor";
         return;
     }
 
+    // Process all acks up to, but not including, next to_ack
+    while (m_fs.next_slot_to_ack() < to_ack)
+    {
+        acknowledge_command(m_fs.next_slot_to_ack());
+    }
+
     m_heal_next.state = heal_next::HEALING;
-    m_heal_next.acknowledged = std::max(acknowledged, m_commands.lower_bound_acknowledged());
-    m_heal_next.proposed = std::max(m_heal_next.acknowledged, proposed);
+    m_heal_next.acknowledged = to_ack;
+    m_heal_next.proposed = to_ack;
 
-    if (!m_snapshots.empty() && m_heal_next.proposed < m_snapshots.back().first)
-    {
-        m_heal_next.acknowledged = m_snapshots.back().first;
-        m_heal_next.proposed = m_snapshots.back().first;
-    }
-
-    // Process all acks up to, but not including, the one for acknowledged.
-    while (m_commands.upper_bound_acknowledged() < acknowledged)
-    {
-        acknowledge_command(from, m_commands.upper_bound_acknowledged());
-    }
-
-    LOG(INFO) << "initiating state transfer of slot "
-              << m_heal_next.acknowledged << " to slot " << m_commands.upper_bound_acknowledged();
+    LOG(INFO) << "initiating state transfer starting at slot " << to_ack;
     transfer_more_state();
 }
 
 void
-replicant_daemon :: process_snapshot(const po6::net::location&,
-                                     std::auto_ptr<e::buffer> msg,
-                                     e::buffer::unpacker up)
+replicant_daemon :: process_heal_done(const replicant::connection& conn,
+                                      std::auto_ptr<e::buffer> msg,
+                                      e::buffer::unpacker)
 {
-    uint64_t slot;
-    settings s;
-    std::vector<uint64_t> clients;
-    std::vector<std::pair<uint64_t, std::pair<e::slice, e::slice> > > objects;
-    up = up >> slot >> s >> clients >> objects;
-    CHECK_UNPACK(SNAPSHOT, up);
-    LOG(INFO) << "restoring from a snapshot of slot " << slot;
-
-    // Copy settings
-    m_s = s;
-
-    // Drop clients we don't care about
-    std::vector<uint64_t> all_clients;
-    m_clients.get(&all_clients);
-    std::sort(clients.begin(), clients.end());
-    std::sort(all_clients.begin(), all_clients.end());
-
-    for (size_t i = 0; i < all_clients.size(); ++i)
-    {
-        if (!std::binary_search(clients.begin(), clients.end(), all_clients[i]))
-        {
-            client_manager::client_details* client_info;
-            client_info = m_clients.get(all_clients[i]);
-
-            if (client_info->location() != po6::net::location())
-            {
-                m_busybee.drop(client_info->location());
-            }
-
-            m_clients.remove(all_clients[i]);
-        }
-    }
-
-    // Create the objects we need
-    for (size_t i = 0; i < objects.size(); ++i)
-    {
-        bool success = true;
-        uint64_t new_object(objects[i].first);
-        const e::slice& pathstr(objects[i].second.first);
-        const e::slice& snapshot(objects[i].second.second);
-
-        if (!m_objects.valid_path(pathstr))
-        {
-            success = false;
-            LOG(ERROR) << "cannot restore object because the path is invalid";
-        }
-
-        if (m_objects.exists(new_object))
-        {
-            success = false;
-            LOG(ERROR) << "cannot restore object because the object already exists";
-        }
-
-        if (success)
-        {
-            LOG(INFO) << "restoring object " << new_object << " from " << pathstr.data();
-
-            if (!m_objects.restore(new_object, pathstr, snapshot))
-            {
-                LOG(ERROR) << "could not restore object because the object itself rejected the snapshot";
-                LOG(ERROR) << "Here's a hexdump of the failed snapshot: " << snapshot.hex();
-                success = false;
-            }
-        }
-
-        if (!success)
-        {
-            LOG(ERROR) << "the above error may require manual repair; in the meantime, we will fail and try again";
-            // XXX fail ourselves
-        }
-    }
-
-    // Wipe out the command history.  It's obsoleted by the snapshot.
-    //m_commands = command_manager();
-
-    // Setup m_marked_for_gc
-    m_marked_for_gc = 0;
-
-    // Prepare snapshots
-    m_snapshots.clear();
-    std::tr1::shared_ptr<e::buffer> snap(msg.release());
-    m_snapshots.push_back(std::make_pair(slot, snap));
-}
-
-void
-replicant_daemon :: process_healed(const po6::net::location& from,
-                                   std::auto_ptr<e::buffer> msg,
-                                   e::buffer::unpacker)
-{
-    if (m_confman.get_stable().next(m_us).sender() == from &&
-        m_heal_next.state == heal_next::HEALTHY_SENT)
+    if (conn.is_next && m_heal_next.state == heal_next::HEALTHY_SENT)
     {
         // we can move m_heal_next from HEALTHY_SENT to HEALTHY
         m_heal_next.state = heal_next::HEALTHY;
         LOG(INFO) << "the connection with the next node is 100% healed";
     }
 
-    if (m_confman.get_stable().prev(m_us).sender() == from)
+    if (conn.is_prev)
     {
-        msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_HEALED;
-        send(m_confman.get_stable().prev(m_us).receiver(), msg);
-
-        if (!m_heal_prev)
-        {
-            trip_periodic(0, &replicant_daemon::periodic_become_chain_member);
-        }
-
-        m_heal_prev = true;
+        msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_HEAL_DONE;
+        send(conn, msg);
     }
 }
 
@@ -1588,35 +1442,38 @@ void
 replicant_daemon :: transfer_more_state()
 {
     while (m_heal_next.state < heal_next::HEALTHY_SENT &&
-           m_heal_next.proposed < m_commands.upper_bound_proposed() &&
+           m_heal_next.proposed < m_fs.next_slot_to_issue() &&
            m_heal_next.proposed - m_heal_next.acknowledged <= m_s.TRANSFER_WINDOW)
     {
-        e::intrusive_ptr<command> next_cmd;
-        next_cmd = m_commands.lookup(m_heal_next.proposed);
-        assert(next_cmd->slot() == m_heal_next.proposed);
+        uint64_t slot = m_heal_next.proposed;
+        uint64_t object;
+        uint64_t client;
+        uint64_t nonce;
+        e::slice data;
+        std::string backing;
 
-        if (!next_cmd)
+        if (!m_fs.get_slot(slot, &object, &client, &nonce, &data, &backing))
         {
-            LOG(ERROR) << "cannot transfer slot " << m_heal_next.proposed << " because we cannot find the command object";
-            ++m_heal_next.proposed;
-            continue;
+            LOG(ERROR) << "cannot transfer slot " << m_heal_next.proposed << " because there are gaps in our history (file a bug)";
+            abort();
         }
 
-        std::auto_ptr<e::buffer> copy(next_cmd->msg()->copy());
-        po6::net::location next(m_confman.get_stable().next(m_us).receiver());
+        size_t sz = BUSYBEE_HEADER_SIZE
+                  + pack_size(REPLNET_COMMAND_ISSUE)
+                  + 4 * sizeof(uint64_t)
+                  + data.size();
+        std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
+        e::buffer::packer pa = msg->pack_at(BUSYBEE_HEADER_SIZE);
+        pa = pa << REPLNET_COMMAND_ISSUE << slot << object << client << nonce;
+        pa.copy(data);
 
-        if (next_cmd->object() == OBJECT_SNAP)
+        if (!m_config_manager.stable().has_next(m_us))
         {
-            copy.reset(m_snapshots.back().second->copy());
+            LOG(ERROR) << "cannot heal because there is no next node";
+            abort();
         }
 
-        if (next == po6::net::location())
-        {
-            LOG(ERROR) << "performing transfer, but cannot lookup our next node";
-            break;
-        }
-
-        if (send(m_confman.get_stable().next(m_us).receiver(), copy))
+        if (send(m_config_manager.stable().next(m_us), msg))
         {
             ++m_heal_next.proposed;
         }
@@ -1626,15 +1483,15 @@ replicant_daemon :: transfer_more_state()
         }
     }
 
-    if (m_heal_next.proposed == m_commands.upper_bound_proposed() &&
-        m_heal_next.state < heal_next::HEALTHY_SENT)
+    if (m_heal_next.state < heal_next::HEALTHY_SENT &&
+        m_heal_next.proposed == m_fs.next_slot_to_issue())
     {
         size_t sz = BUSYBEE_HEADER_SIZE
-                  + pack_size(REPLNET_HEALED);
-        std::auto_ptr<e::buffer> response(e::buffer::create(sz));
-        response->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_HEALED;
+                  + pack_size(REPLNET_HEAL_DONE);
+        std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
+        msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_HEAL_DONE;
 
-        if (send(m_confman.get_stable().next(m_us).receiver(), response))
+        if (send(m_config_manager.stable().next(m_us), msg))
         {
             LOG(INFO) << "state transfer complete; falling back to normal chain operation";
             m_heal_next.state = heal_next::HEALTHY_SENT;
@@ -1643,68 +1500,39 @@ replicant_daemon :: transfer_more_state()
 }
 
 void
-replicant_daemon :: accept_config_reset_healing(const configuration&,
-                                                const configuration& new_config)
+replicant_daemon :: accept_config_reset_healing(const configuration& /*old_config*/)
 {
-    // If there's a node after us that we need to make up with
-    if (new_config.next(m_us) != chain_node())
+    const configuration& new_config(m_config_manager.stable());
+
+    if (new_config.has_next(m_us))
     {
         m_heal_next = heal_next();
         trip_periodic(0, &replicant_daemon::periodic_heal_next);
     }
     else
     {
+        m_heal_next = heal_next();
         m_heal_next.state = heal_next::HEALTHY;
     }
 
-    if (new_config.command_tail() == m_us)
+    if (new_config.config_tail() == m_us)
     {
-        while (m_commands.lower_bound_proposed() < m_commands.upper_bound_proposed())
+        while (m_fs.next_slot_to_ack() < m_fs.next_slot_to_issue())
         {
-            acknowledge_command(m_us.sender(), m_commands.lower_bound_proposed());
+            acknowledge_command(m_fs.next_slot_to_ack());
         }
-    }
-
-    // If there's a node before us that we need to make up with
-    if (new_config.prev(m_us) != chain_node())
-    {
-        m_heal_prev = false;
-    }
-    else
-    {
-        m_heal_prev = true;
-        trip_periodic(0, &replicant_daemon::periodic_become_chain_member);
     }
 
     if (!new_config.is_member(m_us))
     {
-        // XXX throw away all proposed commands
-    }
-}
-
-void
-replicant_daemon :: handle_disconnect_heal(const po6::net::location& host)
-{
-    const configuration& config = m_confman.get_stable();
-    chain_node n = config.next(m_us);
-
-    if (n.receiver() == host || n.sender() == host)
-    {
-        m_heal_next = heal_next();
-        trip_periodic(0, &replicant_daemon::periodic_heal_next);
-    }
-
-    chain_node p = config.prev(m_us);
-
-    if (p.receiver() == host || p.sender() == host)
-    {
-        m_heal_prev = false;
+        m_fs.clear_unacked_slots();
     }
 }
 
 void
 replicant_daemon :: periodic_heal_next(uint64_t now)
 {
+    // keep running this function until we are healed
     if (m_heal_next.state != heal_next::HEALTHY)
     {
         trip_periodic(now + m_s.HEAL_NEXT_INTERVAL, &replicant_daemon::periodic_heal_next);
@@ -1712,32 +1540,25 @@ replicant_daemon :: periodic_heal_next(uint64_t now)
 
     size_t sz;
     std::auto_ptr<e::buffer> msg;
-    po6::net::location next(m_confman.get_stable().next(m_us).receiver());
 
     switch (m_heal_next.state)
     {
         case heal_next::BROKEN:
-            if (next != po6::net::location())
-            {
-                sz = BUSYBEE_HEADER_SIZE
-                   + pack_size(REPLNET_REQ_STATE)
-                   + sizeof(uint64_t);
-                msg.reset(e::buffer::create(sz));
-                msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_REQ_STATE
-                                                  << m_confman.get_stable().version();
+            assert(m_config_manager.stable().has_next(m_us));
+            sz = BUSYBEE_HEADER_SIZE
+               + pack_size(REPLNET_HEAL_REQ)
+               + sizeof(uint64_t);
+            msg.reset(e::buffer::create(sz));
+            msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_HEAL_REQ
+                                              << m_config_manager.stable().version();
 
-                if (send(next, msg))
-                {
-                    m_heal_next.state = heal_next::REQUEST_SENT;
-                }
+            if (send(m_config_manager.stable().next(m_us), msg))
+            {
+                m_heal_next.state = heal_next::REQUEST_SENT;
             }
             break;
         case heal_next::REQUEST_SENT:
-            // do nothing, wait for other side
-            break;
         case heal_next::HEALING:
-            // do nothing, wait for other side
-            break;
         case heal_next::HEALTHY_SENT:
             // do nothing, wait for other side
             break;
@@ -1750,525 +1571,284 @@ replicant_daemon :: periodic_heal_next(uint64_t now)
 }
 
 void
-replicant_daemon :: process_identify(const po6::net::location& from,
-                                     std::auto_ptr<e::buffer> msg,
-                                     e::buffer::unpacker up)
+replicant_daemon :: handle_disruption_reset_healing(uint64_t token)
 {
-    uint64_t client;
-    up = up >> client;
-
-    if (up.error())
+    if (m_config_manager.stable().has_next(m_us))
     {
-        LOG(ERROR) << "received corrupt \"IDENTIFY\" message";
-        return;
-    }
+        chain_node n = m_config_manager.stable().next(m_us);
 
-    msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_IDENTIFIED << client;
-
-    if (send(from, msg))
-    {
-        client_manager::client_details* client_info = m_clients.create(client);
-        assert(client_info);
-        client_info->set_location(from);
+        if (token == n.token)
+        {
+            m_heal_next = heal_next();
+            trip_periodic(0, &replicant_daemon::periodic_heal_next);
+        }
     }
 }
 
 void
-replicant_daemon :: process_client_list(const po6::net::location&,
-                                        std::auto_ptr<e::buffer>,
-                                        e::buffer::unpacker up)
+replicant_daemon :: process_ping(const replicant::connection& conn,
+                                 std::auto_ptr<e::buffer> msg,
+                                 e::buffer::unpacker up)
 {
-    std::vector<uint64_t> clients;
-    up = up >> clients;
-    CHECK_UNPACK(CLIENT_LIST, up);
-    uint64_t now = e::time();
+    uint64_t seqno;
+    std::vector<std::pair<uint64_t, double> > suspicions;
+    up = up >> seqno >> suspicions;
+    CHECK_UNPACK(PING, up);
 
-    for (size_t i = 0; i < clients.size(); ++i)
+    m_failure_manager.record_suspicions(seqno, suspicions);
+
+    size_t sz = BUSYBEE_HEADER_SIZE
+              + pack_size(REPLNET_PONG);
+    msg.reset(e::buffer::create(sz));
+    msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_PONG;
+    send(conn, msg);
+}
+
+void
+replicant_daemon :: process_pong(const replicant::connection& conn,
+                                 std::auto_ptr<e::buffer>,
+                                 e::buffer::unpacker)
+{
+    m_failure_manager.heartbeat(conn.token, e::time());
+}
+
+void
+replicant_daemon :: periodic_exchange(uint64_t now)
+{
+    trip_periodic(now + m_s.PING_INTERVAL, &replicant_daemon::periodic_exchange);
+    std::vector<chain_node> nodes;
+    m_config_manager.get_all_nodes(&nodes);
+    std::vector<std::pair<uint64_t, double> > suspicions;
+    m_failure_manager.get_all_suspicions(now, &suspicions);
+
+#ifdef REPL_LOG_SUSPICIONS
+    for (size_t i = 0; i < suspicions.size(); ++i)
     {
-        client_manager::client_details* client_info;
-        client_info = m_clients.get(clients[i]);
+        LOG(INFO) << "suspicion of server " << suspicions[i].first << " is " << suspicions[i].second;
+    }
+#endif // REPL_LOG_SUSPICIONS
 
-        if (!client_info)
+    for (size_t i = 0; i < nodes.size(); ++i)
+    {
+        if (nodes[i] == m_us)
         {
             continue;
         }
 
-        client_info->set_last_seen(now);
-    }
-}
-
-void
-replicant_daemon :: handle_disconnect_client(const po6::net::location& host)
-{
-    m_clients.disassociate(host);
-}
-
-void
-replicant_daemon :: periodic_list_clients(uint64_t now)
-{
-    trip_periodic(now + m_s.CLIENT_LIST_INTERVAL, &replicant_daemon::periodic_list_clients);
-    std::vector<uint64_t> clients;
-    m_clients.get_live_clients(&clients);
-    size_t sz = BUSYBEE_HEADER_SIZE
-              + pack_size(REPLNET_CLIENT_LIST)
-              + sizeof(uint32_t) + clients.size() * sizeof(uint64_t);
-    std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
-    msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_CLIENT_LIST << clients;
-    m_busybee.send(m_confman.get_stable().head().receiver(), msg);
-}
-
-void
-replicant_daemon :: periodic_detach_clients(uint64_t now)
-{
-    // We intend to use the LIST_INTERVAL here because it's more frequent than
-    // the disconnect interval.  If CLI < CDI, then we'll take at most CLI + CDI
-    // to collect.  Otherwise it may take CDI * 2.  If that is a big value, this
-    // is undesirable.
-    trip_periodic(now + m_s.CLIENT_LIST_INTERVAL, &replicant_daemon::periodic_detach_clients);
-
-    if (m_confman.get_stable().head() != m_us)
-    {
-        return;
-    }
-
-    now -= m_s.CLIENT_DISCONNECT_INTERVAL;
-    std::vector<uint64_t> clients;
-    m_clients.get_old_clients(now, &clients);
-
-    for (size_t i = 0; i < clients.size(); ++i)
-    {
-        client_manager::client_details* client_info;
-        client_info = m_clients.get(clients[i]);
-        client_info->set_lower_bound(UINT64_MAX);
         size_t sz = BUSYBEE_HEADER_SIZE
-                  + pack_size(REPLNET_COMMAND_ISSUE)
-                  + 4 * sizeof(uint64_t);
+                  + pack_size(REPLNET_PING)
+                  + sizeof(uint64_t)
+                  + sizeof(uint32_t) + suspicions.size() * (sizeof(uint64_t) + sizeof(double));
         std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
-        uint64_t nonce = UINT64_MAX;
-        uint64_t slot = m_commands.upper_bound_proposed();
-        uint64_t object = OBJECT_DEPART;
-        msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_COMMAND_ISSUE
-                                          << clients[i]
-                                          << nonce << slot << object;
-
-#ifdef REPL_LOG_COMMANDS
-        LOG(INFO) << "DETACH CLIENT " << slot;
-#endif
-
-        issue_command(po6::net::location(), clients[i], nonce, slot, object, msg);
-    }
-}
-
-void
-replicant_daemon :: apply_command_clients(e::intrusive_ptr<command> cmd)
-{
-    size_t sz = BUSYBEE_HEADER_SIZE
-              + pack_size(REPLNET_COMMAND_RESPONSE)
-              + sizeof(uint8_t);
-    std::auto_ptr<e::buffer> response(e::buffer::create(sz));
-    response->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_COMMAND_RESPONSE << uint8_t(1);
-    cmd->set_response(response);
-}
-
-void
-replicant_daemon :: apply_command_depart(e::intrusive_ptr<command> cmd)
-{
-    client_manager::client_details* client_info = m_clients.get(cmd->client());
-
-    if (client_info && client_info->location() != po6::net::location())
-    {
-        m_busybee.drop(client_info->location());
+        msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_PING << m_ping_seqno << suspicions;
+        send(nodes[i], msg);
     }
 
-    m_clients.remove(cmd->client());
-
-    size_t sz = BUSYBEE_HEADER_SIZE
-              + pack_size(REPLNET_COMMAND_RESPONSE);
-    std::auto_ptr<e::buffer> response(e::buffer::create(sz));
-    response->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_COMMAND_RESPONSE;
-    cmd->set_response(response);
-}
-
-void
-replicant_daemon :: periodic_garbage_collect_commands_start(uint64_t now)
-{
-    trip_periodic(now + m_s.GARBAGE_COLLECT_INTERVAL, &replicant_daemon::periodic_garbage_collect_commands_start);
-
-    if (m_confman.get_stable().head() != m_us)
-    {
-        return;
-    }
-
-    if (m_commands.lower_bound_acknowledged() + m_s.GARBAGE_COLLECT_MIN_SLOTS >
-            m_commands.upper_bound_acknowledged())
-    {
-        return;
-    }
-
-    uint64_t garbage = m_clients.lowest_slot_in_use();
-    garbage = std::min(garbage, m_commands.upper_bound_acknowledged());
-
-    if (m_heal_next.state != heal_next::HEALTHY)
-    {
-        garbage = std::min(garbage, m_heal_next.acknowledged);
-    }
-
-    if (garbage > m_marked_for_gc)
-    {
-        if (m_s.GARBAGE_COLLECT_LOG_DETAILS)
-        {
-            LOG(INFO) << "asking to garbage collect up to " << garbage;
-        }
-
-        uint64_t zero = 0;
-        uint64_t slot = m_commands.upper_bound_proposed();
-        uint64_t object = OBJECT_SNAP;
-        size_t sz = BUSYBEE_HEADER_SIZE
-                  + pack_size(REPLNET_COMMAND_ISSUE)
-                  + 4 * sizeof(uint64_t);
-        std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
-        msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_COMMAND_ISSUE
-                                          << zero << zero << slot << object;
-#ifdef REPL_LOG_COMMANDS
-        LOG(INFO) << "SNAPSHOT " << slot;
-#endif
-        issue_command(po6::net::location(), 0, 0, slot, object, msg);
-
-        zero = 0;
-        slot = m_commands.upper_bound_proposed();
-        object = OBJECT_GARBAGE;
-        sz = BUSYBEE_HEADER_SIZE
-           + pack_size(REPLNET_COMMAND_ISSUE)
-           + 5 * sizeof(uint64_t);
-        msg.reset(e::buffer::create(sz));
-        msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_COMMAND_ISSUE
-                                          << zero << zero << slot << object << garbage;
-#ifdef REPL_LOG_COMMANDS
-        LOG(INFO) << "GARBAGE COLLECT " << slot;
-#endif
-        issue_command(po6::net::location(), 0, 0, slot, object, msg);
-    }
-    else if (m_s.GARBAGE_COLLECT_LOG_DETAILS)
-    {
-        LOG(INFO) << "garbage collection up to " << garbage << " is blocked";
-    }
-}
-
-void
-replicant_daemon :: periodic_garbage_collect_commands_collect(uint64_t now)
-{
-    // XXX revisit this logic
-    if (m_heal_next.state != heal_next::HEALTHY &&
-        m_marked_for_gc < m_heal_next.acknowledged &&
-        m_confman.get_stable().config_tail() != m_us)
-    {
-        trip_periodic(now + m_s.GARBAGE_COLLECT_INTERVAL, &replicant_daemon::periodic_garbage_collect_commands_collect);
-        return;
-    }
-
-    uint64_t garbage = 0;
-
-    for (snapshot_list::iterator it = m_snapshots.begin();
-            it != m_snapshots.end(); ++it)
-    {
-        if (it->first <= m_marked_for_gc)
-        {
-            garbage = it->first;
-        }
-    }
-
-    if (garbage == 0)
-    {
-        trip_periodic(now + m_s.GARBAGE_COLLECT_INTERVAL, &replicant_daemon::periodic_garbage_collect_commands_collect);
-        return;
-    }
-
-    assert(!m_snapshots.empty());
-
-    while (m_snapshots.front().first < garbage)
-    {
-        m_snapshots.pop_front();
-    }
-
-    assert(!m_snapshots.empty());
-
-    if (garbage != m_marked_for_gc)
-    {
-        trip_periodic(now + m_s.GARBAGE_COLLECT_INTERVAL, &replicant_daemon::periodic_garbage_collect_commands_collect);
-    }
-
-    if (m_s.GARBAGE_COLLECT_LOG_DETAILS)
-    {
-        LOG(INFO) << "garbage collecting everything up to slot " << garbage;
-    }
-
-    m_commands.garbage_collect(garbage);
-    m_clients.garbage_collect(garbage);
-}
-
-void
-replicant_daemon :: apply_command_garbage(e::intrusive_ptr<command> cmd)
-{
-    // Grab the upper bound for garbage collection
-    size_t sz = BUSYBEE_HEADER_SIZE
-              + pack_size(REPLNET_COMMAND_ISSUE)
-              + 4 * sizeof(uint64_t);
-    e::buffer::unpacker up = cmd->msg()->unpack_from(sz);
-    char buf[sizeof(uint64_t)];
-    memset(buf, 0, sizeof(uint64_t));
-    e::slice rem = up.as_slice();
-    memmove(buf, rem.data(), std::min(sizeof(uint64_t), rem.size()));
-    uint64_t garbage;
-    e::unpack64be(buf, &garbage);
-
-    // Get ready for garbage collection
-    m_marked_for_gc = std::max(garbage, m_marked_for_gc);
-    trip_periodic(0, &replicant_daemon::periodic_garbage_collect_commands_collect);
-
-    // Craft a response
-    sz = BUSYBEE_HEADER_SIZE
-       + pack_size(REPLNET_COMMAND_RESPONSE)
-       + sizeof(uint64_t);
-    std::auto_ptr<e::buffer> response(e::buffer::create(sz));
-    response->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_COMMAND_RESPONSE << garbage;
-    cmd->set_response(response);
-}
-
-void
-replicant_daemon :: apply_command_snapshot(e::intrusive_ptr<command> cmd)
-{
-    // Create the information for the snapshot
-    // Get a list of client tokens
-    std::vector<uint64_t> clients;
-    m_clients.get(&clients);
-    // Get snapshots of all objects
-    std::vector<std::pair<uint64_t, std::pair<e::slice, e::slice> > > objects;
-    object_manager::snapshot snapshot;
-    m_objects.take_snapshot(&snapshot, &objects);
-
-    // Construct a blob representing this snapshot
-    size_t sz = BUSYBEE_HEADER_SIZE
-              + pack_size(REPLNET_SNAPSHOT)
-              + sizeof(uint64_t)
-              + pack_size(m_s)
-              + sizeof(uint32_t) + clients.size() * sizeof(uint64_t)
-              + sizeof(uint32_t);
-
-    for (size_t i = 0; i < objects.size(); ++i)
-    {
-        sz += sizeof(uint64_t) + 2 * sizeof(uint32_t)
-            + objects[i].second.first.size()
-            + objects[i].second.second.size();
-    }
-
-    std::tr1::shared_ptr<e::buffer> snap(e::buffer::create(sz));
-    snap->pack_at(BUSYBEE_HEADER_SIZE)
-        << REPLNET_SNAPSHOT << cmd->slot() << m_s << clients << objects;
-    m_snapshots.push_back(std::make_pair(cmd->slot(), snap));
-
-    // Craft a response to satisfy invariants
-    sz = BUSYBEE_HEADER_SIZE
-       + pack_size(REPLNET_COMMAND_RESPONSE);
-    std::auto_ptr<e::buffer> response(e::buffer::create(sz));
-    response->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_COMMAND_RESPONSE;
-    cmd->set_response(response);
+    ++m_ping_seqno;
 }
 
 bool
-replicant_daemon :: send(const po6::net::location& to,
-                         std::auto_ptr<e::buffer> msg)
+replicant_daemon :: recv(replicant::connection* conn, std::auto_ptr<e::buffer>* msg)
 {
-    switch (m_busybee.send(to, msg))
+    while (s_continue)
+    {
+        run_periodic();
+        busybee_returncode rc = m_busybee.recv(&conn->token, msg);
+
+        switch (rc)
+        {
+            case BUSYBEE_SUCCESS:
+                break;
+            case BUSYBEE_TIMEOUT:
+                continue;
+            case BUSYBEE_DISRUPTED:
+                handle_disruption(conn->token);
+                continue;
+            case BUSYBEE_SHUTDOWN:
+            case BUSYBEE_POLLFAILED:
+            case BUSYBEE_ADDFDFAIL:
+            default:
+                LOG(ERROR) << "BusyBee returned " << rc << " during a \"recv\" call";
+                return false;
+        }
+
+        const configuration& config(m_config_manager.stable());
+
+        for (const chain_node* n = config.members_begin();
+                n != config.members_end(); ++n)
+        {
+            if (n->token == conn->token)
+            {
+                conn->is_cluster_member = true;
+                conn->is_client = false;
+                conn->is_prev = config.has_prev(m_us) && config.prev(m_us) == *n;
+                conn->is_next = config.has_next(m_us) && config.next(m_us) == *n;
+                return true;
+            }
+        }
+
+        for (const chain_node* n = config.standbys_begin();
+                n != config.standbys_end(); ++n)
+        {
+            if (n->token == conn->token)
+            {
+                conn->is_cluster_member = true;
+                conn->is_client = false;
+                conn->is_prev = config.has_prev(m_us) && config.prev(m_us) == *n;
+                conn->is_next = config.has_next(m_us) && config.next(m_us) == *n;
+                return true;
+            }
+        }
+
+        for (const chain_node* n = config.spares_begin();
+                n != config.spares_end(); ++n)
+        {
+            if (n->token == conn->token)
+            {
+                conn->is_cluster_member = true;
+                conn->is_client = false;
+                conn->is_prev = false;
+                conn->is_next = false;
+                return true;
+            }
+        }
+
+        conn->is_cluster_member = false;
+        conn->is_client = m_fs.is_live_client(conn->token);
+        conn->is_prev = false;
+        conn->is_next = false;
+        return true;
+    }
+
+    return false;
+}
+
+bool
+replicant_daemon :: send(const replicant::connection& conn, std::auto_ptr<e::buffer> msg)
+{
+    if (m_disrupted_backoff.find(conn.token) != m_disrupted_backoff.end())
+    {
+        return false;
+    }
+
+    switch (m_busybee.send(conn.token, msg))
     {
         case BUSYBEE_SUCCESS:
-        case BUSYBEE_QUEUED:
             return true;
-        case BUSYBEE_DISCONNECT:
-        case BUSYBEE_CONNECTFAIL:
-            handle_disconnect(to);
+        case BUSYBEE_DISRUPTED:
+            handle_disruption(conn.token);
             return false;
         case BUSYBEE_SHUTDOWN:
         case BUSYBEE_POLLFAILED:
         case BUSYBEE_ADDFDFAIL:
-        case BUSYBEE_BUFFERFULL:
         case BUSYBEE_TIMEOUT:
-        case BUSYBEE_EXTERNAL:
+        default:
+            return false;
+    }
+}
+
+bool
+replicant_daemon :: send(const chain_node& node, std::auto_ptr<e::buffer> msg)
+{
+    if (m_disrupted_backoff.find(node.token) != m_disrupted_backoff.end())
+    {
+        return false;
+    }
+
+    m_busybee_mapper.set(node);
+
+    switch (m_busybee.send(node.token, msg))
+    {
+        case BUSYBEE_SUCCESS:
+            return true;
+        case BUSYBEE_DISRUPTED:
+            handle_disruption(node.token);
+            return false;
+        case BUSYBEE_SHUTDOWN:
+        case BUSYBEE_POLLFAILED:
+        case BUSYBEE_ADDFDFAIL:
+        case BUSYBEE_TIMEOUT:
+        default:
+            return false;
+    }
+}
+
+bool
+replicant_daemon :: send(uint64_t token, std::auto_ptr<e::buffer> msg)
+{
+    if (m_disrupted_backoff.find(token) != m_disrupted_backoff.end())
+    {
+        return false;
+    }
+
+    switch (m_busybee.send(token, msg))
+    {
+        case BUSYBEE_SUCCESS:
+            return true;
+        case BUSYBEE_DISRUPTED:
+            handle_disruption(token);
+            return false;
+        case BUSYBEE_SHUTDOWN:
+        case BUSYBEE_POLLFAILED:
+        case BUSYBEE_ADDFDFAIL:
+        case BUSYBEE_TIMEOUT:
         default:
             return false;
     }
 }
 
 void
-replicant_daemon :: apply_command_create(e::intrusive_ptr<command> cmd)
+replicant_daemon :: handle_disruption(uint64_t token)
 {
-    bool success = true;
-    // Unpack the message
-    size_t sz = BUSYBEE_HEADER_SIZE
-              + pack_size(REPLNET_COMMAND_ISSUE)
-              + 4 * sizeof(uint64_t);
-    e::buffer::unpacker up = cmd->msg()->unpack_from(sz);
-    uint64_t new_object;
-    e::slice pathstr;
-    up = up >> new_object >> pathstr;
+    m_disrupted_unhandled.push(token);
+    trip_periodic(0, &replicant_daemon::periodic_handle_disruption);
+}
 
-    if (up.error())
-    {
-        success = false;
-        LOG(ERROR) << "aborting object create because it doesn't unpack";
-    }
-
-    if (!m_objects.valid_path(pathstr))
-    {
-        success = false;
-        LOG(ERROR) << "aborting object create because the path is not valid";
-    }
-
-    if (m_objects.exists(new_object))
-    {
-        success = false;
-        LOG(ERROR) << "aborting object create because the object already exists";
-    }
-
-    if (success)
-    {
-        LOG(INFO) << "creating object " << new_object << " from " << pathstr.data();
-
-        if (!m_objects.create(new_object, pathstr, this))
-        {
-            LOG(ERROR) << "could not create object because the object itself failed to create";
-            success = false;
-        }
-    }
-
-    if (!success)
-    {
-        LOG(ERROR) << "the above error requires manual repair; please fix the issue and remove/recreate the object";
-    }
-
-    // Craft a response
-    sz = BUSYBEE_HEADER_SIZE
-       + pack_size(REPLNET_COMMAND_RESPONSE)
-       + sizeof(uint64_t) + sizeof(uint8_t);
-    std::auto_ptr<e::buffer> response(e::buffer::create(sz));
-    response->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_COMMAND_RESPONSE
-                                           << cmd->nonce()
-                                           << uint8_t(success ? 1 : 0);
-    cmd->set_response(response);
+static bool
+compare_disrupted(const std::pair<uint64_t, uint64_t>& lhs, const std::pair<uint64_t, uint64_t>& rhs)
+{
+    return lhs.first > rhs.first;
 }
 
 void
-replicant_daemon :: handle_disconnect(const po6::net::location& host)
+replicant_daemon :: periodic_handle_disruption(uint64_t now)
 {
-    m_disconnected.push(std::make_pair(m_disconnected_iteration, host));
-    trip_periodic(0, &replicant_daemon::periodic_handle_disconnect);
-}
+    uint64_t start = m_disrupted_times.empty() ? UINT64_MAX : m_disrupted_times[0].first;
 
-void
-replicant_daemon :: periodic_handle_disconnect(uint64_t)
-{
-    uint64_t now = e::time();
-    uint64_t start_iter = m_disconnected_iteration;
-    ++m_disconnected_iteration;
-
-    while (!m_disconnected.empty())
+    while (!m_disrupted_unhandled.empty())
     {
-        uint64_t iter = m_disconnected.front().first;
-        po6::net::location host = m_disconnected.front().second;
-        m_disconnected.pop();
+        uint64_t token = m_disrupted_unhandled.front();
+        m_disrupted_unhandled.pop();
 
-        uint64_t last = 0;
-        std::map<po6::net::location, uint64_t>::iterator it;
-        it = m_disconnected_times.find(host);
-
-        if (it != m_disconnected_times.end())
+        if (m_disrupted_backoff.find(token) == m_disrupted_backoff.end())
         {
-            last = it->second;
-            it->second = now;
-        }
-        else
-        {
-            m_disconnected_times[host] = now;
-        }
-
-        if (iter <= start_iter && last + m_s.CONNECTION_RETRY < now)
-        {
-            handle_disconnect_propose_new_config(host); // XXX obsolete when phifd is added
-            handle_disconnect_client(host);
-            handle_disconnect_heal(host);
+            m_disrupted_backoff.insert(token);
+            m_disrupted_times.push_back(std::make_pair(now + m_s.CONNECTION_RETRY, token));
+            std::push_heap(m_disrupted_times.begin(), m_disrupted_times.end(), compare_disrupted);
         }
     }
 
-    for (std::map<po6::net::location, uint64_t>::iterator it = m_disconnected_times.begin();
-            it != m_disconnected_times.end(); )
+    uint64_t end = m_disrupted_times.empty() ? UINT64_MAX : m_disrupted_times[0].first;
+
+    if (end < start)
     {
-        if (it->second + m_s.CONNECTION_RETRY < now)
-        {
-            m_disconnected_times.erase(it);
-            it = m_disconnected_times.begin();
-        }
-        else
-        {
-            ++it;
-        }
+        trip_periodic(end, &replicant_daemon::periodic_retry_disruption);
     }
 }
 
 void
-replicant_daemon :: handle_disconnect_propose_new_config(const po6::net::location& host)
+replicant_daemon :: periodic_retry_disruption(uint64_t now)
 {
-    // Figure out a new configuration we could send if we were the head
-    configuration new_config = m_confman.get_latest();
-    new_config.bump_version();
-    size_t count = 0;
-
-    for (const chain_node* n = new_config.members_begin();
-            n != new_config.members_end(); )
+    while (!m_disrupted_times.empty() && m_disrupted_times[0].first <= now)
     {
-        if (n->receiver() == host || n->sender() == host)
-        {
-            new_config.remove_member(*n);
-            n = new_config.members_begin();
-            ++count;
-        }
-        else
-        {
-            ++n;
-        }
+        std::pop_heap(m_disrupted_times.begin(), m_disrupted_times.end(), compare_disrupted);
+        handle_disruption_reset_healing(m_disrupted_times.back().second);
+        m_disrupted_times.pop_back();
     }
 
-    for (const chain_node* n = new_config.standbys_begin();
-            n != new_config.standbys_end(); )
+    if (!m_disrupted_times.empty())
     {
-        if (n->receiver() == host || n->sender() == host)
-        {
-            new_config.remove_standby(*n);
-            n = new_config.standbys_begin();
-            ++count;
-        }
-        else
-        {
-            ++n;
-        }
-    }
-
-    for (const chain_node* n = new_config.spares_begin();
-            n != new_config.spares_end(); )
-    {
-        if (n->receiver() == host || n->sender() == host)
-        {
-            new_config.remove_spare(*n);
-            n = new_config.spares_begin();
-            ++count;
-        }
-        else
-        {
-            ++n;
-        }
-    }
-
-    if (count > 0 && new_config.head() == m_us)
-    {
-        propose_config(new_config);
+        trip_periodic(m_disrupted_times[0].first, &replicant_daemon::periodic_retry_disruption);
     }
 }
 
@@ -2290,6 +1870,19 @@ replicant_daemon :: trip_periodic(uint64_t when, periodic_fptr fp)
         {
             m_periodic[i].second = &replicant_daemon::periodic_nop;
         }
+    }
+
+    // Clean up dead functions from the front
+    while (!m_periodic.empty() && m_periodic[0].second == &replicant_daemon::periodic_nop)
+    {
+        std::pop_heap(m_periodic.begin(), m_periodic.end(), compare_periodic);
+        m_periodic.pop_back();
+    }
+
+    // And from the back
+    while (!m_periodic.empty() && m_periodic.back().second == &replicant_daemon::periodic_nop)
+    {
+        m_periodic.pop_back();
     }
 
     m_periodic.push_back(std::make_pair(when, fp));
@@ -2322,22 +1915,3 @@ void
 replicant_daemon :: periodic_nop(uint64_t)
 {
 }
-
-void
-replicant_daemon :: periodic_set_timeout(uint64_t)
-{
-    m_busybee.set_timeout(1);
-}
-
-void
-replicant_daemon :: periodic_dump_config(uint64_t now)
-{
-    trip_periodic(now + m_s.REPORT_INTERVAL, &replicant_daemon::periodic_dump_config);
-    LOG(INFO) << "agreed upon " << (m_commands.upper_bound_acknowledged() - 1)
-              << " commands (the first "
-              << m_commands.lower_bound_acknowledged() << " are garbage-collected)"
-              << " with " << (m_commands.upper_bound_proposed() - m_commands.upper_bound_acknowledged())
-              << " outstanding\n" << m_confman;
-}
-
-

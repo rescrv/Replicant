@@ -41,36 +41,31 @@ class configuration_manager
         ~configuration_manager() throw ();
 
     public:
-        const configuration& get_latest() const;
-        const configuration& get_stable() const;
-        bool manages(const configuration& config) const;
-        bool quorum_for_all(const configuration& config) const;
-        bool unconfigured() const;
+        const configuration& stable() const;
+        const configuration& latest() const;
+        bool in_any_cluster(const chain_node& n) const;
+        bool is_any_spare(const chain_node& n) const;
+        void get_all_nodes(std::vector<chain_node>* nodes) const;
+        void get_config_chain(std::vector<configuration>* config_chain) const;
+        bool get_proposal(uint64_t proposal_id,
+                          uint64_t proposal_time,
+                          configuration* config) const;
+        bool is_compatible(const configuration* configs,
+                           size_t configs_sz) const;
 
     public:
-        void add_proposed(const configuration& config);
-        void adopt(uint64_t version);
-        void reject(uint64_t version);
-        void reset(const configuration& us);
+        void advance(const configuration& config);
+        void merge(uint64_t proposal_id,
+                   uint64_t proposal_time,
+                   const configuration* configs,
+                   size_t configs_sz);
+        void reject(uint64_t proposal_id, uint64_t proposal_time);
+        void reset(const configuration& config);
 
     private:
-        friend std::ostream& operator << (std::ostream& lhs, const configuration_manager& rhs);
-        friend e::buffer::packer operator << (e::buffer::packer lhs, const configuration_manager& rhs);
-        friend size_t pack_size(const configuration_manager& rhs);
-
-    private:
-        configuration m_config;
-        std::list<configuration> m_proposed;
-        std::vector<uint64_t> m_rejected;
+        class proposal;
+        std::list<configuration> m_configs;
+        std::list<proposal> m_proposals;
 };
-
-std::ostream&
-operator << (std::ostream& lhs, const configuration_manager& rhs);
-
-e::buffer::packer
-operator << (e::buffer::packer lhs, const configuration_manager& rhs);
-
-size_t
-pack_size(const configuration_manager& rhs);
 
 #endif // replicant_configuration_manager_h_

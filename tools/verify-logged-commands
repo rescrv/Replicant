@@ -1,0 +1,51 @@
+#!/usr/bin/env python
+
+
+from __future__ import absolute_import
+from __future__ import print_function
+from __future__ import unicode_literals
+from __future__ import with_statement
+
+
+import collections
+import sys
+
+
+messages = collections.defaultdict(lambda: collections.defaultdict(list))
+
+
+def check_log(filename):
+    f = open(filename)
+    next_to_issue = 1
+    next_to_ack = 1
+    for lineno, line in enumerate(f):
+        lineno += 1
+        msg = line.split(' ', 4)[-1]
+        if msg.startswith('ISSUE'):
+            slot, data = msg[6:].split(' ', 1)
+            slot = int(slot)
+            if slot < next_to_issue:
+                print('%s:%i violates ordering; slot %i comes after %i' %
+                      (filename, lineno, slot, next_to_issue))
+            next_to_issue = slot + 1
+            messages[slot][data].append(filename)
+        if msg.startswith('ACK'):
+            slot = int(msg[4:])
+            if slot < next_to_ack:
+                print('%s:%i violates ordering; ack %i comes after %i' %
+                      (filename, lineno, slot, next_to_ack))
+            next_to_ack = slot + 1
+
+
+def check_conflicts():
+    for slot, values in sorted(messages.items()):
+        if len(values) > 1:
+            print('conflict for slot %i; here they are:' % slot)
+            for msg, logs in values.iteritems():
+                print('log files %r decided: %r' % (logs, msg))
+
+
+if __name__ == '__main__':
+    for filename in sys.argv[1:]:
+        check_log(filename)
+    check_conflicts()

@@ -43,24 +43,33 @@
 enum replicant_returncode
 {
     REPLICANT_SUCCESS,
-    REPLICANT_BADCALL,
+    REPLICANT_FUNC_NOT_FOUND,
+    REPLICANT_OBJ_EXIST,
+    REPLICANT_OBJ_NOT_FOUND,
+    REPLICANT_SERVER_ERROR,
+    REPLICANT_BAD_LIBRARY,
     REPLICANT_TIMEOUT,
-    REPLICANT_NEEDBOOTSTRAP,
-    REPLICANT_BUFFERFULL,
-    REPLICANT_MISBEHAVINGSERVER,
-    REPLICANT_INTERNALERROR,
-    REPLICANT_NONEPENDING,
+    REPLICANT_NEED_BOOTSTRAP,
+    REPLICANT_MISBEHAVING_SERVER,
+    REPLICANT_INTERNAL_ERROR,
+    REPLICANT_NONE_PENDING,
     REPLICANT_GARBAGE
 };
 
 void
 replicant_destroy_output(const char* output, size_t output_sz);
 
-class replicant
+class chain_node;
+namespace replicant
+{
+class mapper;
+} // namespace replicant
+
+class replicant_client
 {
     public:
-        replicant(const char* host, in_port_t port);
-        ~replicant() throw ();
+        replicant_client(const char* host, in_port_t port);
+        ~replicant_client() throw ();
 
     public:
         const char* last_error_desc() const { return m_last_error_desc; }
@@ -68,9 +77,13 @@ class replicant
         uint64_t last_error_line() const { return m_last_error_line; }
 
     public:
-        int64_t create_object(const char* obj, size_t obj_sz,
-                              const char* path,
-                              replicant_returncode* status);
+        int64_t new_object(const char* obj, size_t obj_sz,
+                           const char* path,
+                           replicant_returncode* status,
+                           const char** errmsg, size_t* errmsg_sz);
+        int64_t del_object(const char* obj, size_t obj_sz,
+                           replicant_returncode* status,
+                           const char** errmsg, size_t* errmsg_sz);
         int64_t send(const char* obj, size_t obj_sz, const char* func,
                      const char* data, size_t data_sz,
                      replicant_returncode* status,
@@ -84,59 +97,46 @@ class replicant
         typedef std::map<uint64_t, e::intrusive_ptr<command> > command_map;
 
     private:
-        replicant(const replicant& other);
+        replicant_client(const replicant_client& other);
 
     private:
         int64_t inner_loop(replicant_returncode* status);
         // Work the state machine to keep connected to the replicated service
         int64_t maintain_connection(replicant_returncode* status);
-        int64_t send_join_message(replicant_returncode* status);
-        int64_t wait_for_bootstrap(replicant_returncode* status);
+        int64_t perform_bootstrap(replicant_returncode* status);
         int64_t send_token_registration(replicant_returncode* status);
         int64_t wait_for_token_registration(replicant_returncode* status);
-        int64_t send_identify_messages(replicant_returncode* status);
         int64_t handle_inform(const po6::net::location& from,
                               std::auto_ptr<e::buffer> msg,
                               e::buffer::unpacker up,
                               replicant_returncode* status);
-        int64_t handle_identified(const po6::net::location& from,
-                                  std::auto_ptr<e::buffer> msg,
-                                  e::buffer::unpacker up,
-                                  replicant_returncode* status);
-        int64_t handle_disconnect(const po6::net::location& from,
-                                  replicant_returncode* status);
         // Send commands and receive responses
-        int64_t send_preconnect_message(const po6::net::location& to,
-                                        std::auto_ptr<e::buffer> msg,
-                                        replicant_returncode* status);
-        int64_t send_to_any_chain_member(e::intrusive_ptr<command> cmd,
-                                         replicant_returncode* status);
+        int64_t send_to_chain_head(std::auto_ptr<e::buffer> msg,
+                                   replicant_returncode* status);
+        int64_t send_to_preferred_chain_member(e::intrusive_ptr<command> cmd,
+                                               replicant_returncode* status);
+        int64_t handle_disconnect(const chain_node& node,
+                                  replicant_returncode* status);
         int64_t handle_command_response(const po6::net::location& from,
                                         std::auto_ptr<e::buffer> msg,
                                         e::buffer::unpacker up,
                                         replicant_returncode* status);
-        int64_t handle_command_resend(const po6::net::location& from,
-                                      std::auto_ptr<e::buffer> msg,
-                                      e::buffer::unpacker up,
-                                      replicant_returncode* status);
         // Utilities
         uint64_t generate_token();
-        uint64_t compute_garbage();
         void reset_to_disconnected();
 
     private:
-        replicant& operator = (const replicant& rhs);
+        replicant_client& operator = (const replicant_client& rhs);
 
     private:
+        std::auto_ptr<replicant::mapper> m_busybee_mapper;
         std::auto_ptr<class busybee_st> m_busybee;
         std::auto_ptr<class configuration> m_config;
         po6::net::hostname m_bootstrap;
         uint64_t m_token;
         uint64_t m_nonce;
-        enum { REPLCL_DISCONNECTED, REPLCL_JOIN_SENT,
-               REPLCL_BOOTSTRAPPED, REPLCL_REGISTER_SENT,
-               REPLCL_PARTIALLY_CONNECTED, REPLCL_CONNECTED,
-               REPLCL_DISCONNECT_SENT } m_state;
+        enum { REPLCL_DISCONNECTED, REPLCL_BOOTSTRAPPED,
+               REPLCL_REGISTER_SENT, REPLCL_REGISTERED } m_state;
         command_map m_commands;
         command_map m_complete;
         command_map m_resend;
@@ -144,8 +144,6 @@ class replicant
         const char* m_last_error_file;
         uint64_t m_last_error_line;
         po6::net::location m_last_error_host;
-        uint8_t m_identify_sent[32];
-        uint8_t m_identify_recv[32];
 };
 
 std::ostream&

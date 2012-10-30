@@ -42,16 +42,12 @@ class chain_node
         ~chain_node() throw ();
 
     public:
-        po6::net::location receiver() const;
-        po6::net::location sender() const;
-
-    public:
-        po6::net::ipaddr address;
-        uint16_t incoming_port;
-        uint16_t outgoing_port;
         uint64_t token;
+        po6::net::location address;
 };
 
+bool
+operator < (const chain_node& lhs, const chain_node& rhs);
 bool
 operator == (const chain_node& lhs, const chain_node& rhs);
 inline bool

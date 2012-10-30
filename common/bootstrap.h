@@ -25,43 +25,37 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
+#ifndef replicant_common_bootstrap_h_
+#define replicant_common_bootstrap_h_
+
+// C++
+#include <iostream>
+
+// po6
+#include <po6/net/hostname.h>
+
 // Replicant
-#include "daemon/command.h"
+#include "common/configuration.h"
 
-command :: command(uint64_t _client,
-                   uint64_t _nonce,
-                   uint64_t _slot,
-                   uint64_t _object,
-                   std::auto_ptr<e::buffer> _msg)
-    : m_ref(0)
-    , m_client(_client)
-    , m_nonce(_nonce)
-    , m_slot(_slot)
-    , m_object(_object)
-    , m_msg(_msg)
-    , m_response()
+namespace replicant
 {
-}
 
-command :: ~command() throw ()
+enum bootstrap_returncode
 {
-}
+    BOOTSTRAP_SUCCESS,
+    BOOTSTRAP_TIMEOUT,
+    BOOTSTRAP_COMM_FAIL,
+    BOOTSTRAP_SEE_ERRNO,
+    BOOTSTRAP_CORRUPT_INFORM,
+    BOOTSTRAP_NOT_CLUSTER_MEMBER
+};
 
-e::buffer*
-command :: msg() const
-{
-    return m_msg.get();
-}
+bootstrap_returncode
+bootstrap(const po6::net::hostname& hn, configuration* config);
 
-e::buffer*
-command :: response() const
-{
-    return m_response.get();
-}
+std::ostream&
+operator << (std::ostream& lhs, const bootstrap_returncode& rhs);
 
-void
-command :: set_response(std::auto_ptr<e::buffer> resp)
-{
-    assert(resp.get());
-    m_response = resp;
-}
+} // namespace replicant
+
+#endif // replicant_common_bootstrap_h_

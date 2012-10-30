@@ -25,20 +25,50 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
-#ifndef replicant_special_objects_h_
-#define replicant_special_objects_h_
+// Google Log
+#include <glog/logging.h>
 
-#define IS_SPECIAL_OBJECT(X) ((X & 0xff00000000000000ULL) == 0x5f00000000000000ULL)
+// Replicant
+#include "daemon/replicant_state_machine.h"
+#include "daemon/replicant_state_machine_context.h"
 
-// Here's some Python to generate the numbers:
-//
-// >>> print '0x%sULL' % ''.join(['%02x' % ord(c) for c in '_clients'])
-// 0x5f636c69656e7473ULL
+replicant_state_machine_context :: replicant_state_machine_context()
+    : object(0)
+    , client(0)
+    , response(NULL)
+    , response_sz(0)
+{
+}
 
-// Special objects
-#define OBJECT_CLI_REG 0x5f636c695f726567ULL /*_cli_reg*/
-#define OBJECT_CLI_DIE 0x5f636c695f646965ULL /*_cli_die*/
-#define OBJECT_OBJ_NEW 0x5f6f626a5f6e6577ULL /*_obj_new*/
-#define OBJECT_OBJ_DEL 0x5f6f626a5f64656cULL /*_obj_del*/
+replicant_state_machine_context :: ~replicant_state_machine_context() throw ()
+{
+}
 
-#endif // replicant_special_objects_h_
+extern "C"
+{
+
+uint64_t
+replicant_state_machine_get_client(struct replicant_state_machine_context* ctx)
+{
+    return ctx->client;
+}
+
+void
+replicant_state_machine_log_error(struct replicant_state_machine_context* ctx,
+                                  const char* msg)
+{
+    LOG(INFO) << "object=" << ctx->object << " log message: " << msg;
+}
+
+void
+replicant_state_machine_set_response(struct replicant_state_machine_context* ctx,
+                                     const char* data, size_t data_sz)
+{
+    ctx->response = data;
+    ctx->response_sz = data_sz;
+}
+
+} // extern "C"
+
+#if 0
+#endif

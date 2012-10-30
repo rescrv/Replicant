@@ -38,26 +38,23 @@ operator << (std::ostream& lhs, replicant_network_msgtype rhs)
     switch (rhs)
     {
         stringify(REPLNET_NOP);
-        stringify(REPLNET_JOIN);
+        stringify(REPLNET_BOOTSTRAP);
         stringify(REPLNET_INFORM);
-        stringify(REPLNET_BECOME_SPARE);
-        stringify(REPLNET_BECOME_STANDBY);
-        stringify(REPLNET_BECOME_MEMBER);
+        stringify(REPLNET_JOIN);
         stringify(REPLNET_CONFIG_PROPOSE);
         stringify(REPLNET_CONFIG_ACCEPT);
         stringify(REPLNET_CONFIG_REJECT);
-        stringify(REPLNET_IDENTIFY);
-        stringify(REPLNET_IDENTIFIED);
-        stringify(REPLNET_CLIENT_LIST);
+        stringify(REPLNET_CLIENT_REGISTER);
+        stringify(REPLNET_CLIENT_DISCONNECT);
         stringify(REPLNET_COMMAND_SUBMIT);
         stringify(REPLNET_COMMAND_ISSUE);
         stringify(REPLNET_COMMAND_ACK);
         stringify(REPLNET_COMMAND_RESPONSE);
-        stringify(REPLNET_COMMAND_RESEND);
-        stringify(REPLNET_REQ_STATE);
-        stringify(REPLNET_RESP_STATE);
-        stringify(REPLNET_SNAPSHOT);
-        stringify(REPLNET_HEALED);
+        stringify(REPLNET_HEAL_REQ);
+        stringify(REPLNET_HEAL_RESP);
+        stringify(REPLNET_HEAL_DONE);
+        stringify(REPLNET_PING);
+        stringify(REPLNET_PONG);
         default:
             lhs << "unknown msgtype";
     }

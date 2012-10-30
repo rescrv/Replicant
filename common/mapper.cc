@@ -25,46 +25,35 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
-#ifndef replicant_command_manager_h_
-#define replicant_command_manager_h_
-
-// STL
-#include <list>
-#include <map>
-
 // Replicant
-#include "daemon/command.h"
+#include "common/mapper.h"
 
-class command_manager
+using replicant::mapper;
+
+mapper :: mapper()
+    : m_cache()
 {
-    public:
-        command_manager();
-        ~command_manager() throw ();
+}
 
-    public:
-        bool is_acknowledged(uint64_t slot) const;
-        e::intrusive_ptr<command> lookup(uint64_t slot) const;
-        e::intrusive_ptr<command> lookup_acknowledged(uint64_t slot) const;
-        e::intrusive_ptr<command> lookup_proposed(uint64_t slot) const;
-        uint64_t lower_bound_acknowledged() const;
-        uint64_t upper_bound_acknowledged() const;
-        uint64_t lower_bound_proposed() const;
-        uint64_t upper_bound_proposed() const;
+mapper :: ~mapper() throw ()
+{
+}
 
-    public:
-        void append(e::intrusive_ptr<command> cmd);
-        void acknowledge(uint64_t slot);
-        void garbage_collect(uint64_t slot);
+bool
+mapper :: lookup(uint64_t server_id,
+                 po6::net::location* bound_to)
+{
+    if (server_id == m_cache.token)
+    {
+        *bound_to = m_cache.address;
+        return true;
+    }
 
-    private:
-        typedef std::list<e::intrusive_ptr<command> > command_list;
-        typedef std::map<uint64_t, command_list::const_iterator> command_index;
+    return false;
+}
 
-    private:
-        command_list m_cmds;
-        command_index m_idx;
-        // This is points to (one past the last acknowledged)/(the first proposed)
-        command_list::iterator m_cutoff;
-};
-
-#endif // replicant_command_manager_h_
+void
+mapper :: set(const chain_node& n)
+{
+    m_cache = n;
+}

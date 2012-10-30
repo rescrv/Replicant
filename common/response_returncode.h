@@ -25,20 +25,47 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
-#ifndef replicant_special_objects_h_
-#define replicant_special_objects_h_
+#ifndef replicant_common_response_flags_h_
+#define replicant_common_response_flags_h_
 
-#define IS_SPECIAL_OBJECT(X) ((X & 0xff00000000000000ULL) == 0x5f00000000000000ULL)
+// C++
+#include <iostream>
 
-// Here's some Python to generate the numbers:
-//
-// >>> print '0x%sULL' % ''.join(['%02x' % ord(c) for c in '_clients'])
-// 0x5f636c69656e7473ULL
+// e
+#include <e/buffer.h>
 
-// Special objects
-#define OBJECT_CLI_REG 0x5f636c695f726567ULL /*_cli_reg*/
-#define OBJECT_CLI_DIE 0x5f636c695f646965ULL /*_cli_die*/
-#define OBJECT_OBJ_NEW 0x5f6f626a5f6e6577ULL /*_obj_new*/
-#define OBJECT_OBJ_DEL 0x5f6f626a5f64656cULL /*_obj_del*/
+namespace replicant
+{
 
-#endif // replicant_special_objects_h_
+enum response_returncode
+{
+    RESPONSE_SUCCESS,
+    RESPONSE_REGISTRATION_FAIL,
+    RESPONSE_OBJ_EXIST,
+    RESPONSE_OBJ_NOT_EXIST,
+    RESPONSE_SERVER_ERROR,
+    RESPONSE_DLOPEN_FAIL,
+    RESPONSE_DLSYM_FAIL,
+    RESPONSE_NO_CTOR,
+    RESPONSE_NO_RTOR,
+    RESPONSE_NO_DTOR,
+    RESPONSE_NO_SNAP,
+    RESPONSE_NO_FUNC,
+    RESPONSE_MALFORMED
+};
+
+std::ostream&
+operator << (std::ostream& lhs, response_returncode rhs);
+
+e::buffer::packer
+operator << (e::buffer::packer lhs, const response_returncode& rhs);
+
+e::buffer::unpacker
+operator >> (e::buffer::unpacker lhs, response_returncode& rhs);
+
+size_t
+pack_size(const response_returncode& rhs);
+
+} // namespace replicant
+
+#endif // replicant_common_response_flags_h_

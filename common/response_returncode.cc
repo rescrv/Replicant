@@ -25,20 +25,55 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
-#ifndef replicant_special_objects_h_
-#define replicant_special_objects_h_
+// Replicant
+#include "common/macros.h"
+#include "common/response_returncode.h"
 
-#define IS_SPECIAL_OBJECT(X) ((X & 0xff00000000000000ULL) == 0x5f00000000000000ULL)
+using replicant::response_returncode;
 
-// Here's some Python to generate the numbers:
-//
-// >>> print '0x%sULL' % ''.join(['%02x' % ord(c) for c in '_clients'])
-// 0x5f636c69656e7473ULL
+std::ostream&
+replicant :: operator << (std::ostream& lhs, response_returncode rhs)
+{
+    switch (rhs)
+    {
+        stringify(RESPONSE_SUCCESS);
+        stringify(RESPONSE_REGISTRATION_FAIL);
+        stringify(RESPONSE_OBJ_EXIST);
+        stringify(RESPONSE_OBJ_NOT_EXIST);
+        stringify(RESPONSE_SERVER_ERROR);
+        stringify(RESPONSE_DLOPEN_FAIL);
+        stringify(RESPONSE_DLSYM_FAIL);
+        stringify(RESPONSE_NO_CTOR);
+        stringify(RESPONSE_NO_RTOR);
+        stringify(RESPONSE_NO_DTOR);
+        stringify(RESPONSE_NO_SNAP);
+        stringify(RESPONSE_NO_FUNC);
+        stringify(RESPONSE_MALFORMED);
+        default:
+            lhs << "unknown returncode";
+    }
 
-// Special objects
-#define OBJECT_CLI_REG 0x5f636c695f726567ULL /*_cli_reg*/
-#define OBJECT_CLI_DIE 0x5f636c695f646965ULL /*_cli_die*/
-#define OBJECT_OBJ_NEW 0x5f6f626a5f6e6577ULL /*_obj_new*/
-#define OBJECT_OBJ_DEL 0x5f6f626a5f64656cULL /*_obj_del*/
+    return lhs;
+}
 
-#endif // replicant_special_objects_h_
+e::buffer::packer
+replicant :: operator << (e::buffer::packer lhs, const response_returncode& rhs)
+{
+    uint8_t mt = static_cast<uint8_t>(rhs);
+    return lhs << mt;
+}
+
+e::buffer::unpacker
+replicant :: operator >> (e::buffer::unpacker lhs, response_returncode& rhs)
+{
+    uint8_t mt;
+    lhs = lhs >> mt;
+    rhs = static_cast<response_returncode>(mt);
+    return lhs;
+}
+
+size_t
+replicant :: pack_size(const response_returncode&)
+{
+    return sizeof(uint8_t);
+}

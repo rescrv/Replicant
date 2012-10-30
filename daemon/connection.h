@@ -25,52 +25,32 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
-#ifndef replicant_command_h_
-#define replicant_command_h_
-
-// STL
-#include <memory>
-
-// e
-#include <e/intrusive_ptr.h>
+#ifndef replicant_daemon_connection_h_
+#define replicant_daemon_connection_h_
 
 // Replicant
 #include "common/chain_node.h"
 
-class command
+namespace replicant
+{
+
+class connection
 {
     public:
-        command(uint64_t client, uint64_t nonce,
-                uint64_t slot, uint64_t object,
-                std::auto_ptr<e::buffer> msg);
-        ~command() throw ();
+        connection();
+        ~connection() throw ();
 
     public:
-        uint64_t client() const { return m_client; }
-        uint64_t nonce() const { return m_nonce; }
-        uint64_t slot() const { return m_slot; }
-        uint64_t object() const { return m_object; }
-        e::buffer* msg() const;
-        e::buffer* response() const;
+        bool matches(const chain_node& node) const;
 
     public:
-        void set_response(std::auto_ptr<e::buffer> response);
-
-    private:
-        friend class e::intrusive_ptr<command>;
-
-    private:
-        void inc() { ++m_ref; }
-        void dec() { if (--m_ref == 0) delete this; }
-
-    private:
-        size_t m_ref;
-        uint64_t m_client;
-        uint64_t m_nonce;
-        uint64_t m_slot;
-        uint64_t m_object;
-        std::auto_ptr<e::buffer> m_msg;
-        std::auto_ptr<e::buffer> m_response;
+        bool is_cluster_member;
+        bool is_client;
+        bool is_prev;
+        bool is_next;
+        uint64_t token;
 };
 
-#endif // replicant_command_h_
+} // namespace replicant
+
+#endif // replicant_daemon_connection_h_

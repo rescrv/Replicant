@@ -34,9 +34,12 @@
 #include <busybee_st.h>
 
 // Replicant
+#include "common/bootstrap.h"
 #include "common/configuration.h"
 #include "common/macros.h"
+#include "common/mapper.h"
 #include "common/network_msgtype.h"
+#include "common/response_returncode.h"
 #include "common/special_objects.h"
 #include "client/command.h"
 #include "client/replicant.h"
@@ -72,13 +75,13 @@
 
 #define REPL_UNEXPECTED(MT) \
     case REPLNET_ ## MT: \
-        REPLSETERROR(REPLICANT_MISBEHAVINGSERVER, "unexpected " xstr(MT) " message"); \
+        REPLSETERROR(REPLICANT_MISBEHAVING_SERVER, "unexpected " xstr(MT) " message"); \
         m_last_error_host = from; \
         return -1
 
 #define REPL_UNEXPECTED_DISCONNECT(MT) \
     case REPLNET_ ## MT: \
-        REPLSETERROR(REPLICANT_MISBEHAVINGSERVER, "unexpected " xstr(MT) " message"); \
+        REPLSETERROR(REPLICANT_MISBEHAVING_SERVER, "unexpected " xstr(MT) " message"); \
         m_last_error_host = from; \
         reset_to_disconnected(); \
         return -1
@@ -92,8 +95,9 @@ replicant_destroy_output(const char* output, size_t)
     delete buf;
 }
 
-replicant :: replicant(const char* host, in_port_t port)
-    : m_busybee(new busybee_st())
+replicant_client :: replicant_client(const char* host, in_port_t port)
+    : m_busybee_mapper(new replicant::mapper())
+    , m_busybee(new busybee_st(m_busybee_mapper.get(), 0))
     , m_config(new configuration())
     , m_bootstrap(host, port)
     , m_token(0x4141414141414141ULL)
@@ -107,21 +111,74 @@ replicant :: replicant(const char* host, in_port_t port)
     , m_last_error_line(__LINE__)
     , m_last_error_host()
 {
-    for (size_t i = 0; i < 32; ++i)
-    {
-        m_identify_sent[i] = 0;
-        m_identify_recv[i] = 0;
-    }
 }
 
-replicant :: ~replicant() throw ()
+replicant_client :: ~replicant_client() throw ()
 {
 }
 
 int64_t
-replicant :: create_object(const char* obj, size_t obj_sz,
-                           const char* path,
-                           replicant_returncode* status)
+replicant_client :: new_object(const char* obj, size_t obj_sz,
+                               const char* path,
+                               replicant_returncode* status,
+                               const char** errmsg, size_t* errmsg_sz)
+{
+    int64_t ret = maintain_connection(status);
+
+    if (ret < 0)
+    {
+        return ret;
+    }
+
+    // Read the library
+    std::vector<char> lib;
+    char buf[4096];
+    po6::io::fd fd(open(path, O_RDONLY));
+
+    if (fd.get() < 0)
+    {
+        REPLSETERROR(REPLICANT_BAD_LIBRARY, "could not open library; see errno for details");
+        return -1;
+    }
+
+    ssize_t amt = 0;
+
+    while ((amt = fd.xread(buf, 4096)) > 0)
+    {
+        size_t tmp = lib.size();
+        lib.resize(tmp + amt);
+        memmove(&lib[tmp], buf, amt);
+    }
+
+    if (amt < 0)
+    {
+        REPLSETERROR(REPLICANT_BAD_LIBRARY, "could not open library; see errno for details");
+        return -1;
+    }
+
+    // Pack the message to send
+    size_t sz = COMMAND_HEADER_SIZE + sizeof(uint64_t) + lib.size();
+    std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
+    e::buffer::packer pa = msg->pack_at(BUSYBEE_HEADER_SIZE);
+    uint64_t nonce = m_nonce;
+    ++m_nonce;
+    char object_buf[sizeof(uint64_t)];
+    memset(object_buf, 0, sizeof(object_buf));
+    memmove(object_buf, obj, std::min(obj_sz, sizeof(object_buf)));
+    uint64_t object;
+    e::unpack64be(object_buf, &object);
+    pa = pa << REPLNET_COMMAND_SUBMIT << uint64_t(OBJECT_OBJ_NEW)
+            << m_token << nonce << object;
+    pa = pa.copy(e::slice(&lib[0], lib.size()));
+    // Create the command object
+    e::intrusive_ptr<command> cmd = new command(status, nonce, msg, errmsg, errmsg_sz);
+    return send_to_preferred_chain_member(cmd, status);
+}
+
+int64_t
+replicant_client :: del_object(const char* obj, size_t obj_sz,
+                               replicant_returncode* status,
+                               const char** errmsg, size_t* errmsg_sz)
 {
     int64_t ret = maintain_connection(status);
 
@@ -131,31 +188,27 @@ replicant :: create_object(const char* obj, size_t obj_sz,
     }
 
     // Pack the message to send
-    size_t path_sz = strlen(path) + 1;
-    size_t sz = COMMAND_HEADER_SIZE + sizeof(uint64_t) + sizeof(uint32_t) + path_sz;
+    size_t sz = COMMAND_HEADER_SIZE + sizeof(uint64_t);
     std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
-    e::buffer::packer pa = msg->pack_at(BUSYBEE_HEADER_SIZE);
     uint64_t nonce = m_nonce;
     ++m_nonce;
-    uint64_t garbage = compute_garbage();
     char object_buf[sizeof(uint64_t)];
     memset(object_buf, 0, sizeof(object_buf));
     memmove(object_buf, obj, std::min(obj_sz, sizeof(object_buf)));
     uint64_t object;
     e::unpack64be(object_buf, &object);
-    pa = pa << REPLNET_COMMAND_SUBMIT
-            << m_token << nonce << garbage << uint64_t(OBJECT_CREATE)
-            << object << e::slice(path, path_sz);
+    msg->pack_at(BUSYBEE_HEADER_SIZE)
+        << REPLNET_COMMAND_SUBMIT << uint64_t(OBJECT_OBJ_DEL) << m_token << nonce << object;
     // Create the command object
-    e::intrusive_ptr<command> cmd = new command(status, nonce, msg, NULL, NULL);
-    return send_to_any_chain_member(cmd, status);
+    e::intrusive_ptr<command> cmd = new command(status, nonce, msg, errmsg, errmsg_sz);
+    return send_to_preferred_chain_member(cmd, status);
 }
 
 int64_t
-replicant :: send(const char* obj, size_t obj_sz, const char* func,
-                  const char* data, size_t data_sz,
-                  replicant_returncode* status,
-                  const char** output, size_t* output_sz)
+replicant_client :: send(const char* obj, size_t obj_sz, const char* func,
+                         const char* data, size_t data_sz,
+                         replicant_returncode* status,
+                         const char** output, size_t* output_sz)
 {
     int64_t ret = maintain_connection(status);
 
@@ -171,58 +224,52 @@ replicant :: send(const char* obj, size_t obj_sz, const char* func,
     e::buffer::packer pa = msg->pack_at(BUSYBEE_HEADER_SIZE);
     uint64_t nonce = m_nonce;
     ++m_nonce;
-    uint64_t garbage = compute_garbage();
     char object_buf[sizeof(uint64_t)];
     memset(object_buf, 0, sizeof(object_buf));
     memmove(object_buf, obj, std::min(obj_sz, sizeof(object_buf)));
     uint64_t object;
     e::unpack64be(object_buf, &object);
-    pa = pa << REPLNET_COMMAND_SUBMIT << m_token << nonce << garbage << object;
+    pa = pa << REPLNET_COMMAND_SUBMIT << object << m_token << nonce;
     pa = pa.copy(e::slice(func, func_sz));
     pa = pa.copy(e::slice(data, data_sz));
     // Create the command object
     e::intrusive_ptr<command> cmd = new command(status, nonce, msg, output, output_sz);
-    return send_to_any_chain_member(cmd, status);
+    return send_to_preferred_chain_member(cmd, status);
 }
 
 replicant_returncode
-replicant :: disconnect()
+replicant_client :: disconnect()
 {
     replicant_returncode rc;
     int64_t ret = maintain_connection(&rc);
 
     if (ret < 0)
     {
-        return REPLICANT_NEEDBOOTSTRAP;
+        return REPLICANT_NEED_BOOTSTRAP;
     }
 
     uint64_t nonce = m_nonce;
     ++m_nonce;
-    uint64_t garbage = m_nonce;
-    uint64_t object = OBJECT_DEPART;
-    std::auto_ptr<e::buffer> msg(e::buffer::create(COMMAND_HEADER_SIZE));
-    msg->pack_at(BUSYBEE_HEADER_SIZE)
-        << REPLNET_COMMAND_SUBMIT << m_token << nonce << garbage << object;
+    size_t sz = BUSYBEE_HEADER_SIZE
+              + pack_size(REPLNET_CLIENT_DISCONNECT)
+              + sizeof(uint64_t);
+    std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
+    msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_CLIENT_DISCONNECT << nonce;
     e::intrusive_ptr<command> cmd = new command(&rc, nonce, msg, NULL, NULL);
-    m_state = REPLCL_DISCONNECT_SENT;
-    send_to_any_chain_member(cmd, &rc);
+    send_to_preferred_chain_member(cmd, &rc);
 
-    while (m_commands.find(nonce) != m_commands.end() ||
-           m_resend.find(nonce) != m_resend.end())
+    while (m_commands.find(nonce) != m_commands.end())
     {
         m_busybee->set_timeout(-1);
         inner_loop(&rc);
     }
 
     reset_to_disconnected();
-    m_commands.clear();
-    m_commands.clear();
-    m_commands.clear();
     return REPLICANT_SUCCESS;
 }
 
 int64_t
-replicant :: loop(int timeout, replicant_returncode* status)
+replicant_client :: loop(int timeout, replicant_returncode* status)
 {
     while ((!m_commands.empty() || !m_resend.empty())
            && m_complete.empty())
@@ -246,22 +293,22 @@ replicant :: loop(int timeout, replicant_returncode* status)
         m_last_error_desc = c->last_error_desc();
         m_last_error_file = c->last_error_file();
         m_last_error_line = c->last_error_line();
-        m_last_error_host = c->sent_to();
+        m_last_error_host = c->sent_to().address;
         return c->clientid();
     }
 
     if (m_commands.empty())
     {
-        REPLSETERROR(REPLICANT_NONEPENDING, "no outstanding operations to process");
+        REPLSETERROR(REPLICANT_NONE_PENDING, "no outstanding operations to process");
         return -1;
     }
 
-    REPLSETERROR(REPLICANT_INTERNALERROR, "unhandled exit case from loop");
+    REPLSETERROR(REPLICANT_INTERNAL_ERROR, "unhandled exit case from loop");
     return -1;
 }
 
 int64_t
-replicant :: loop(int64_t id, int timeout, replicant_returncode* status)
+replicant_client :: loop(int64_t id, int timeout, replicant_returncode* status)
 {
     while (m_commands.find(id) != m_commands.end() ||
            m_resend.find(id) != m_resend.end())
@@ -282,7 +329,7 @@ replicant :: loop(int64_t id, int timeout, replicant_returncode* status)
 
     if (it == m_complete.end())
     {
-        REPLSETERROR(REPLICANT_NONEPENDING, "no outstanding operation with the specified id");
+        REPLSETERROR(REPLICANT_NONE_PENDING, "no outstanding operation with the specified id");
         return -1;
     }
 
@@ -291,12 +338,12 @@ replicant :: loop(int64_t id, int timeout, replicant_returncode* status)
     m_last_error_desc = c->last_error_desc();
     m_last_error_file = c->last_error_file();
     m_last_error_line = c->last_error_line();
-    m_last_error_host = c->sent_to();
+    m_last_error_host = c->sent_to().address;
     return c->clientid();
 }
 
 int64_t
-replicant :: inner_loop(replicant_returncode* status)
+replicant_client :: inner_loop(replicant_returncode* status)
 {
     int64_t ret = maintain_connection(status);
 
@@ -308,7 +355,7 @@ replicant :: inner_loop(replicant_returncode* status)
     // Resend all those that need it
     while (!m_resend.empty())
     {
-        ret = send_to_any_chain_member(m_resend.begin()->second, status);
+        ret = send_to_preferred_chain_member(m_resend.begin()->second, status);
 
         // As this is a retransmission, we only care about errors (< 0)
         // not the success half (>=0).
@@ -321,18 +368,19 @@ replicant :: inner_loop(replicant_returncode* status)
     }
 
     // Receive a message
-    po6::net::location from;
+    uint64_t id;
     std::auto_ptr<e::buffer> msg;
-    busybee_returncode rc = m_busybee->recv(&from, &msg);
+    busybee_returncode rc = m_busybee->recv(&id, &msg);
+    chain_node node = m_config->get(id);
+    po6::net::location from = node.address;
 
     // And process it
     switch (rc)
     {
         case BUSYBEE_SUCCESS:
             break;
-        case BUSYBEE_DISCONNECT:
-        case BUSYBEE_CONNECTFAIL:
-            if ((ret = handle_disconnect(from, status)) < 0)
+        case BUSYBEE_DISRUPTED:
+            if ((ret = handle_disconnect(node, status)) < 0)
             {
                 return ret;
             }
@@ -340,14 +388,11 @@ replicant :: inner_loop(replicant_returncode* status)
         case BUSYBEE_TIMEOUT:
             REPLSETERROR(REPLICANT_TIMEOUT, "operation timed out");
             return -1;
-        BUSYBEE_ERROR(BUFFERFULL, BUFFERFULL);
-        BUSYBEE_ERROR(INTERNALERROR, SHUTDOWN);
-        BUSYBEE_ERROR(INTERNALERROR, QUEUED);
-        BUSYBEE_ERROR(INTERNALERROR, POLLFAILED);
-        BUSYBEE_ERROR(INTERNALERROR, ADDFDFAIL);
-        BUSYBEE_ERROR(INTERNALERROR, EXTERNAL);
+        BUSYBEE_ERROR(INTERNAL_ERROR, SHUTDOWN);
+        BUSYBEE_ERROR(INTERNAL_ERROR, POLLFAILED);
+        BUSYBEE_ERROR(INTERNAL_ERROR, ADDFDFAIL);
         default:
-            REPLSETERROR(REPLICANT_INTERNALERROR, "BusyBee returned unknown error");
+            REPLSETERROR(REPLICANT_INTERNAL_ERROR, "BusyBee returned unknown error");
             return -1;
     }
 
@@ -357,7 +402,7 @@ replicant :: inner_loop(replicant_returncode* status)
 
     if (up.error())
     {
-        REPLSETERROR(REPLICANT_MISBEHAVINGSERVER, "unpack failed");
+        REPLSETERROR(REPLICANT_MISBEHAVING_SERVER, "unpack failed");
         m_last_error_host = from;
         return -1;
     }
@@ -370,43 +415,30 @@ replicant :: inner_loop(replicant_returncode* status)
                 return ret;
             }
             break;
-        case REPLNET_COMMAND_RESEND:
-            if ((ret = handle_command_resend(from, msg, up, status)) < 0)
-            {
-                return ret;
-            }
-            break;
         case REPLNET_INFORM:
             if ((ret = handle_inform(from, msg, up, status)) < 0)
             {
                 return ret;
             }
             break;
-        case REPLNET_IDENTIFIED:
-            if ((ret = handle_identified(from, msg, up, status)) < 0)
-            {
-                return ret;
-            }
-            break;
         REPL_UNEXPECTED(NOP);
+        REPL_UNEXPECTED(BOOTSTRAP);
         REPL_UNEXPECTED(JOIN);
-        REPL_UNEXPECTED(BECOME_SPARE);
-        REPL_UNEXPECTED(BECOME_STANDBY);
-        REPL_UNEXPECTED(BECOME_MEMBER);
         REPL_UNEXPECTED(CONFIG_PROPOSE);
         REPL_UNEXPECTED(CONFIG_ACCEPT);
         REPL_UNEXPECTED(CONFIG_REJECT);
-        REPL_UNEXPECTED(IDENTIFY);
-        REPL_UNEXPECTED(CLIENT_LIST);
+        REPL_UNEXPECTED(CLIENT_REGISTER);
+        REPL_UNEXPECTED(CLIENT_DISCONNECT);
         REPL_UNEXPECTED(COMMAND_SUBMIT);
         REPL_UNEXPECTED(COMMAND_ISSUE);
         REPL_UNEXPECTED(COMMAND_ACK);
-        REPL_UNEXPECTED(REQ_STATE);
-        REPL_UNEXPECTED(RESP_STATE);
-        REPL_UNEXPECTED(SNAPSHOT);
-        REPL_UNEXPECTED(HEALED);
+        REPL_UNEXPECTED(HEAL_REQ);
+        REPL_UNEXPECTED(HEAL_RESP);
+        REPL_UNEXPECTED(HEAL_DONE);
+        REPL_UNEXPECTED(PING);
+        REPL_UNEXPECTED(PONG);
         default:
-            REPLSETERROR(REPLICANT_MISBEHAVINGSERVER, "invalid message type");
+            REPLSETERROR(REPLICANT_MISBEHAVING_SERVER, "invalid message type");
             m_last_error_host = from;
             return -1;
     }
@@ -415,7 +447,7 @@ replicant :: inner_loop(replicant_returncode* status)
 }
 
 int64_t
-replicant :: maintain_connection(replicant_returncode* status)
+replicant_client :: maintain_connection(replicant_returncode* status)
 {
     while (true)
     {
@@ -424,13 +456,7 @@ replicant :: maintain_connection(replicant_returncode* status)
         switch (m_state)
         {
             case REPLCL_DISCONNECTED:
-                if ((ret = send_join_message(status)) < 0)
-                {
-                    return ret;
-                }
-                break;
-            case REPLCL_JOIN_SENT:
-                if ((ret = wait_for_bootstrap(status)) < 0)
+                if ((ret = perform_bootstrap(status)) < 0)
                 {
                     return ret;
                 }
@@ -447,151 +473,59 @@ replicant :: maintain_connection(replicant_returncode* status)
                     return ret;
                 }
                 break;
-            case REPLCL_PARTIALLY_CONNECTED:
-                if ((ret = send_identify_messages(status)) < 0)
-                {
-                    return ret;
-                }
-                return 0;
-            case REPLCL_CONNECTED:
-            case REPLCL_DISCONNECT_SENT:
+            case REPLCL_REGISTERED:
                 return 0;
             default:
-                REPLSETERROR(REPLICANT_INTERNALERROR, "client corrupted");
+                REPLSETERROR(REPLICANT_INTERNAL_ERROR, "client corrupted");
                 return -1;
         }
     }
 }
 
 int64_t
-replicant :: send_join_message(replicant_returncode* status)
+replicant_client :: perform_bootstrap(replicant_returncode* status)
 {
     m_token = generate_token();
-    po6::net::location host = m_bootstrap.lookup(SOCK_STREAM, IPPROTO_TCP);
-    size_t sz = BUSYBEE_HEADER_SIZE + pack_size(REPLNET_JOIN);
-    std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
-    msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_JOIN;
-    int64_t ret = send_preconnect_message(host, msg, status);
+    m_busybee->set_id(m_token);
+    configuration initial;
+    replicant::bootstrap_returncode rc = replicant::bootstrap(m_bootstrap, &initial);
 
-    if (ret >= 0)
+    switch (rc)
     {
-        m_state = REPLCL_JOIN_SENT;
-    }
-
-    return ret;
-}
-
-int64_t
-replicant :: wait_for_bootstrap(replicant_returncode* status)
-{
-    while (true)
-    {
-        po6::net::location from;
-        std::auto_ptr<e::buffer> msg;
-        busybee_returncode rc = m_busybee->recv(&from, &msg);
-
-        switch (rc)
-        {
-            case BUSYBEE_SUCCESS:
-                break;
-            case BUSYBEE_TIMEOUT:
-                REPLSETERROR(REPLICANT_TIMEOUT, "operation timed out");
-                return -1;
-            BUSYBEE_ERROR_DISCONNECT(NEEDBOOTSTRAP, DISCONNECT);
-            BUSYBEE_ERROR_DISCONNECT(NEEDBOOTSTRAP, CONNECTFAIL);
-            BUSYBEE_ERROR_DISCONNECT(BUFFERFULL, BUFFERFULL);
-            BUSYBEE_ERROR_DISCONNECT(INTERNALERROR, SHUTDOWN);
-            BUSYBEE_ERROR_DISCONNECT(INTERNALERROR, QUEUED);
-            BUSYBEE_ERROR_DISCONNECT(INTERNALERROR, POLLFAILED);
-            BUSYBEE_ERROR_DISCONNECT(INTERNALERROR, ADDFDFAIL);
-            BUSYBEE_ERROR_DISCONNECT(INTERNALERROR, EXTERNAL);
-            default:
-                REPLSETERROR(REPLICANT_INTERNALERROR, "BusyBee returned unknown error");
-                reset_to_disconnected();
-                return -1;
-        }
-
-        e::buffer::unpacker up = msg->unpack_from(BUSYBEE_HEADER_SIZE);
-        replicant_network_msgtype mt;
-        up = up >> mt;
-
-        if (up.error())
-        {
-            REPLSETERROR(REPLICANT_MISBEHAVINGSERVER, "unpack failed");
-            m_last_error_host = from;
+        case replicant::BOOTSTRAP_SUCCESS:
+            m_state = REPLCL_BOOTSTRAPPED;
+            *m_config = initial;
+            return 0;
+        case replicant::BOOTSTRAP_SEE_ERRNO:
+        case replicant::BOOTSTRAP_COMM_FAIL:
+        case replicant::BOOTSTRAP_TIMEOUT:
+            REPLSETERROR(REPLICANT_NEED_BOOTSTRAP, "cannot connect to the cluster");
             reset_to_disconnected();
             return -1;
-        }
-
-        switch (mt)
-        {
-            case REPLNET_INFORM:
-                break;
-            case REPLNET_COMMAND_RESPONSE:
-                // throw it away because we aren't yet connected, so it's a
-                // remnant from a previous time.
-                continue;
-            REPL_UNEXPECTED_DISCONNECT(NOP);
-            REPL_UNEXPECTED_DISCONNECT(JOIN);
-            REPL_UNEXPECTED_DISCONNECT(BECOME_SPARE);
-            REPL_UNEXPECTED_DISCONNECT(BECOME_STANDBY);
-            REPL_UNEXPECTED_DISCONNECT(BECOME_MEMBER);
-            REPL_UNEXPECTED_DISCONNECT(CONFIG_PROPOSE);
-            REPL_UNEXPECTED_DISCONNECT(CONFIG_ACCEPT);
-            REPL_UNEXPECTED_DISCONNECT(CONFIG_REJECT);
-            REPL_UNEXPECTED_DISCONNECT(IDENTIFY);
-            REPL_UNEXPECTED_DISCONNECT(IDENTIFIED);
-            REPL_UNEXPECTED_DISCONNECT(CLIENT_LIST);
-            REPL_UNEXPECTED_DISCONNECT(COMMAND_SUBMIT);
-            REPL_UNEXPECTED_DISCONNECT(COMMAND_ISSUE);
-            REPL_UNEXPECTED_DISCONNECT(COMMAND_ACK);
-            REPL_UNEXPECTED_DISCONNECT(COMMAND_RESEND);
-            REPL_UNEXPECTED_DISCONNECT(REQ_STATE);
-            REPL_UNEXPECTED_DISCONNECT(RESP_STATE);
-            REPL_UNEXPECTED_DISCONNECT(SNAPSHOT);
-            REPL_UNEXPECTED_DISCONNECT(HEALED);
-            default:
-                REPLSETERROR(REPLICANT_MISBEHAVINGSERVER, "invalid message type");
-                m_last_error_host = from;
-                reset_to_disconnected();
-                return -1;
-        }
-
-        configuration newconfig;
-        up = up >> newconfig;
-
-        if (up.error())
-        {
-            REPLSETERROR(REPLICANT_MISBEHAVINGSERVER, "unpack of INFORM failed");
-            m_last_error_host = from;
+        case replicant::BOOTSTRAP_CORRUPT_INFORM:
+            REPLSETERROR(REPLICANT_MISBEHAVING_SERVER, "server sent corrupt INFORM message");
             reset_to_disconnected();
             return -1;
-        }
-
-        if (m_config->version() < newconfig.version())
-        {
-            *m_config = newconfig;
-        }
-
-        m_state = REPLCL_BOOTSTRAPPED;
-        return 0;
+        case replicant::BOOTSTRAP_NOT_CLUSTER_MEMBER:
+            REPLSETERROR(REPLICANT_MISBEHAVING_SERVER, "server sent INFORM message, but it is not a cluster member");
+            reset_to_disconnected();
+            return -1;
+        default:
+            REPLSETERROR(REPLICANT_INTERNAL_ERROR, "bootstrap failed for unknown reasons");
+            reset_to_disconnected();
+            return -1;
     }
 }
 
 int64_t
-replicant :: send_token_registration(replicant_returncode* status)
+replicant_client :: send_token_registration(replicant_returncode* status)
 {
-    po6::net::location host(m_config->head().receiver());
     size_t sz = BUSYBEE_HEADER_SIZE
-              + pack_size(REPLNET_COMMAND_SUBMIT)
-              + sizeof(uint64_t) * 4;
+              + pack_size(REPLNET_CLIENT_REGISTER)
+              + sizeof(uint64_t);
     std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
-    uint64_t nonce = m_nonce;
-    ++m_nonce;
-    msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_COMMAND_SUBMIT
-                                      << m_token << nonce
-                                      << uint64_t(0) << uint64_t(OBJECT_CLIENTS);
-    int64_t ret = send_preconnect_message(host, msg, status);
+    msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_CLIENT_REGISTER << m_token;
+    int64_t ret = send_to_chain_head(msg, status);
 
     if (ret >= 0)
     {
@@ -602,13 +536,13 @@ replicant :: send_token_registration(replicant_returncode* status)
 }
 
 int64_t
-replicant :: wait_for_token_registration(replicant_returncode* status)
+replicant_client :: wait_for_token_registration(replicant_returncode* status)
 {
     while (true)
     {
-        po6::net::location from;
+        uint64_t token;
         std::auto_ptr<e::buffer> msg;
-        busybee_returncode rc = m_busybee->recv(&from, &msg);
+        busybee_returncode rc = m_busybee->recv(&token, &msg);
 
         switch (rc)
         {
@@ -617,18 +551,24 @@ replicant :: wait_for_token_registration(replicant_returncode* status)
             case BUSYBEE_TIMEOUT:
                 REPLSETERROR(REPLICANT_TIMEOUT, "operation timed out");
                 return -1;
-            BUSYBEE_ERROR_DISCONNECT(NEEDBOOTSTRAP, DISCONNECT);
-            BUSYBEE_ERROR_DISCONNECT(NEEDBOOTSTRAP, CONNECTFAIL);
-            BUSYBEE_ERROR_DISCONNECT(BUFFERFULL, BUFFERFULL);
-            BUSYBEE_ERROR_DISCONNECT(INTERNALERROR, SHUTDOWN);
-            BUSYBEE_ERROR_DISCONNECT(INTERNALERROR, QUEUED);
-            BUSYBEE_ERROR_DISCONNECT(INTERNALERROR, POLLFAILED);
-            BUSYBEE_ERROR_DISCONNECT(INTERNALERROR, ADDFDFAIL);
-            BUSYBEE_ERROR_DISCONNECT(INTERNALERROR, EXTERNAL);
+            BUSYBEE_ERROR_DISCONNECT(NEED_BOOTSTRAP, DISRUPTED);
+            BUSYBEE_ERROR_DISCONNECT(INTERNAL_ERROR, SHUTDOWN);
+            BUSYBEE_ERROR_DISCONNECT(INTERNAL_ERROR, POLLFAILED);
+            BUSYBEE_ERROR_DISCONNECT(INTERNAL_ERROR, ADDFDFAIL);
             default:
-                REPLSETERROR(REPLICANT_INTERNALERROR, "BusyBee returned unknown error");
+                REPLSETERROR(REPLICANT_INTERNAL_ERROR, "BusyBee returned unknown error");
                 reset_to_disconnected();
                 return -1;
+        }
+
+        po6::net::location from = m_config->head().address;
+
+        if (token != m_config->head().token)
+        {
+            REPLSETERROR(REPLICANT_MISBEHAVING_SERVER, "a node that is not the head replied to \"REGISTER\"");
+            m_last_error_host = from;
+            reset_to_disconnected();
+            return -1;
         }
 
         e::buffer::unpacker up = msg->unpack_from(BUSYBEE_HEADER_SIZE);
@@ -637,7 +577,7 @@ replicant :: wait_for_token_registration(replicant_returncode* status)
 
         if (up.error())
         {
-            REPLSETERROR(REPLICANT_MISBEHAVINGSERVER, "unpack failed");
+            REPLSETERROR(REPLICANT_MISBEHAVING_SERVER, "unpack failed");
             m_last_error_host = from;
             reset_to_disconnected();
             return -1;
@@ -648,51 +588,49 @@ replicant :: wait_for_token_registration(replicant_returncode* status)
             case REPLNET_COMMAND_RESPONSE:
                 break;
             REPL_UNEXPECTED_DISCONNECT(NOP);
+            REPL_UNEXPECTED_DISCONNECT(BOOTSTRAP);
             REPL_UNEXPECTED_DISCONNECT(JOIN);
             REPL_UNEXPECTED_DISCONNECT(INFORM);
-            REPL_UNEXPECTED_DISCONNECT(BECOME_SPARE);
-            REPL_UNEXPECTED_DISCONNECT(BECOME_STANDBY);
-            REPL_UNEXPECTED_DISCONNECT(BECOME_MEMBER);
             REPL_UNEXPECTED_DISCONNECT(CONFIG_PROPOSE);
             REPL_UNEXPECTED_DISCONNECT(CONFIG_ACCEPT);
             REPL_UNEXPECTED_DISCONNECT(CONFIG_REJECT);
-            REPL_UNEXPECTED_DISCONNECT(IDENTIFY);
-            REPL_UNEXPECTED_DISCONNECT(IDENTIFIED);
-            REPL_UNEXPECTED_DISCONNECT(CLIENT_LIST);
+            REPL_UNEXPECTED_DISCONNECT(CLIENT_REGISTER);
+            REPL_UNEXPECTED_DISCONNECT(CLIENT_DISCONNECT);
             REPL_UNEXPECTED_DISCONNECT(COMMAND_SUBMIT);
             REPL_UNEXPECTED_DISCONNECT(COMMAND_ISSUE);
             REPL_UNEXPECTED_DISCONNECT(COMMAND_ACK);
-            REPL_UNEXPECTED_DISCONNECT(COMMAND_RESEND);
-            REPL_UNEXPECTED_DISCONNECT(REQ_STATE);
-            REPL_UNEXPECTED_DISCONNECT(RESP_STATE);
-            REPL_UNEXPECTED_DISCONNECT(SNAPSHOT);
-            REPL_UNEXPECTED_DISCONNECT(HEALED);
+            REPL_UNEXPECTED_DISCONNECT(HEAL_REQ);
+            REPL_UNEXPECTED_DISCONNECT(HEAL_RESP);
+            REPL_UNEXPECTED_DISCONNECT(HEAL_DONE);
+            REPL_UNEXPECTED_DISCONNECT(PING);
+            REPL_UNEXPECTED_DISCONNECT(PONG);
             default:
-                REPLSETERROR(REPLICANT_MISBEHAVINGSERVER, "invalid message type");
+                REPLSETERROR(REPLICANT_MISBEHAVING_SERVER, "invalid message type");
                 m_last_error_host = from;
                 reset_to_disconnected();
                 return -1;
         }
 
-        uint8_t flags;
-        up = up >> flags;
+        uint64_t nonce;
+        replicant::response_returncode rrc;
+        up = up >> nonce >> rrc;
 
         if (up.error())
         {
-            REPLSETERROR(REPLICANT_MISBEHAVINGSERVER, "unpack of BOOTSTRAP failed");
+            REPLSETERROR(REPLICANT_MISBEHAVING_SERVER, "unpack of BOOTSTRAP failed");
             m_last_error_host = from;
             reset_to_disconnected();
             return -1;
         }
 
-        if (flags & 1)
+        if (rrc == replicant::RESPONSE_SUCCESS)
         {
-            m_state = REPLCL_PARTIALLY_CONNECTED;
+            m_state = REPLCL_REGISTERED;
             return 0;
         }
         else
         {
-            REPLSETERROR(REPLICANT_NEEDBOOTSTRAP, "could not register with the server");
+            REPLSETERROR(REPLICANT_NEED_BOOTSTRAP, "could not register with the server");
             reset_to_disconnected();
             return -1;
         }
@@ -700,208 +638,122 @@ replicant :: wait_for_token_registration(replicant_returncode* status)
 }
 
 int64_t
-replicant :: send_identify_messages(replicant_returncode* status)
+replicant_client :: handle_inform(const po6::net::location& from,
+                                  std::auto_ptr<e::buffer>,
+                                  e::buffer::unpacker up,
+                                  replicant_returncode* status)
 {
-    const chain_node* members = m_config->members_begin();
-    size_t members_sz = m_config->members_end() - m_config->members_begin();
-    assert(members_sz < 256);
-
-    for (size_t i = 0; i < members_sz; ++i)
-    {
-        uint8_t byte = i / 8;
-        uint8_t bit = 1 << (i & 7U);
-
-        if (!(m_identify_sent[byte] & bit))
-        {
-            po6::net::location host(members[i].receiver());
-            size_t sz = BUSYBEE_HEADER_SIZE + pack_size(REPLNET_IDENTIFY) + sizeof(uint64_t);
-            std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
-            msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_IDENTIFY << m_token;
-
-            switch (m_busybee->send(host, msg))
-            {
-                case BUSYBEE_SUCCESS:
-                case BUSYBEE_QUEUED:
-                    break;
-                case BUSYBEE_TIMEOUT:
-                    REPLSETERROR(REPLICANT_TIMEOUT, "operation timed out");
-                    return -1;
-                BUSYBEE_ERROR_CONTINUE(NEEDBOOTSTRAP, DISCONNECT);
-                BUSYBEE_ERROR_CONTINUE(NEEDBOOTSTRAP, CONNECTFAIL);
-                BUSYBEE_ERROR_CONTINUE(BUFFERFULL, BUFFERFULL);
-                BUSYBEE_ERROR(INTERNALERROR, SHUTDOWN);
-                BUSYBEE_ERROR(INTERNALERROR, POLLFAILED);
-                BUSYBEE_ERROR(INTERNALERROR, ADDFDFAIL);
-                BUSYBEE_ERROR(INTERNALERROR, EXTERNAL);
-                default:
-                    REPLSETERROR(REPLICANT_INTERNALERROR, "BusyBee returned unknown error");
-                    m_last_error_host = host;
-                    return -1;
-            }
-
-            m_identify_sent[byte] |= bit;
-        }
-    }
-
-    return 0;
-}
-
-int64_t
-replicant :: handle_inform(const po6::net::location& from,
-                           std::auto_ptr<e::buffer>,
-                           e::buffer::unpacker up,
-                           replicant_returncode* status)
-{
-    configuration newconfig;
-    up = up >> newconfig;
+    configuration new_config;
+    up = up >> new_config;
 
     if (up.error())
     {
-        REPLSETERROR(REPLICANT_MISBEHAVINGSERVER, "unpack of INFORM failed");
+        REPLSETERROR(REPLICANT_MISBEHAVING_SERVER, "unpack of INFORM failed");
         m_last_error_host = from;
         return -1;
     }
 
-    if (m_config->version() < newconfig.version())
+    if (!new_config.validate())
     {
-        uint8_t identify_sent[32];
-        uint8_t identify_recv[32];
+        REPLSETERROR(REPLICANT_MISBEHAVING_SERVER, "INFORM message contains invalid configuration");
+        m_last_error_host = from;
+        return -1;
+    }
 
-        // Clear them
-        for (size_t i = 0; i < 32; ++i)
-        {
-            identify_sent[i] = 0;
-            identify_recv[i] = 0;
-        }
+    if (m_config->version() < new_config.version())
+    {
+        *m_config = new_config;
+    }
 
-        const chain_node* members = newconfig.members_begin();
-        size_t members_sz = newconfig.members_end() - newconfig.members_begin();
-        assert(members_sz < 256);
+    return 0;
+}
 
-        // Keep track of sent/recv bits for known chain_nodes
-        for (size_t i = 0; i < members_sz; ++i)
-        {
-            uint8_t byte = i / 8;
-            uint8_t bit = 1 << (i & 7U);
+int64_t
+replicant_client :: send_to_chain_head(std::auto_ptr<e::buffer> msg,
+                                       replicant_returncode* status)
+{
+    int64_t ret = -1;
+    m_busybee_mapper->set(m_config->head());
+    busybee_returncode rc = m_busybee->send(m_config->head().token, msg);
 
-            const chain_node* oldmembers = m_config->members_begin();
-            size_t oldmembers_sz = m_config->members_end() - m_config->members_begin();
-            assert(oldmembers_sz < 256);
-
-            for (size_t j = 0; j < oldmembers_sz; ++j)
+    switch (rc)
+    {
+        case BUSYBEE_SUCCESS:
+            return 0;
+        case BUSYBEE_DISRUPTED:
+            if ((ret = handle_disconnect(m_config->head(), status)) < 0)
             {
-                if (oldmembers[j] == members[i])
-                {
-                    uint8_t oldbyte = j / 8;
-                    uint8_t oldbit = 1 << (j & 7U);
-
-                    if ((m_identify_sent[oldbyte] & oldbit))
-                    {
-                        identify_sent[byte] |= bit;
-                    }
-                    if ((m_identify_recv[oldbyte] & oldbit))
-                    {
-                        identify_recv[byte] |= bit;
-                    }
-                }
+                return ret;
             }
-        }
-
-        // Move it all
-        *m_config = newconfig;
-
-        for (size_t i = 0; i < 32; ++i)
-        {
-            m_identify_sent[i] = identify_sent[i];
-            m_identify_recv[i] = identify_recv[i];
-        }
-
-        // Just bump it
-        if (m_state == REPLCL_CONNECTED)
-        {
-            m_state = REPLCL_PARTIALLY_CONNECTED;
-        }
+            return -1;
+        case BUSYBEE_TIMEOUT:
+            REPLSETERROR(REPLICANT_TIMEOUT, "operation timed out");
+            return -1;
+        BUSYBEE_ERROR(INTERNAL_ERROR, SHUTDOWN);
+        BUSYBEE_ERROR(INTERNAL_ERROR, POLLFAILED);
+        BUSYBEE_ERROR(INTERNAL_ERROR, ADDFDFAIL);
+        default:
+            REPLSETERROR(REPLICANT_INTERNAL_ERROR, "BusyBee returned unknown error");
+            return -1;
     }
-
-    return 0;
 }
 
 int64_t
-replicant :: handle_identified(const po6::net::location& from,
-                               std::auto_ptr<e::buffer>,
-                               e::buffer::unpacker,
-                               replicant_returncode*)
+replicant_client :: send_to_preferred_chain_member(e::intrusive_ptr<command> cmd,
+                                                   replicant_returncode* status)
 {
-    const chain_node* members = m_config->members_begin();
-    size_t members_sz = m_config->members_end() - m_config->members_begin();
-    assert(members_sz < 256);
-    size_t connected = 0;
+    int64_t ret = -1;
+    bool sent = false;
+    const chain_node* sent_to = NULL;
 
-    for (size_t i = 0; i < members_sz; ++i)
+    for (const chain_node* n = m_config->members_begin();
+            !sent && n != m_config->members_end(); ++n)
     {
-        uint8_t byte = i / 8;
-        uint8_t bit = 1 << (i & 7U);
+        sent_to = n;
+        std::auto_ptr<e::buffer> msg(cmd->request()->copy());
+        m_busybee_mapper->set(*n);
+        busybee_returncode rc = m_busybee->send(n->token, msg);
 
-        if (members[i].receiver() == from && (m_identify_sent[byte] & bit))
+        switch (rc)
         {
-            m_identify_recv[byte] |= bit;
-        }
-
-        if ((m_identify_recv[byte] & bit))
-        {
-            ++connected;
+            case BUSYBEE_SUCCESS:
+                sent = true;
+                break;
+            case BUSYBEE_DISRUPTED:
+                if ((ret = handle_disconnect(*n, status)) < 0)
+                {
+                    return ret;
+                }
+                continue;
+            case BUSYBEE_TIMEOUT:
+                REPLSETERROR(REPLICANT_TIMEOUT, "operation timed out");
+                return -1;
+            BUSYBEE_ERROR_CONTINUE(INTERNAL_ERROR, SHUTDOWN);
+            BUSYBEE_ERROR_CONTINUE(INTERNAL_ERROR, POLLFAILED);
+            BUSYBEE_ERROR_CONTINUE(INTERNAL_ERROR, ADDFDFAIL);
+            default:
+                REPLSETERROR(REPLICANT_INTERNAL_ERROR, "BusyBee returned unknown error");
+                continue;
         }
     }
 
-    if (connected == members_sz)
+    if (sent)
     {
-        m_state = REPLCL_CONNECTED;
+        cmd->set_sent_to(*sent_to);
+        m_commands[cmd->nonce()] = cmd;
+        return cmd->clientid();
     }
-
-    return 0;
+    else
+    {
+        // We have an error captured by REPLSETERROR above.
+        return -1;
+    }
 }
 
 int64_t
-replicant :: handle_disconnect(const po6::net::location& from,
-                               replicant_returncode* status)
+replicant_client :: handle_disconnect(const chain_node& from,
+                                      replicant_returncode*)
 {
-    // Mark the server as not identified
-    const chain_node* members = m_config->members_begin();
-    size_t members_sz = m_config->members_end() - m_config->members_begin();
-    assert(members_sz < 256);
-    size_t connected = 0;
-    bool removed = false;
-
-    for (size_t i = 0; i < members_sz; ++i)
-    {
-        uint8_t byte = i / 8;
-        uint8_t bit = 1 << (i & 7U);
-
-        if (members[i].receiver() == from)
-        {
-            m_identify_sent[byte] &= ~bit;
-            m_identify_recv[byte] &= ~bit;
-            removed = true;
-        }
-
-        if ((m_identify_recv[byte] & bit))
-        {
-            ++connected;
-        }
-    }
-
-    if (removed && m_state == REPLCL_CONNECTED)
-    {
-        m_state = REPLCL_PARTIALLY_CONNECTED;
-    }
-
-    if (connected == 0)
-    {
-        REPLSETERROR(REPLICANT_NEEDBOOTSTRAP, "lost connection with all servers");
-        reset_to_disconnected();
-        return 0;
-    }
-
     for (command_map::iterator it = m_commands.begin(); it != m_commands.end(); )
     {
         e::intrusive_ptr<command> c = it->second;
@@ -922,102 +774,19 @@ replicant :: handle_disconnect(const po6::net::location& from,
 }
 
 int64_t
-replicant :: send_preconnect_message(const po6::net::location& host,
-                                     std::auto_ptr<e::buffer> msg,
-                                     replicant_returncode* status)
-{
-    switch (m_busybee->send(host, msg))
-    {
-        case BUSYBEE_SUCCESS:
-        case BUSYBEE_QUEUED:
-            return 0;
-        case BUSYBEE_TIMEOUT:
-            REPLSETERROR(REPLICANT_TIMEOUT, "operation timed out");
-            return -1;
-        BUSYBEE_ERROR_DISCONNECT(NEEDBOOTSTRAP, DISCONNECT);
-        BUSYBEE_ERROR_DISCONNECT(NEEDBOOTSTRAP, CONNECTFAIL);
-        BUSYBEE_ERROR_DISCONNECT(BUFFERFULL, BUFFERFULL);
-        BUSYBEE_ERROR_DISCONNECT(INTERNALERROR, SHUTDOWN);
-        BUSYBEE_ERROR_DISCONNECT(INTERNALERROR, POLLFAILED);
-        BUSYBEE_ERROR_DISCONNECT(INTERNALERROR, ADDFDFAIL);
-        BUSYBEE_ERROR_DISCONNECT(INTERNALERROR, EXTERNAL);
-        default:
-            REPLSETERROR(REPLICANT_INTERNALERROR, "BusyBee returned unknown error");
-            m_last_error_host = host;
-            reset_to_disconnected();
-            return -1;
-    }
-}
-
-int64_t
-replicant :: send_to_any_chain_member(e::intrusive_ptr<command> cmd,
-                                      replicant_returncode* status)
-{
-    int64_t ret = -1;
-    bool sent = false;
-    po6::net::location host;
-
-    for (const chain_node* n = m_config->members_begin();
-            !sent && n != m_config->members_end(); ++n)
-    {
-        host = n->receiver();
-        std::auto_ptr<e::buffer> msg(cmd->request()->copy());
-        busybee_returncode rc = m_busybee->send(host, msg);
-
-        switch (rc)
-        {
-            case BUSYBEE_SUCCESS:
-            case BUSYBEE_QUEUED:
-                sent = true;
-                break;
-            case BUSYBEE_DISCONNECT:
-            case BUSYBEE_CONNECTFAIL:
-                if ((ret = handle_disconnect(host, status)) < 0)
-                {
-                    return ret;
-                }
-                continue;
-            case BUSYBEE_TIMEOUT:
-                REPLSETERROR(REPLICANT_TIMEOUT, "operation timed out");
-                return -1;
-            BUSYBEE_ERROR_CONTINUE(BUFFERFULL, BUFFERFULL);
-            BUSYBEE_ERROR_CONTINUE(INTERNALERROR, SHUTDOWN);
-            BUSYBEE_ERROR_CONTINUE(INTERNALERROR, POLLFAILED);
-            BUSYBEE_ERROR_CONTINUE(INTERNALERROR, ADDFDFAIL);
-            BUSYBEE_ERROR_CONTINUE(INTERNALERROR, EXTERNAL);
-            default:
-                REPLSETERROR(REPLICANT_INTERNALERROR, "BusyBee returned unknown error");
-                continue;
-        }
-    }
-
-    if (sent)
-    {
-        cmd->set_sent_to(host);
-        m_commands[cmd->nonce()] = cmd;
-        return cmd->clientid();
-    }
-    else
-    {
-        // We have an error captured by REPLSETERROR above.
-        return -1;
-    }
-}
-
-int64_t
-replicant :: handle_command_response(const po6::net::location& from,
-                                     std::auto_ptr<e::buffer> msg,
-                                     e::buffer::unpacker up,
-                                     replicant_returncode* status)
+replicant_client :: handle_command_response(const po6::net::location& from,
+                                            std::auto_ptr<e::buffer> msg,
+                                            e::buffer::unpacker up,
+                                            replicant_returncode* status)
 {
     // Parse the command response
     uint64_t nonce;
-    uint8_t flag;
-    up = up >> nonce >> flag;
+    replicant::response_returncode rc;
+    up = up >> nonce >> rc;
 
     if (up.error())
     {
-        REPLSETERROR(REPLICANT_MISBEHAVINGSERVER, "unpack failed");
+        REPLSETERROR(REPLICANT_MISBEHAVING_SERVER, "unpack failed");
         m_last_error_host = from;
         return -1;
     }
@@ -1027,7 +796,7 @@ replicant :: handle_command_response(const po6::net::location& from,
 
     if (it == m_commands.end())
     {
-        REPLSETERROR(REPLICANT_INTERNALERROR, "this should not happen");
+        REPLSETERROR(REPLICANT_INTERNAL_ERROR, "this should not happen");
         return 0;
     }
 
@@ -1035,16 +804,89 @@ replicant :: handle_command_response(const po6::net::location& from,
     e::intrusive_ptr<command> c = it->second;
     REPLSETSUCCESS;
 
-    if (flag)
+    switch (rc)
     {
-        c->succeed(msg, up.as_slice(), REPLICANT_SUCCESS);
-    }
-    else
-    {
-        c->fail(REPLICANT_BADCALL);
-        m_last_error_desc = "there is no such object/function pair";
-        m_last_error_file = __FILE__;
-        m_last_error_line = __LINE__;
+        case replicant::RESPONSE_SUCCESS:
+            c->succeed(msg, up.as_slice(), REPLICANT_SUCCESS);
+            break;
+        case replicant::RESPONSE_REGISTRATION_FAIL:
+            c->fail(REPLICANT_MISBEHAVING_SERVER);
+            m_last_error_desc = "server treated request as a registration";
+            m_last_error_file = __FILE__;
+            m_last_error_line = __LINE__;
+            break;
+        case replicant::RESPONSE_OBJ_EXIST:
+            c->fail(REPLICANT_OBJ_EXIST);
+            m_last_error_desc = "object already exists";
+            m_last_error_file = __FILE__;
+            m_last_error_line = __LINE__;
+            break;
+        case replicant::RESPONSE_OBJ_NOT_EXIST:
+            c->fail(REPLICANT_OBJ_NOT_FOUND);
+            m_last_error_desc = "object not found";
+            m_last_error_file = __FILE__;
+            m_last_error_line = __LINE__;
+            break;
+        case replicant::RESPONSE_SERVER_ERROR:
+            c->fail(REPLICANT_SERVER_ERROR);
+            m_last_error_desc = "server reports error; consult server logs for details";
+            m_last_error_file = __FILE__;
+            m_last_error_line = __LINE__;
+            break;
+        case replicant::RESPONSE_DLOPEN_FAIL:
+            c->fail(REPLICANT_BAD_LIBRARY);
+            m_last_error_desc = "library cannot be loaded on the server";
+            m_last_error_file = __FILE__;
+            m_last_error_line = __LINE__;
+            break;
+        case replicant::RESPONSE_DLSYM_FAIL:
+            c->fail(REPLICANT_BAD_LIBRARY);
+            m_last_error_desc = "state machine not found in library";
+            m_last_error_file = __FILE__;
+            m_last_error_line = __LINE__;
+            break;
+        case replicant::RESPONSE_NO_CTOR:
+            c->fail(REPLICANT_BAD_LIBRARY);
+            m_last_error_desc = "state machine not doesn't contain a constructor";
+            m_last_error_file = __FILE__;
+            m_last_error_line = __LINE__;
+            break;
+        case replicant::RESPONSE_NO_RTOR:
+            c->fail(REPLICANT_BAD_LIBRARY);
+            m_last_error_desc = "state machine not doesn't contain a reconstructor";
+            m_last_error_file = __FILE__;
+            m_last_error_line = __LINE__;
+            break;
+        case replicant::RESPONSE_NO_DTOR:
+            c->fail(REPLICANT_BAD_LIBRARY);
+            m_last_error_desc = "state machine not doesn't contain a denstructor";
+            m_last_error_file = __FILE__;
+            m_last_error_line = __LINE__;
+            break;
+        case replicant::RESPONSE_NO_SNAP:
+            c->fail(REPLICANT_BAD_LIBRARY);
+            m_last_error_desc = "state machine not doesn't contain a snapshot function";
+            m_last_error_file = __FILE__;
+            m_last_error_line = __LINE__;
+            break;
+        case replicant::RESPONSE_NO_FUNC:
+            c->fail(REPLICANT_FUNC_NOT_FOUND);
+            m_last_error_desc = "state machine not doesn't contain the requested function";
+            m_last_error_file = __FILE__;
+            m_last_error_line = __LINE__;
+            break;
+        case replicant::RESPONSE_MALFORMED:
+            c->fail(REPLICANT_INTERNAL_ERROR);
+            m_last_error_desc = "server reports that request was malformed";
+            m_last_error_file = __FILE__;
+            m_last_error_line = __LINE__;
+            break;
+        default:
+            c->fail(REPLICANT_MISBEHAVING_SERVER);
+            m_last_error_desc = "unknown response code";
+            m_last_error_file = __FILE__;
+            m_last_error_line = __LINE__;
+            break;
     }
 
     c->set_last_error_desc(m_last_error_desc);
@@ -1055,55 +897,8 @@ replicant :: handle_command_response(const po6::net::location& from,
     return 0;
 }
 
-int64_t
-replicant :: handle_command_resend(const po6::net::location& from,
-                                   std::auto_ptr<e::buffer>,
-                                   e::buffer::unpacker up,
-                                   replicant_returncode* status)
-{
-    // Parse the command response
-    uint64_t client;
-    uint64_t nonce;
-    up = up >> client >> nonce;
-
-    if (up.error())
-    {
-        REPLSETERROR(REPLICANT_MISBEHAVINGSERVER, "unpack failed");
-        m_last_error_host = from;
-        return -1;
-    }
-
-    // Find the command
-    command_map::iterator it = m_commands.find(nonce);
-
-    if (it == m_commands.end())
-    {
-        REPLSETERROR(REPLICANT_INTERNALERROR, "this should not happen");
-        return 0;
-    }
-
-    if (client != m_token)
-    {
-        REPLSETERROR(REPLICANT_INTERNALERROR, "this should not happen");
-        return 0;
-    }
-
-    // Compute the changed parts of the request
-    nonce = m_nonce;
-    ++m_nonce;
-    uint64_t garbage = compute_garbage();
-
-    // Resend the request
-    e::intrusive_ptr<command> c = it->second;
-    c->request()->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_COMMAND_SUBMIT << m_token << nonce << garbage;
-    c->set_nonce(nonce);
-    m_commands.erase(it);
-    send_to_any_chain_member(c, status);
-    return 0;
-}
-
 uint64_t
-replicant :: generate_token()
+replicant_client :: generate_token()
 {
     try
     {
@@ -1129,37 +924,20 @@ replicant :: generate_token()
     }
 }
 
-uint64_t
-replicant :: compute_garbage()
-{
-    uint64_t garbage = m_nonce;
-
-    if (!m_commands.empty())
-    {
-        garbage = std::min(garbage, m_commands.begin()->first);
-    }
-
-    if (!m_resend.empty())
-    {
-        garbage = std::min(garbage, m_resend.begin()->first);
-    }
-
-    return garbage;
-}
-
 void
-replicant :: reset_to_disconnected()
+replicant_client :: reset_to_disconnected()
 {
-    m_busybee.reset(new busybee_st());
+    m_busybee_mapper.reset(new replicant::mapper());
+    m_busybee.reset(new busybee_st(m_busybee_mapper.get(), 0));
     m_config.reset(new configuration());
-    m_token = 0;
+    m_token = 0x4141414141414141ULL;
     // leave m_nonce
     m_state = REPLCL_DISCONNECTED;
 
     while (!m_commands.empty())
     {
         e::intrusive_ptr<command> cmd = m_commands.begin()->second;
-        cmd->fail(REPLICANT_NEEDBOOTSTRAP);
+        cmd->fail(REPLICANT_NEED_BOOTSTRAP);
         cmd->set_last_error_desc(m_last_error_desc);
         cmd->set_last_error_file(m_last_error_file);
         cmd->set_last_error_line(m_last_error_line);
@@ -1170,19 +948,12 @@ replicant :: reset_to_disconnected()
     while (!m_resend.empty())
     {
         e::intrusive_ptr<command> cmd = m_commands.begin()->second;
-        cmd->fail(REPLICANT_NEEDBOOTSTRAP);
+        cmd->fail(REPLICANT_NEED_BOOTSTRAP);
         cmd->set_last_error_desc(m_last_error_desc);
         cmd->set_last_error_file(m_last_error_file);
         cmd->set_last_error_line(m_last_error_line);
         m_complete.insert(*m_resend.begin());
         m_resend.erase(m_resend.begin());
-    }
-
-    // clear the bits for identify
-    for (size_t i = 0; i < 32; ++i)
-    {
-        m_identify_sent[i] = 0;
-        m_identify_recv[i] = 0;
     }
 
     // Don't touch the error items
@@ -1194,13 +965,16 @@ operator << (std::ostream& lhs, replicant_returncode rhs)
     switch (rhs)
     {
         stringify(REPLICANT_SUCCESS);
-        stringify(REPLICANT_BADCALL);
+        stringify(REPLICANT_FUNC_NOT_FOUND);
+        stringify(REPLICANT_OBJ_EXIST);
+        stringify(REPLICANT_OBJ_NOT_FOUND);
+        stringify(REPLICANT_SERVER_ERROR);
+        stringify(REPLICANT_BAD_LIBRARY);
         stringify(REPLICANT_TIMEOUT);
-        stringify(REPLICANT_NEEDBOOTSTRAP);
-        stringify(REPLICANT_BUFFERFULL);
-        stringify(REPLICANT_MISBEHAVINGSERVER);
-        stringify(REPLICANT_INTERNALERROR);
-        stringify(REPLICANT_NONEPENDING);
+        stringify(REPLICANT_NEED_BOOTSTRAP);
+        stringify(REPLICANT_MISBEHAVING_SERVER);
+        stringify(REPLICANT_INTERNAL_ERROR);
+        stringify(REPLICANT_NONE_PENDING);
         stringify(REPLICANT_GARBAGE);
         default:
             lhs << "unknown returncode (" << static_cast<unsigned int>(rhs) << ")";

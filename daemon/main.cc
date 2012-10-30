@@ -147,7 +147,7 @@ main(int argc, const char* argv[])
 
     try
     {
-        replicant_daemon d(_listen_ip, _listen_port, 0);
+        replicant_daemon d(po6::net::location(_listen_ip, _listen_port));
 
         if (_connect_host)
         {

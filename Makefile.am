@@ -24,31 +24,36 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+ACLOCAL_AMFLAGS = -I m4 ${ACLOCAL_FLAGS}
 AM_CXXFLAGS = $(PO6_CFLAGS) $(E_CFLAGS) $(BUSYBEE_CFLAGS)
 AM_LDFLAGS = $(PO6_LDFLAGS) $(E_LDFLAGS) $(BUSYBEE_LDFLAGS)
 
-lib_LTLIBRARIES = libreplicant.la
+lib_LTLIBRARIES = libreplicant.la libreplicant-state-machine.la
 
 include_HEADERS = \
 			client/replicant.h \
 			daemon/replicant_state_machine.h
 
 noinst_HEADERS = \
+			common/bootstrap.h \
 			common/chain_node.h \
 			common/configuration.h \
 			common/macros.h \
+			common/mapper.h \
 			common/network_msgtype.h \
 			common/packing.h \
+			common/response_returncode.h \
 			common/special_objects.h \
 			client/command.h \
-			daemon/client_manager.h \
-			daemon/command.h \
-			daemon/command_manager.h \
 			daemon/configuration_manager.h \
+			daemon/connection.h \
 			daemon/daemon.h \
+			daemon/fact_store.h \
 			daemon/heal_next.h \
 			daemon/object_manager.h \
 			daemon/settings.h \
+			daemon/replicant_state_machine.h \
+			daemon/replicant_state_machine_context.h \
 			tools/common.h
 
 bin_PROGRAMS = replicant
@@ -56,51 +61,68 @@ bin_PROGRAMS = replicant
 replicantexecdir = $(exec_prefix)/libexec/$(PACKAGE)-$(VERSION)
 replicantexec_PROGRAMS = \
 			replicant-cli \
-			replicant-create-object \
-			replicant-daemon 
+			replicant-daemon \
+			replicant-new-object \
+			replicant-del-object
 
 replicant_SOURCES = replicant.cc
 			
 replicant_CPPFLAGS = \
 			-DREPLICANT_EXEC_DIR="\"$(replicantexecdir)\""
 
+libreplicant_state_machine_la_SOURCES = daemon/replicant_state_machine_context.cc
 replicant_daemon_SOURCES = \
+			common/bootstrap.cc \
 			common/chain_node.cc \
 			common/configuration.cc \
+			common/mapper.cc \
 			common/network_msgtype.cc \
 			common/packing.cc \
-			daemon/client_manager.cc \
-			daemon/command.cc \
-			daemon/command_manager.cc \
+			common/response_returncode.cc \
 			daemon/configuration_manager.cc \
+			daemon/connection.cc \
 			daemon/daemon.cc \
+			daemon/fact_store.cc \
+			daemon/failure_detector.cc \
+			daemon/failure_manager.cc \
 			daemon/heal_next.cc \
 			daemon/main.cc \
 			daemon/object_manager.cc \
 			daemon/settings.cc
-replicant_daemon_LDADD = -le -lbusybee-sta -lglog -lrt -ldl -lpthread
+replicant_daemon_LDADD = -le -lbusybee -lglog -lleveldb -lrt -ldl -lpthread libreplicant-state-machine.la
+replicant_daemon_LDFLAGS = -no-install
 
-libreplicant_la_CXXFLAGS = \
-			$(CXXFLAGS) \
-			$(AM_CXXFLAGS)
-
-libreplicant_la_LDFLAGS = \
-			$(AM_LDFLAGS)
-
+libreplicant_la_CXXFLAGS = $(CXXFLAGS) $(AM_CXXFLAGS)
 libreplicant_la_SOURCES = \
+			common/bootstrap.cc \
 			common/chain_node.cc \
 			common/configuration.cc \
+			common/mapper.cc \
 			common/network_msgtype.cc \
 			common/packing.cc \
+			common/response_returncode.cc \
 			client/command.cc \
 			client/replicant.cc
-libreplicant_la_LIBADD = -le -lbusybee-st -lrt
+libreplicant_la_LIBADD = -le -lbusybee -lrt
 
 replicant_cli_SOURCES = \
 			tools/cli.cc
 replicant_cli_LDADD = libreplicant.la
 
-replicant_create_object_SOURCES = \
-			tools/create-object.cc
-replicant_create_object_LDADD = libreplicant.la
+replicant_new_object_SOURCES = \
+			tools/new-object.cc
+replicant_new_object_LDADD = libreplicant.la
 
+replicant_del_object_SOURCES = \
+			tools/del-object.cc
+replicant_del_object_LDADD = libreplicant.la
+
+if ENABLE_EXAMPLES
+replicantexec_LTLIBRARIES = libreplicant-example-echo.la libreplicant-example-log.la libreplicant-example-nop.la
+libreplicant_example_echo_la_SOURCES = examples/echo.c
+libreplicant_example_echo_la_CPPFLAGS = -I$(abs_top_srcdir)/daemon/ $(CPPFLAGS)
+libreplicant_example_log_la_SOURCES = examples/log.c
+libreplicant_example_log_la_CPPFLAGS = -I$(abs_top_srcdir)/daemon/ $(CPPFLAGS)
+libreplicant_example_nop_la_SOURCES = examples/nop.c
+libreplicant_example_nop_la_CPPFLAGS = -I$(abs_top_srcdir)/daemon/ $(CPPFLAGS)
+endif

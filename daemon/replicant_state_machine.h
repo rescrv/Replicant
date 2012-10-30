@@ -37,42 +37,38 @@ extern "C"
 #include <stdint.h>
 #include <stdlib.h>
 
-struct replicant_state_machine_actions
-{
-    void* ctx;
-    uint64_t (*client)(void* ctx);
-    void (*log)(void* ctx, const char* msg);
-    int (*set_response)(void* ctx, const char* data, size_t data_sz);
-};
+struct replicant_state_machine_context;
 
-typedef void* (*replicant_ctor)(struct replicant_state_machine_actions* actions);
-typedef void* (*replicant_rtor)(struct replicant_state_machine_actions* actions,
-                                const char* data, size_t sz);
-typedef void (*replicant_dtor)(void*);
-typedef void (*replicant_snap)(struct replicant_state_machine_actions* actions,
-                               void*,
-                               char** data, size_t* sz);
-typedef void (*replicant_step)(struct replicant_state_machine_actions* actions,
-                               void* obj,
-                               const char* data,
-                               size_t data_sz);
+uint64_t
+replicant_state_machine_get_client(struct replicant_state_machine_context* ctx);
+void
+replicant_state_machine_log_error(struct replicant_state_machine_context* ctx,
+                                  const char* msg);
+void
+replicant_state_machine_set_response(struct replicant_state_machine_context* ctx,
+                                     const char* data, size_t data_sz);
 
 struct replicant_state_machine_step
 {
     const char* name;
-    replicant_step func;
+    void (*func)(struct replicant_state_machine_context* ctx, void* obj, const char* data, size_t data_sz);
 };
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-pedantic"
 
 struct replicant_state_machine
 {
-    replicant_ctor ctor;
-    replicant_rtor rtor;
-    replicant_dtor dtor;
-    replicant_snap snap;
+    void* (*ctor)(struct replicant_state_machine_context* ctx);
+    void* (*rtor)(struct replicant_state_machine_context* ctx, const char* data, size_t data_sz);
+    void (*dtor)(struct replicant_state_machine_context* ctx, void* obj);
+    void (*snap)(struct replicant_state_machine_context* ctx, void* obj, const char** data, size_t* data_sz);
     struct replicant_state_machine_step steps[];
 };
 
+#pragma GCC diagnostic pop
+
 #ifdef __cplusplus
-}
+} /* extern "C" */
 #endif /* __cplusplus */
 #endif /* replicant_state_machine_h_ */

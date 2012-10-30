@@ -25,83 +25,69 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
-#ifndef replicant_object_manager_h_
-#define replicant_object_manager_h_
+#ifndef replicant_daemon_object_manager_h_
+#define replicant_daemon_object_manager_h_
 
 // C
 #include <stdint.h>
 
 // STL
 #include <map>
+#include <set>
 
 // po6
-#include <po6/io/fd.h>
-#include <po6/pathname.h>
+#include <po6/threads/mutex.h>
 
 // e
 #include <e/intrusive_ptr.h>
+#include <e/slice.h>
 
 // Replicant
-#include "daemon/command.h"
-
-#include <tr1/memory>
-
-//PO6
-#include <po6/threads/thread.h>
+#include "common/response_returncode.h"
 
 class replicant_daemon;
+
+namespace replicant
+{
+
 class object_manager
 {
-    public:
-        class snapshot
-        {
-            public:
-                snapshot();
-                ~snapshot() throw ();
-
-            private:
-                friend class object_manager;
-
-            private:
-                std::vector<char*> m_backings;
-        };
-
     public:
         object_manager();
         ~object_manager() throw ();
 
     public:
-        bool exists(uint64_t object) const;
-        bool valid_path(const e::slice& pathstr) const;
-
-    public:
-        void apply(e::intrusive_ptr<command> cmd);
-        void append_cmd(e::intrusive_ptr<command> cmd);
-        bool create(uint64_t object, const e::slice& path, replicant_daemon* daemon);
-        bool restore(uint64_t object, const e::slice& path, const e::slice& snapshot);
-        void take_snapshot(snapshot* snap,
-                           std::vector<std::pair<uint64_t, std::pair<e::slice, e::slice> > >* objects);
+        void set_callback(replicant_daemon* d, void (replicant_daemon::*func)(uint64_t slot, uint64_t client, uint64_t nonce, response_returncode rc, const e::slice& data));
+        void enqueue(uint64_t slot, uint64_t object,
+                     uint64_t client, uint64_t nonce,
+                     const e::slice& data, std::string* backing);
 
     private:
+        class command;
         class object;
-        typedef std::map<uint64_t, e::intrusive_ptr<object> > object_map;
+        typedef std::map<uint64_t, e::intrusive_ptr<object> > object_map_t;
+        typedef std::set<e::intrusive_ptr<object> > object_set_t;
 
     private:
-        e::intrusive_ptr<object> open_library(const e::slice& path);
+        void send_error_response(uint64_t slot, uint64_t client, uint64_t nonce, response_returncode rc);
+        void send_error_msg_response(uint64_t slot, uint64_t client, uint64_t nonce, response_returncode rc, const char* resp);
+        void send_response(uint64_t slot, uint64_t client, uint64_t nonce, response_returncode rc, const e::slice& resp);
+        void worker_thread(uint64_t obj_id, e::intrusive_ptr<object> obj);
 
     private:
-        typedef std::tr1::shared_ptr<po6::threads::thread> thread_ptr;
-        object_map m_objects;
-        std::vector<thread_ptr> m_threads;
+        object_manager(const object_manager&);
+        object_manager& operator = (const object_manager&);
+
+    private:
+        replicant_daemon* m_daemon;
+        void (replicant_daemon::*m_daemon_cb)(uint64_t slot, uint64_t client, uint64_t nonce, response_returncode rc, const e::slice& data);
+        object_map_t m_objects;
+        // protects the m_cleanup_* members
+        po6::threads::mutex m_cleanup_protect;
+        object_set_t m_cleanup_queued;
+        object_set_t m_cleanup_ready;
 };
 
-e::buffer::packer
-operator << (e::buffer::packer lhs, const object_manager& rhs);
+} // namespace replicant
 
-e::buffer::unpacker
-operator >> (e::buffer::unpacker lhs, object_manager& rhs);
-
-size_t
-pack_size(const object_manager& rhs);
-
-#endif // replicant_object_manager_h_
+#endif // replicant_daemon_object_manager_h_

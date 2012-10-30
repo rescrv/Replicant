@@ -28,15 +28,22 @@
 // STL
 #include <algorithm>
 
-#include <glog/logging.h>
-
 // Replicant
 #include "daemon/configuration_manager.h"
 
+struct configuration_manager::proposal
+{
+    proposal() : id(), time(), version() {}
+    proposal(uint64_t i, uint64_t t, uint64_t v) : id(i), time(t), version(v) {}
+    ~proposal() throw () {}
+    uint64_t id;
+    uint64_t time;
+    uint64_t version;
+};
+
 configuration_manager :: configuration_manager()
-    : m_config()
-    , m_proposed()
-    , m_rejected()
+    : m_configs()
+    , m_proposals()
 {
 }
 
@@ -45,37 +52,26 @@ configuration_manager :: ~configuration_manager() throw ()
 }
 
 const configuration&
-configuration_manager :: get_latest() const
+configuration_manager :: stable() const
 {
-    if (m_proposed.empty())
-    {
-        return m_config;
-    }
-    else
-    {
-        return m_proposed.back();
-    }
+    assert(!m_configs.empty());
+    return m_configs.front();
 }
 
 const configuration&
-configuration_manager :: get_stable() const
+configuration_manager :: latest() const
 {
-    return m_config;
+    assert(!m_configs.empty());
+    return m_configs.back();
 }
 
 bool
-configuration_manager :: manages(const configuration& config) const
+configuration_manager :: in_any_cluster(const chain_node& n) const
 {
-    // Otherwise, we need to find the config of the same version.
-    if (m_config == config)
+    for (std::list<configuration>::const_iterator conf = m_configs.begin();
+            conf != m_configs.end(); ++conf)
     {
-        return true;
-    }
-
-    for (std::list<configuration>::const_iterator pit = m_proposed.begin();
-            pit != m_proposed.end(); ++pit)
-    {
-        if (config == *pit)
+        if (conf->in_cluster(n))
         {
             return true;
         }
@@ -85,131 +81,202 @@ configuration_manager :: manages(const configuration& config) const
 }
 
 bool
-configuration_manager :: quorum_for_all(const configuration& config) const
+configuration_manager :: is_any_spare(const chain_node& n) const
 {
-    if (!config.quorum_of(m_config))
+    for (std::list<configuration>::const_iterator conf = m_configs.begin();
+            conf != m_configs.end(); ++conf)
+    {
+        if (conf->is_spare(n))
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+void
+configuration_manager :: get_all_nodes(std::vector<chain_node>* nodes) const
+{
+    for (std::list<configuration>::const_iterator c = m_configs.begin();
+            c != m_configs.end(); ++c)
+    {
+        for (const chain_node* n = c->members_begin(); n != c->members_end(); ++n)
+        {
+            nodes->push_back(*n);
+        }
+
+        for (const chain_node* n = c->standbys_begin(); n != c->standbys_end(); ++n)
+        {
+            nodes->push_back(*n);
+        }
+
+        for (const chain_node* n = c->spares_begin(); n != c->spares_end(); ++n)
+        {
+            nodes->push_back(*n);
+        }
+    }
+
+    std::sort(nodes->begin(), nodes->end());
+    std::vector<chain_node>::iterator it = std::unique(nodes->begin(), nodes->end());
+    nodes->resize(it - nodes->begin());
+}
+
+void
+configuration_manager :: get_config_chain(std::vector<configuration>* config_chain) const
+{
+    config_chain->clear();
+
+    for (std::list<configuration>::const_iterator c = m_configs.begin();
+            c != m_configs.end(); ++c)
+    {
+        config_chain->push_back(*c);
+    }
+}
+
+bool
+configuration_manager :: get_proposal(uint64_t proposal_id,
+                                      uint64_t proposal_time,
+                                      configuration* config) const
+{
+    std::list<proposal>::const_iterator prop = m_proposals.begin();
+
+    while (prop != m_proposals.end() &&
+           prop->id != proposal_id &&
+           prop->time != proposal_time)
+    {
+        ++prop;
+    }
+
+    if (prop == m_proposals.end())
     {
         return false;
     }
 
-    for (std::list<configuration>::const_iterator pit = m_proposed.begin();
-            pit != m_proposed.end(); ++pit)
+    std::list<configuration>::const_iterator conf = m_configs.begin();
+
+    while (conf != m_configs.end() &&
+           conf->version() != prop->version)
     {
-        if (!config.quorum_of(*pit))
+        ++conf;
+    }
+
+    if (conf == m_configs.end())
+    {
+        return false;
+    }
+
+    *config = *conf;
+    return true;
+}
+
+bool
+configuration_manager :: is_compatible(const configuration* configs,
+                                       size_t configs_sz) const
+{
+    std::list<configuration>::const_iterator iter1 = m_configs.begin();
+    size_t iter2 = 0;
+
+    while (iter1 != m_configs.end() && iter2 < configs_sz)
+    {
+        if (*iter1 != configs[iter2])
         {
             return false;
         }
+
+        ++iter1;
+        ++iter2;
     }
 
     return true;
 }
 
-bool
-configuration_manager :: unconfigured() const
-{
-    return m_config.version() == 0 && m_proposed.empty();
-}
-
 void
-configuration_manager :: add_proposed(const configuration& config)
+configuration_manager :: advance(const configuration& config)
 {
-    m_proposed.push_back(config);
-}
-
-void
-configuration_manager :: adopt(uint64_t version)
-{
-    bool found = m_config.version() == version;
-
-    for (std::list<configuration>::const_iterator pit = m_proposed.begin();
-            pit != m_proposed.end(); ++pit)
+    while (!m_configs.empty() && m_configs.front().version() < config.version())
     {
-        if (pit->version() == version)
+        m_configs.pop_front();
+    }
+
+    assert(!m_configs.empty());
+    assert(m_configs.front() == config);
+    std::list<proposal>::iterator prop = m_proposals.begin();
+
+    while (prop != m_proposals.end())
+    {
+        if (prop->version <= config.version())
         {
-            found = true;
+            prop = m_proposals.erase(prop);
+        }
+        else
+        {
+            ++prop;
+        }
+    }
+}
+
+void
+configuration_manager :: merge(uint64_t proposal_id,
+                               uint64_t proposal_time,
+                               const configuration* configs,
+                               size_t configs_sz)
+{
+    assert(configs_sz > 0);
+    std::list<configuration>::iterator iter = m_configs.begin();
+
+    for (size_t i = 0; i < configs_sz; ++i)
+    {
+        if (iter == m_configs.end())
+        {
+            m_configs.push_back(configs[i]);
+        }
+        else
+        {
+            assert(*iter == configs[i]);
+            ++iter;
         }
     }
 
-    assert(found);
-
-    while (m_config.version() < version)
-    {
-        m_config = m_proposed.front();
-        m_proposed.pop_front();
-    }
+    m_proposals.push_back(proposal(proposal_id, proposal_time, configs[configs_sz - 1].version()));
 }
 
 void
-configuration_manager :: reject(uint64_t version)
+configuration_manager :: reject(uint64_t proposal_id, uint64_t proposal_time)
 {
-    m_rejected.push_back(version);
-    std::push_heap(m_rejected.begin(), m_rejected.end());
+    uint64_t max_version = m_configs.front().version();
+    std::list<proposal>::iterator prop = m_proposals.begin();
+    std::list<proposal>::iterator to_erase = m_proposals.end();
 
-    while (!m_rejected.empty() && !m_proposed.empty() &&
-           m_rejected[0] >= m_proposed.back().version())
+    while (prop != m_proposals.end())
     {
-        if (m_rejected[0] == m_proposed.back().version())
+        if (prop->id == proposal_id && prop->time == proposal_time)
         {
-            m_proposed.pop_back();
+            to_erase = prop;
+        }
+        else
+        {
+            max_version = std::max(max_version, prop->version);
         }
 
-        std::pop_heap(m_rejected.begin(), m_rejected.end());
-        m_rejected.pop_back();
+        ++prop;
     }
 
-    if (m_proposed.empty())
+    assert(to_erase != m_proposals.end());
+    m_proposals.erase(to_erase);
+
+    while (!m_configs.empty() && m_configs.back().version() > max_version)
     {
-        m_rejected.clear();
+        m_configs.pop_back();
     }
+
+    assert(!m_configs.empty());
 }
 
 void
-configuration_manager :: reset(const configuration& us)
+configuration_manager :: reset(const configuration& config)
 {
-    m_config = us;
-    m_proposed.clear();
-}
-
-std::ostream&
-operator << (std::ostream& lhs, const configuration_manager& rhs)
-{
-    lhs << "configuration dump: \n"
-        << "STABLE " << rhs.m_config;
-
-    for (std::list<configuration>::const_iterator pit = rhs.m_proposed.begin();
-            pit != rhs.m_proposed.end(); ++pit)
-    {
-        lhs << "\nPROPOSED " << *pit;
-    }
-
-    return lhs;
-}
-
-e::buffer::packer
-operator << (e::buffer::packer lhs, const configuration_manager& rhs)
-{
-    lhs = lhs << static_cast<uint32_t>(1 + rhs.m_proposed.size())
-              << rhs.m_config;
-
-    for (std::list<configuration>::const_iterator pit = rhs.m_proposed.begin();
-            pit != rhs.m_proposed.end(); ++pit)
-    {
-        lhs = lhs << *pit;
-    }
-
-    return lhs;
-}
-
-size_t
-pack_size(const configuration_manager& rhs)
-{
-    size_t sz = sizeof(uint32_t) + pack_size(rhs.m_config);
-
-    for (std::list<configuration>::const_iterator pit = rhs.m_proposed.begin();
-            pit != rhs.m_proposed.end(); ++pit)
-    {
-        sz += pack_size(*pit);
-    }
-
-    return sz;
+    m_configs.clear();
+    m_proposals.clear();
+    m_configs.push_back(config);
 }
