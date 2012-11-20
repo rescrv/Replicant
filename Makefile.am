@@ -49,6 +49,8 @@ noinst_HEADERS = \
 			daemon/connection.h \
 			daemon/daemon.h \
 			daemon/fact_store.h \
+			daemon/failure_detector.h \
+			daemon/failure_manager.h \
 			daemon/heal_next.h \
 			daemon/object_manager.h \
 			daemon/settings.h \
