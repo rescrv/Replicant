@@ -31,7 +31,7 @@
 e::buffer::packer
 operator << (e::buffer::packer lhs, const po6::net::ipaddr& rhs)
 {
-    assert(rhs.family() == AF_INET || rhs.family() == AF_INET6);
+    assert(rhs.family() == AF_INET || rhs.family() == AF_INET6 || rhs.family() == AF_UNSPEC);
     uint8_t type;
     uint8_t data[16];
     memset(data, 0, 16);
@@ -43,12 +43,16 @@ operator << (e::buffer::packer lhs, const po6::net::ipaddr& rhs)
         rhs.pack(&sa, 0);
         memmove(data, &sa.sin_addr.s_addr, 4);
     }
-    else // if (rhs.family() == AF_INET6)
+    else if (rhs.family() == AF_INET6)
     {
         type = 6;
         sockaddr_in6 sa;
         rhs.pack(&sa, 0);
         memmove(data, &sa.sin6_addr.__in6_u.__u6_addr8, 16);
+    }
+    else
+    {
+        type = 0;
     }
 
     lhs = lhs << type;
@@ -80,6 +84,10 @@ operator >> (e::buffer::unpacker lhs, po6::net::ipaddr& rhs)
         in6_addr ia;
         memmove(ia.__in6_u.__u6_addr8, rem.data(), 16);
         rhs = po6::net::ipaddr(ia);
+        return lhs.advance(16);
+    }
+    else if (type == 0)
+    {
         return lhs.advance(16);
     }
     else

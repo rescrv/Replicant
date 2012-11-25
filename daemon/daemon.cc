@@ -81,326 +81,243 @@ exit_on_signal(int /*signum*/)
     s_continue = false;
 }
 
-replicant_daemon :: replicant_daemon(po6::net::location bind_to)
+replicant_daemon :: ~replicant_daemon() throw ()
+{
+}
+
+replicant_daemon :: replicant_daemon()
     : m_s()
     , m_busybee_mapper()
-    , m_busybee(&m_busybee_mapper, bind_to, 0, 0/*we don't use pause/unpause*/)
+    , m_busybee()
     , m_us()
     , m_config_manager()
     , m_failure_manager()
     , m_object_manager()
     , m_periodic()
     , m_heal_next()
-    , m_ping_seqno(0)
     , m_disrupted_unhandled()
     , m_disrupted_backoff()
     , m_disrupted_times()
     , m_fs()
 {
-    m_busybee.set_timeout(1);
-    m_us.address = bind_to;
     m_object_manager.set_callback(this, &replicant_daemon::record_execution);
     trip_periodic(0, &replicant_daemon::periodic_join_cluster);
     trip_periodic(0, &replicant_daemon::periodic_describe_cluster);
     trip_periodic(0, &replicant_daemon::periodic_exchange);
 }
 
-replicant_daemon :: ~replicant_daemon() throw ()
-{
-    m_fs.close();
-}
-
-int
-replicant_daemon :: run(bool d)
-{
-    if (!install_signal_handlers())
-    {
-        return EXIT_FAILURE;
-    }
-
-    if (d)
-    {
-        google::SetLogDestination(google::INFO, "replicant-");
-    }
-    else
-    {
-        google::LogToStderr();
-    }
-
-    if (!generate_identifier_token())
-    {
-        return EXIT_FAILURE;
-    }
-
-    if (!m_fs.open(po6::pathname(".")))
-    {
-        return EXIT_FAILURE;
-    }
-
-    if (!start_new_cluster())
-    {
-        return EXIT_FAILURE;
-    }
-
-    if (d && !daemonize())
-    {
-        return EXIT_FAILURE;
-    }
-
-    replicant::connection conn;
-    std::auto_ptr<e::buffer> msg;
-
-    while (recv(&conn, &msg))
-    {
-        process_message(conn, msg);
-    }
-
-    LOG(INFO) << "replicant is exiting safely";
-    return EXIT_SUCCESS;
-}
-
-int
-replicant_daemon :: run(bool d, po6::net::hostname existing)
-{
-    if (!install_signal_handlers())
-    {
-        return EXIT_FAILURE;
-    }
-
-    if (d)
-    {
-        google::SetLogDestination(google::INFO, "replicant-");
-    }
-    else
-    {
-        google::LogToStderr();
-    }
-
-    if (!generate_identifier_token())
-    {
-        return EXIT_FAILURE;
-    }
-
-    if (!m_fs.open(po6::pathname(".")))
-    {
-        return EXIT_FAILURE;
-    }
-
-    if (!connect_to_cluster(existing))
-    {
-        return EXIT_FAILURE;
-    }
-
-    if (d && !daemonize())
-    {
-        return EXIT_FAILURE;
-    }
-
-    replicant::connection conn;
-    std::auto_ptr<e::buffer> msg;
-
-    while (recv(&conn, &msg))
-    {
-        process_message(conn, msg);
-    }
-
-    LOG(INFO) << "replicant is exiting safely";
-    return EXIT_SUCCESS;
-}
-
-bool
-replicant_daemon :: install_signal_handlers()
-{
-    if (!install_signal_handler(SIGHUP, exit_on_signal))
-    {
-        return false;
-    }
-
-    if (!install_signal_handler(SIGINT, exit_on_signal))
-    {
-        return false;
-    }
-
-    if (!install_signal_handler(SIGTERM, exit_on_signal))
-    {
-        return false;
-    }
-
-    return true;
-}
-
-bool
-replicant_daemon :: install_signal_handler(int signum, void (*func)(int))
+static bool
+install_signal_handler(int signum)
 {
     struct sigaction handle;
-    handle.sa_handler = func;
+    handle.sa_handler = exit_on_signal;
     sigfillset(&handle.sa_mask);
     handle.sa_flags = SA_RESTART;
     return sigaction(signum, &handle, NULL) >= 0;
 }
 
-bool
-replicant_daemon :: generate_token(uint64_t* token)
+int
+replicant_daemon :: run(bool daemonize,
+                        po6::pathname data,
+                        bool set_bind_to,
+                        po6::net::location bind_to,
+                        bool set_existing,
+                        po6::net::hostname existing)
 {
-    po6::io::fd sysrand(open("/dev/urandom", O_RDONLY));
-
-    if (sysrand.get() < 0)
+    if (!install_signal_handler(SIGHUP))
     {
-        return false;
+        std::cerr << "could not install SIGHUP handler; exiting" << std::endl;
+        return EXIT_FAILURE;
     }
 
-    if (sysrand.read(token, sizeof(*token)) != sizeof(*token))
+    if (!install_signal_handler(SIGINT))
     {
-        return false;
+        std::cerr << "could not install SIGINT handler; exiting" << std::endl;
+        return EXIT_FAILURE;
     }
 
-    return true;
-}
-
-bool
-replicant_daemon :: generate_identifier_token()
-{
-    if (!generate_token(&m_us.token))
+    if (!install_signal_handler(SIGTERM))
     {
-        PLOG(ERROR) << "could not read random token from /dev/urandom";
-        return false;
+        std::cerr << "could not install SIGTERM handler; exiting" << std::endl;
+        return EXIT_FAILURE;
     }
 
-    LOG(INFO) << "generated random token:  " << m_us.token;
-    m_busybee.set_id(m_us.token);
-    return true;
-}
+    google::LogToStderr();
+    bool saved = false;
+    chain_node saved_us;
+    configuration_manager saved_config_manager;
+    LOG(INFO) << "initializing persistent storage";
 
-bool
-replicant_daemon :: start_new_cluster()
-{
-    configuration initial(1, m_us);
-    m_config_manager.reset(initial);
-    m_fs.inform_configuration(initial);
-    LOG(INFO) << "started new cluster " << initial;
-    accept_config(initial);
-    return true;
-}
-
-bool
-replicant_daemon :: connect_to_cluster(po6::net::hostname hn)
-{
-    configuration initial;
-    replicant::bootstrap_returncode rc = replicant::bootstrap(hn, &initial);
-
-    switch (rc)
+    if (!m_fs.open(data, &saved, &saved_us, &saved_config_manager))
     {
-        case replicant::BOOTSTRAP_SUCCESS:
-            break;
-        case replicant::BOOTSTRAP_SEE_ERRNO:
-            PLOG(ERROR) << "could not join existing cluster at " << hn;
-            return false;
-        case replicant::BOOTSTRAP_COMM_FAIL:
-            LOG(ERROR) << "could not join existing cluster at " << hn << ":  could not communicate with server";
-            return false;
-        case replicant::BOOTSTRAP_CORRUPT_INFORM:
-            LOG(ERROR) << "could not join existing cluster at " << hn << ":  the remote host sent a bad \"INFORM\" message";
-            return false;
-        case replicant::BOOTSTRAP_TIMEOUT:
-            LOG(ERROR) << "could not join existing cluster at " << hn << ":  the connection timed out";
-            return false;
-        case replicant::BOOTSTRAP_NOT_CLUSTER_MEMBER:
-            LOG(ERROR) << "could not join existing cluster at " << hn << ":  the remote host is not a cluster member";
-            return false;
-        default:
-            LOG(ERROR) << "could not join existing cluster at " << hn << ":  an unknown error occurred";
-            return false;
+        return EXIT_FAILURE;
     }
 
-    m_config_manager.reset(initial);
-    m_fs.inform_configuration(initial);
-    LOG(INFO) << "joined existing cluster " << initial;
-    accept_config(initial);
-    return true;
-}
-
-bool
-replicant_daemon :: daemonize()
-{
-    google::SetLogDestination(google::INFO, "replicant-");
-
-    if (::daemon(1, 0) < 0)
+    if (saved)
     {
-        PLOG(ERROR) << "could not daemonize";
-        return false;
+        LOG(INFO) << "starting daemon from state found in the persistent storage";
+
+        if (set_bind_to && bind_to != saved_us.address)
+        {
+            LOG(ERROR) << "cannot bind to address; it conflicts with our previous address at " << saved_us.address;
+            return EXIT_FAILURE;
+        }
+
+        m_us = saved_us;
+        m_config_manager = saved_config_manager;
+    }
+    else
+    {
+        LOG(INFO) << "starting daemon new state from command-line arguments";
+
+        if (!generate_token(&m_us.token))
+        {
+            PLOG(ERROR) << "could not read random token from /dev/urandom";
+            return EXIT_FAILURE;
+        }
+
+        LOG(INFO) << "generated new random token:  " << m_us.token;
+        m_us.address = bind_to;
     }
 
-    return true;
-}
+    m_busybee.reset(new busybee_mta(&m_busybee_mapper, m_us.address, m_us.token, 0/*we don't use pause/unpause*/));
+    m_busybee->set_timeout(1);
 
-void
-replicant_daemon :: process_message(const replicant::connection& conn,
-                                    std::auto_ptr<e::buffer> msg)
-{
-    assert(msg.get());
-    replicant_network_msgtype mt = REPLNET_NOP;
-    e::buffer::unpacker up = msg->unpack_from(BUSYBEE_HEADER_SIZE);
-    up = up >> mt;
-
-    switch (mt)
+    if (daemonize)
     {
-        case REPLNET_NOP:
-            break;
-        case REPLNET_BOOTSTRAP:
-            process_bootstrap(conn, msg, up);
-            break;
-        case REPLNET_INFORM:
-            process_inform(conn, msg, up);
-            break;
-        case REPLNET_JOIN:
-            process_join(conn, msg, up);
-            break;
-        case REPLNET_CONFIG_PROPOSE:
-            process_config_propose(conn, msg, up);
-            break;
-        case REPLNET_CONFIG_ACCEPT:
-            process_config_accept(conn, msg, up);
-            break;
-        case REPLNET_CONFIG_REJECT:
-            process_config_reject(conn, msg, up);
-            break;
-        case REPLNET_CLIENT_REGISTER:
-            process_client_register(conn, msg, up);
-            break;
-        case REPLNET_CLIENT_DISCONNECT:
-            process_client_disconnect(conn, msg, up);
-            break;
-        case REPLNET_COMMAND_SUBMIT:
-            process_command_submit(conn, msg, up);
-            break;
-        case REPLNET_COMMAND_ISSUE:
-            process_command_issue(conn, msg, up);
-            break;
-        case REPLNET_COMMAND_ACK:
-            process_command_ack(conn, msg, up);
-            break;
-        case REPLNET_COMMAND_RESPONSE:
-            LOG(WARNING) << "dropping \"RESPONSE\" received by server";
-            break;
-        case REPLNET_HEAL_REQ:
-            process_heal_req(conn, msg, up);
-            break;
-        case REPLNET_HEAL_RESP:
-            process_heal_resp(conn, msg, up);
-            break;
-        case REPLNET_HEAL_DONE:
-            process_heal_done(conn, msg, up);
-            break;
-        case REPLNET_PING:
-            process_ping(conn, msg, up);
-            break;
-        case REPLNET_PONG:
-            process_pong(conn, msg, up);
-            break;
-        default:
-            LOG(WARNING) << "unknown message type; here's some hex:  " << msg->hex();
-            break;
+        LOG(INFO) << "forking off to the background; goodbye!";
+        google::SetLogDestination(google::INFO, "replicant-");
+
+        if (::daemon(1, 0) < 0)
+        {
+            PLOG(ERROR) << "could not daemonize";
+            return EXIT_FAILURE;
+        }
     }
+
+    if (saved)
+    {
+        // reuse the saved configuration
+    }
+    else if (set_existing)
+    {
+        configuration initial;
+        replicant::bootstrap_returncode rc = replicant::bootstrap(existing, &initial);
+
+        switch (rc)
+        {
+            case replicant::BOOTSTRAP_SUCCESS:
+                break;
+            case replicant::BOOTSTRAP_SEE_ERRNO:
+                PLOG(ERROR) << "could not join existing cluster at " << existing;
+                return false;
+            case replicant::BOOTSTRAP_COMM_FAIL:
+                LOG(ERROR) << "could not join existing cluster at " << existing << ":  could not communicate with server";
+                return false;
+            case replicant::BOOTSTRAP_CORRUPT_INFORM:
+                LOG(ERROR) << "could not join existing cluster at " << existing << ":  the remote host sent a bad \"INFORM\" message";
+                return false;
+            case replicant::BOOTSTRAP_TIMEOUT:
+                LOG(ERROR) << "could not join existing cluster at " << existing << ":  the connection timed out";
+                return false;
+            case replicant::BOOTSTRAP_NOT_CLUSTER_MEMBER:
+                LOG(ERROR) << "could not join existing cluster at " << existing << ":  the remote host is not a cluster member";
+                return false;
+            default:
+                LOG(ERROR) << "could not join existing cluster at " << existing << ":  an unknown error occurred";
+                return false;
+        }
+
+        m_config_manager.reset(initial);
+        m_fs.inform_configuration(initial);
+        LOG(INFO) << "joined existing cluster " << initial;
+        accept_config(initial);
+    }
+    else
+    {
+        configuration initial(1, m_us);
+        m_config_manager.reset(initial);
+        m_fs.inform_configuration(initial);
+        LOG(INFO) << "started new cluster " << initial;
+        accept_config(initial);
+    }
+
+    m_fs.remove_saved_state();
+    replicant::connection conn;
+    std::auto_ptr<e::buffer> msg;
+
+    while (recv(&conn, &msg))
+    {
+        assert(msg.get());
+        replicant_network_msgtype mt = REPLNET_NOP;
+        e::buffer::unpacker up = msg->unpack_from(BUSYBEE_HEADER_SIZE);
+        up = up >> mt;
+
+        switch (mt)
+        {
+            case REPLNET_NOP:
+                break;
+            case REPLNET_BOOTSTRAP:
+                process_bootstrap(conn, msg, up);
+                break;
+            case REPLNET_INFORM:
+                process_inform(conn, msg, up);
+                break;
+            case REPLNET_JOIN:
+                process_join(conn, msg, up);
+                break;
+            case REPLNET_CONFIG_PROPOSE:
+                process_config_propose(conn, msg, up);
+                break;
+            case REPLNET_CONFIG_ACCEPT:
+                process_config_accept(conn, msg, up);
+                break;
+            case REPLNET_CONFIG_REJECT:
+                process_config_reject(conn, msg, up);
+                break;
+            case REPLNET_CLIENT_REGISTER:
+                process_client_register(conn, msg, up);
+                break;
+            case REPLNET_CLIENT_DISCONNECT:
+                process_client_disconnect(conn, msg, up);
+                break;
+            case REPLNET_COMMAND_SUBMIT:
+                process_command_submit(conn, msg, up);
+                break;
+            case REPLNET_COMMAND_ISSUE:
+                process_command_issue(conn, msg, up);
+                break;
+            case REPLNET_COMMAND_ACK:
+                process_command_ack(conn, msg, up);
+                break;
+            case REPLNET_COMMAND_RESPONSE:
+                LOG(WARNING) << "dropping \"RESPONSE\" received by server";
+                break;
+            case REPLNET_HEAL_REQ:
+                process_heal_req(conn, msg, up);
+                break;
+            case REPLNET_HEAL_RESP:
+                process_heal_resp(conn, msg, up);
+                break;
+            case REPLNET_HEAL_DONE:
+                process_heal_done(conn, msg, up);
+                break;
+            case REPLNET_PING:
+                process_ping(conn, msg, up);
+                break;
+            case REPLNET_PONG:
+                process_pong(conn, msg, up);
+                break;
+            default:
+                LOG(WARNING) << "unknown message type; here's some hex:  " << msg->hex();
+                break;
+        }
+    }
+
+    LOG(INFO) << "replicant is gracefully shutting down";
+    m_fs.close(m_us, m_config_manager);
+    LOG(INFO) << "replicant will now terminate";
+    return EXIT_SUCCESS;
 }
 
 void
@@ -1590,16 +1507,7 @@ replicant_daemon :: process_ping(const replicant::connection& conn,
                                  std::auto_ptr<e::buffer> msg,
                                  e::buffer::unpacker up)
 {
-    uint64_t seqno;
-    std::vector<std::pair<uint64_t, double> > suspicions;
-    up = up >> seqno >> suspicions;
     CHECK_UNPACK(PING, up);
-
-    m_failure_manager.record_suspicions(seqno, suspicions);
-
-    size_t sz = BUSYBEE_HEADER_SIZE
-              + pack_size(REPLNET_PONG);
-    msg.reset(e::buffer::create(sz));
     msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_PONG;
     send(conn, msg);
 }
@@ -1618,15 +1526,6 @@ replicant_daemon :: periodic_exchange(uint64_t now)
     trip_periodic(now + m_s.PING_INTERVAL, &replicant_daemon::periodic_exchange);
     std::vector<chain_node> nodes;
     m_config_manager.get_all_nodes(&nodes);
-    std::vector<std::pair<uint64_t, double> > suspicions;
-    m_failure_manager.get_all_suspicions(now, &suspicions);
-
-#ifdef REPL_LOG_SUSPICIONS
-    for (size_t i = 0; i < suspicions.size(); ++i)
-    {
-        LOG(INFO) << "suspicion of server " << suspicions[i].first << " is " << suspicions[i].second;
-    }
-#endif // REPL_LOG_SUSPICIONS
 
     for (size_t i = 0; i < nodes.size(); ++i)
     {
@@ -1636,15 +1535,11 @@ replicant_daemon :: periodic_exchange(uint64_t now)
         }
 
         size_t sz = BUSYBEE_HEADER_SIZE
-                  + pack_size(REPLNET_PING)
-                  + sizeof(uint64_t)
-                  + sizeof(uint32_t) + suspicions.size() * (sizeof(uint64_t) + sizeof(double));
+                  + pack_size(REPLNET_PING);
         std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
-        msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_PING << m_ping_seqno << suspicions;
+        msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_PING;
         send(nodes[i], msg);
     }
-
-    ++m_ping_seqno;
 }
 
 bool
@@ -1653,7 +1548,7 @@ replicant_daemon :: recv(replicant::connection* conn, std::auto_ptr<e::buffer>* 
     while (s_continue)
     {
         run_periodic();
-        busybee_returncode rc = m_busybee.recv(&conn->token, msg);
+        busybee_returncode rc = m_busybee->recv(&conn->token, msg);
 
         switch (rc)
         {
@@ -1731,7 +1626,7 @@ replicant_daemon :: send(const replicant::connection& conn, std::auto_ptr<e::buf
         return false;
     }
 
-    switch (m_busybee.send(conn.token, msg))
+    switch (m_busybee->send(conn.token, msg))
     {
         case BUSYBEE_SUCCESS:
             return true;
@@ -1757,7 +1652,7 @@ replicant_daemon :: send(const chain_node& node, std::auto_ptr<e::buffer> msg)
 
     m_busybee_mapper.set(node);
 
-    switch (m_busybee.send(node.token, msg))
+    switch (m_busybee->send(node.token, msg))
     {
         case BUSYBEE_SUCCESS:
             return true;
@@ -1781,7 +1676,7 @@ replicant_daemon :: send(uint64_t token, std::auto_ptr<e::buffer> msg)
         return false;
     }
 
-    switch (m_busybee.send(token, msg))
+    switch (m_busybee->send(token, msg))
     {
         case BUSYBEE_SUCCESS:
             return true;
@@ -1914,4 +1809,22 @@ replicant_daemon :: run_periodic()
 void
 replicant_daemon :: periodic_nop(uint64_t)
 {
+}
+
+bool
+replicant_daemon :: generate_token(uint64_t* token)
+{
+    po6::io::fd sysrand(open("/dev/urandom", O_RDONLY));
+
+    if (sysrand.get() < 0)
+    {
+        return false;
+    }
+
+    if (sysrand.read(token, sizeof(*token)) != sizeof(*token))
+    {
+        return false;
+    }
+
+    return true;
 }

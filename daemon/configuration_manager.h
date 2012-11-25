@@ -38,6 +38,7 @@ class configuration_manager
 {
     public:
         configuration_manager();
+        configuration_manager(const configuration_manager&);
         ~configuration_manager() throw ();
 
     public:
@@ -62,10 +63,27 @@ class configuration_manager
         void reject(uint64_t proposal_id, uint64_t proposal_time);
         void reset(const configuration& config);
 
+    public:
+        configuration_manager& operator = (const configuration_manager&);
+
+    private:
+        friend e::buffer::packer operator << (e::buffer::packer lhs, const configuration_manager& rhs);
+        friend e::buffer::unpacker operator >> (e::buffer::unpacker lhs, configuration_manager& rhs);
+        friend size_t pack_size(const configuration_manager& rhs);
+
     private:
         class proposal;
         std::list<configuration> m_configs;
         std::list<proposal> m_proposals;
 };
+
+e::buffer::packer
+operator << (e::buffer::packer lhs, const configuration_manager& rhs);
+
+e::buffer::unpacker
+operator >> (e::buffer::unpacker lhs, configuration_manager& rhs);
+
+size_t
+pack_size(const configuration_manager& cm);
 
 #endif // replicant_configuration_manager_h_

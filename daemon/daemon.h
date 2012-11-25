@@ -60,27 +60,16 @@
 class replicant_daemon
 {
     public:
-        replicant_daemon(po6::net::location bind_to);
+        replicant_daemon();
         ~replicant_daemon() throw ();
 
-    // Public calls to run the daemon
     public:
-        // Start a new cluster
-        int run(bool daemonize);
-        // Join an existing cluster
-        int run(bool daemonize, po6::net::hostname existing);
-
-    // Setup and run the daemon
-    private:
-        bool install_signal_handlers();
-        bool install_signal_handler(int signum, void (*func)(int));
-        bool generate_token(uint64_t* token);
-        bool generate_identifier_token();
-        bool start_new_cluster();
-        bool connect_to_cluster(po6::net::hostname hn);
-        bool daemonize();
-        void process_message(const replicant::connection& conn,
-                             std::auto_ptr<e::buffer> msg);
+        int run(bool daemonize,
+                po6::pathname data,
+                bool set_bind_to,
+                po6::net::location bind_to,
+                bool set_existing,
+                po6::net::hostname existing);
 
     // Configure the chain membership via (re)configuration
     private:
@@ -183,17 +172,20 @@ class replicant_daemon
         void run_periodic();
         void periodic_nop(uint64_t now);
 
+    // Utilities
+    private:
+        bool generate_token(uint64_t* token);
+
     private:
         settings m_s;
         replicant::mapper m_busybee_mapper;
-        busybee_mta m_busybee;
+        std::auto_ptr<busybee_mta> m_busybee;
         chain_node m_us;
         configuration_manager m_config_manager;
         replicant::failure_manager m_failure_manager;
         replicant::object_manager m_object_manager;
         std::vector<periodic> m_periodic;
         heal_next m_heal_next;
-        uint64_t m_ping_seqno;
         std::queue<uint64_t> m_disrupted_unhandled;
         std::set<uint64_t> m_disrupted_backoff;
         std::vector<std::pair<uint64_t, uint64_t> > m_disrupted_times;

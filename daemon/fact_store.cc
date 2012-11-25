@@ -25,6 +25,10 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
+#ifdef HAVE_CONFIG_H
+#include "config.h"
+#endif
+
 // STL
 #include <memory>
 
@@ -144,7 +148,10 @@ fact_store :: ~fact_store() throw ()
 }
 
 bool
-fact_store :: open(const po6::pathname& path)
+fact_store :: open(const po6::pathname& path,
+                   bool* saved,
+                   chain_node* saved_us,
+                   configuration_manager* saved_config_manager)
 {
     leveldb::Options opts;
     opts.create_if_missing = true;
@@ -158,19 +165,211 @@ fact_store :: open(const po6::pathname& path)
         return false;
     }
 
+    leveldb::ReadOptions ropts;
+    ropts.fill_cache = true;
+    ropts.verify_checksums = true;
+    leveldb::WriteOptions wopts;
+    wopts.sync = true;
+
+    leveldb::Slice rk("replicant", 9);
+    std::string rbacking;
+    st = m_db->Get(ropts, rk, &rbacking);
+    bool first_time = false;
+
+    if (st.ok())
+    {
+        first_time = false;
+
+        if (rbacking != PACKAGE_VERSION)
+        {
+            LOG(ERROR) << "could not restore from LevelDB because "
+                       << "the existing data was created by "
+                       << "replicant " << rbacking << " but "
+                       << "this is version " << PACKAGE_VERSION;
+            return false;
+        }
+    }
+    else if (st.IsNotFound())
+    {
+        first_time = true;
+        leveldb::Slice k("replicant", 9);
+        leveldb::Slice v(PACKAGE_VERSION, strlen(PACKAGE_VERSION));
+        st = m_db->Put(wopts, k, v);
+
+        if (st.ok())
+        {
+            // fall through
+        }
+        else if (st.IsNotFound())
+        {
+            LOG(ERROR) << "could not restore from LevelDB because Put returned NotFound:  "
+                       << st.ToString();
+            return false;
+        }
+        else if (st.IsCorruption())
+        {
+            LOG(ERROR) << "could not restore from LevelDB because of corruption:  "
+                       << st.ToString();
+            return false;
+        }
+        else if (st.IsIOError())
+        {
+            LOG(ERROR) << "could not restore from LevelDB because of an IO error:  "
+                       << st.ToString();
+            return false;
+        }
+        else
+        {
+            LOG(ERROR) << "could not restore from LevelDB because it returned an "
+                       << "unknown error that we don't know how to handle:  "
+                       << st.ToString();
+            return false;
+        }
+    }
+    else if (st.IsCorruption())
+    {
+        LOG(ERROR) << "could not restore from LevelDB because of corruption:  "
+                   << st.ToString();
+        return false;
+    }
+    else if (st.IsIOError())
+    {
+        LOG(ERROR) << "could not restore from LevelDB because of an IO error:  "
+                   << st.ToString();
+        return false;
+    }
+    else
+    {
+        LOG(ERROR) << "could not restore from LevelDB because it returned an "
+                   << "unknown error that we don't know how to handle:  "
+                   << st.ToString();
+        return false;
+    }
+
+    leveldb::Slice sk("state", 5);
+    std::string sbacking;
+    st = m_db->Get(ropts, sk, &sbacking);
+
+    if (st.ok())
+    {
+        if (first_time)
+        {
+            LOG(ERROR) << "could not restore from LevelDB because a previous "
+                       << "execution crashed and the database was tampered with; "
+                       << "you're on your own with this one";
+            return false;
+        }
+    }
+    else if (st.IsNotFound())
+    {
+        if (!first_time)
+        {
+            LOG(ERROR) << "could not restore from LevelDB because a previous "
+                       << "execution crashed; run the recovery program and try again";
+            return false;
+        }
+    }
+    else if (st.IsCorruption())
+    {
+        LOG(ERROR) << "could not restore from LevelDB because of corruption:  "
+                   << st.ToString();
+        return false;
+    }
+    else if (st.IsIOError())
+    {
+        LOG(ERROR) << "could not restore from LevelDB because of an IO error:  "
+                   << st.ToString();
+        return false;
+    }
+    else
+    {
+        LOG(ERROR) << "could not restore from LevelDB because it returned an "
+                   << "unknown error that we don't know how to handle:  "
+                   << st.ToString();
+        return false;
+    }
+
+    if (first_time)
+    {
+        *saved = false;
+        return true;
+    }
+
+    *saved = true;
+    // XXX inefficient, lazy hack
+    std::auto_ptr<e::buffer> buf(e::buffer::create(sbacking.size()));
+    memmove(buf->data(), sbacking.data(), sbacking.size());
+    buf->resize(sbacking.size());
+    e::buffer::unpacker up = buf->unpack_from(0);
+    up = up >> *saved_us >> *saved_config_manager;
+
+    if (up.error())
+    {
+        LOG(ERROR) << "could not restore from LevelDB because a previous "
+                   << "execution saved invalid state; run the recovery program and try again";
+        return false;
+    }
+
     return true;
 }
 
 bool
-fact_store :: close()
+fact_store :: close(const chain_node& us_to_save,
+                    const configuration_manager& config_manager_to_save)
 {
     if (m_db)
     {
+        leveldb::WriteOptions wopts;
+        wopts.sync = true;
+        size_t sz = pack_size(us_to_save) + pack_size(config_manager_to_save);
+        std::auto_ptr<e::buffer> buf(e::buffer::create(sz));
+        buf->pack_at(0) << us_to_save << config_manager_to_save;
+        leveldb::Slice k("state", 5);
+        leveldb::Slice v(reinterpret_cast<const char*>(buf->data()), buf->size());
+        leveldb::Status st = m_db->Put(wopts, k, v);
+
+        if (st.ok())
+        {
+            // fall through
+        }
+        else if (st.IsNotFound())
+        {
+            LOG(ERROR) << "could not save state to LevelDB because Put returned NotFound:  "
+                       << st.ToString();
+            return false;
+        }
+        else if (st.IsCorruption())
+        {
+            LOG(ERROR) << "could not save state to LevelDB because of corruption:  "
+                       << st.ToString();
+            return false;
+        }
+        else if (st.IsIOError())
+        {
+            LOG(ERROR) << "could not save state to LevelDB because of an IO error:  "
+                       << st.ToString();
+            return false;
+        }
+        else
+        {
+            LOG(ERROR) << "could not save state to LevelDB because it returned an "
+                       << "unknown error that we don't know how to handle:  "
+                       << st.ToString();
+            return false;
+        }
+
+
         delete m_db;
         m_db = NULL;
     }
 
     return true;
+}
+
+void
+fact_store :: remove_saved_state()
+{
+    delete_key("state", 5);
 }
 
 bool

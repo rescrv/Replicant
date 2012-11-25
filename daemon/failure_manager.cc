@@ -54,23 +54,6 @@ failure_manager :: heartbeat(uint64_t token, uint64_t now)
 }
 
 void
-failure_manager :: get_all_suspicions(uint64_t now, std::vector<std::pair<uint64_t, double> >* suspicions)
-{
-    suspicions->clear();
-
-    for (failure_detector_map_t::iterator it = m_fds.begin(); it != m_fds.end(); ++it)
-    {
-        suspicions->push_back(std::make_pair(it->first, it->second->suspicion(now)));
-    }
-}
-
-void
-failure_manager :: record_suspicions(uint64_t seqno, const std::vector<std::pair<uint64_t, double> >& suspicions)
-{
-    // XXX
-}
-
-void
 failure_manager :: reset(const std::vector<chain_node>& _nodes)
 {
     std::vector<uint64_t> nodes;

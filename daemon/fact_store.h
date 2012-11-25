@@ -37,6 +37,7 @@
 // Replicant
 #include "common/configuration.h"
 #include "common/response_returncode.h"
+#include "daemon/configuration_manager.h"
 
 namespace replicant
 {
@@ -49,8 +50,13 @@ class fact_store
 
     // Setup/teardown
     public:
-        bool open(const po6::pathname& path);
-        bool close();
+        bool open(const po6::pathname& path,
+                  bool* saved,
+                  chain_node* saved_us,
+                  configuration_manager* saved_config_manager);
+        bool close(const chain_node& us_to_save,
+                   const configuration_manager& config_manager_to_save);
+        void remove_saved_state();
 
     // Manage configurations
     public:

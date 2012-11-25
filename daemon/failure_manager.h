@@ -55,8 +55,6 @@ class failure_manager
         void heartbeat(uint64_t token, uint64_t now);
 
     public:
-        void get_all_suspicions(uint64_t now, std::vector<std::pair<uint64_t, double> >* suspicions);
-        void record_suspicions(uint64_t seqno, const std::vector<std::pair<uint64_t, double> >& suspicions);
         void reset(const std::vector<chain_node>& nodes);
 
     private:

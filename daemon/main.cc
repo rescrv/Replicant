@@ -42,11 +42,14 @@
 #include "daemon/daemon.h"
 
 static bool daemonize = true;
-static const char* _listen_host = "127.0.0.1";
+static const char* _data = ".";
+static const char* _listen_host = "auto";
 static unsigned long _listen_port = 1982;
-static po6::net::ipaddr _listen_ip(_listen_host);
-static const char* _connect_host = NULL;
+static po6::net::ipaddr _listen_ip;
+static bool _listen = false;
+static const char* _connect_host = "127.0.0.1";
 static unsigned long _connect_port = 1982;
+static bool _connect = false;
 
 extern "C"
 {
@@ -57,8 +60,11 @@ static struct poptOption popts[] = {
      "run replicant in the background", 0},
     {"foreground", 'f', POPT_ARG_NONE, NULL, 'f',
      "run replicant in the foreground", 0},
+    {"data", 'D', POPT_ARG_STRING, &_data, 'D',
+     "store persistent state in this directory (default: .)",
+     "dir"},
     {"listen", 'l', POPT_ARG_STRING, &_listen_host, 'l',
-     "listen on a specific IP address",
+     "listen on a specific IP address (default: auto)",
      "IP"},
     {"listen-port", 'p', POPT_ARG_LONG, &_listen_port, 'L',
      "listen on an alternative port (default: 1982)",
@@ -95,6 +101,11 @@ main(int argc, const char* argv[])
             case 'l':
                 try
                 {
+                    if (strcmp(_listen_host, "auto") == 0)
+                    {
+                        break;
+                    }
+
                     _listen_ip = po6::net::ipaddr(_listen_host);
                 }
                 catch (po6::error& e)
@@ -108,6 +119,7 @@ main(int argc, const char* argv[])
                     return EXIT_FAILURE;
                 }
 
+                _listen = true;
                 break;
             case 'L':
                 if (_listen_port >= (1 << 16))
@@ -116,8 +128,10 @@ main(int argc, const char* argv[])
                     return EXIT_FAILURE;
                 }
 
+                _listen = true;
                 break;
             case 'c':
+                _connect = true;
                 break;
             case 'C':
                 if (_connect_port >= (1 << 16))
@@ -126,6 +140,7 @@ main(int argc, const char* argv[])
                     return EXIT_FAILURE;
                 }
 
+                _connect = true;
                 break;
             case POPT_ERROR_NOARG:
             case POPT_ERROR_BADOPT:
@@ -147,16 +162,27 @@ main(int argc, const char* argv[])
 
     try
     {
-        replicant_daemon d(po6::net::location(_listen_ip, _listen_port));
+        replicant_daemon d;
 
-        if (_connect_host)
+        if (strcmp(_listen_host, "auto") == 0)
         {
-            return d.run(daemonize, po6::net::hostname(_connect_host, _connect_port));
+            if (!busybee_mta::discover(&_listen_ip))
+            {
+                std::cerr << "cannot automatically discover local address; specify one manually" << std::endl;
+                return EXIT_FAILURE;
+            }
         }
-        else
+
+        po6::pathname data(_data);
+        po6::net::location bind_to(_listen_ip, _listen_port);
+        po6::net::hostname existing;
+
+        if (_connect)
         {
-            return d.run(daemonize);
+            existing = po6::net::hostname(_connect_host, _connect_port);
         }
+
+        return d.run(daemonize, data, _listen, bind_to, _connect, existing);
     }
     catch (po6::error& e)
     {

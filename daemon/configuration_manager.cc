@@ -47,6 +47,12 @@ configuration_manager :: configuration_manager()
 {
 }
 
+configuration_manager :: configuration_manager(const configuration_manager& other)
+    : m_configs(other.m_configs)
+    , m_proposals(other.m_proposals)
+{
+}
+
 configuration_manager :: ~configuration_manager() throw ()
 {
 }
@@ -279,4 +285,97 @@ configuration_manager :: reset(const configuration& config)
     m_configs.clear();
     m_proposals.clear();
     m_configs.push_back(config);
+}
+
+configuration_manager&
+configuration_manager :: operator = (const configuration_manager& rhs)
+{
+    m_configs = rhs.m_configs;
+    m_proposals = rhs.m_proposals;
+    return *this;
+}
+
+e::buffer::packer
+operator << (e::buffer::packer lhs, const configuration_manager& rhs)
+{
+    uint32_t configs_sz = rhs.m_configs.size();
+    lhs = lhs << configs_sz;
+
+    for (std::list<configuration>::const_iterator conf = rhs.m_configs.begin();
+            conf != rhs.m_configs.end(); ++conf)
+    {
+        lhs = lhs << *conf;
+    }
+
+    uint32_t proposals_sz = rhs.m_proposals.size();
+    lhs = lhs << proposals_sz;
+
+    for (std::list<configuration_manager::proposal>::const_iterator prop = rhs.m_proposals.begin();
+            prop != rhs.m_proposals.end(); ++prop)
+    {
+        lhs = lhs << prop->id << prop->time << prop->version;
+    }
+
+    return lhs;
+}
+
+e::buffer::unpacker
+operator >> (e::buffer::unpacker lhs, configuration_manager& rhs)
+{
+    rhs.m_configs.clear();
+    rhs.m_proposals.clear();
+
+    uint32_t configs_sz;
+    lhs = lhs >> configs_sz;
+
+    if (lhs.error())
+    {
+        return lhs;
+    }
+
+    for (size_t i = 0; i < configs_sz; ++i)
+    {
+        configuration c;
+        lhs = lhs >> c;
+
+        if (lhs.error())
+        {
+            return lhs;
+        }
+
+        rhs.m_configs.push_back(c);
+    }
+
+    uint32_t proposals_sz;
+    lhs = lhs >> proposals_sz;
+
+    for (size_t i = 0; i < proposals_sz; ++i)
+    {
+        configuration_manager::proposal p;
+        lhs = lhs >> p.id >> p.time >> p.version;
+
+        if (lhs.error())
+        {
+            return lhs;
+        }
+
+        rhs.m_proposals.push_back(p);
+    }
+
+    return lhs;
+}
+
+size_t
+pack_size(const configuration_manager& cm)
+{
+    size_t sz = 2 * sizeof(uint32_t)
+              + cm.m_proposals.size() * 3 * sizeof(uint64_t);
+
+    for (std::list<configuration>::const_iterator conf = cm.m_configs.begin();
+            conf != cm.m_configs.end(); ++conf)
+    {
+        sz += pack_size(*conf);
+    }
+
+    return sz;
 }
