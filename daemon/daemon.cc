@@ -1738,6 +1738,7 @@ replicant_daemon :: periodic_retry_disruption(uint64_t now)
     {
         std::pop_heap(m_disrupted_times.begin(), m_disrupted_times.end(), compare_disrupted);
         handle_disruption_reset_healing(m_disrupted_times.back().second);
+        m_disrupted_backoff.erase(m_disrupted_times.back().second);
         m_disrupted_times.pop_back();
     }
 
