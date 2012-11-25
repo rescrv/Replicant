@@ -676,10 +676,10 @@ fact_store :: next_slot_to_ack()
     {
         leveldb::Slice key(it->key());
 
-        if (strncmp(key.data(), "slot", 4) == 0 && key.size() == 12)
+        if (strncmp(key.data(), "ack", 3) == 0 && key.size() == 11)
         {
             uint64_t tmp;
-            e::unpack64be(key.data() + 4, &tmp);
+            e::unpack64be(key.data() + 3, &tmp);
             next_to_ack = std::max(next_to_ack, tmp + 1);
         }
         else
