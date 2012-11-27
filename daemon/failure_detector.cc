@@ -87,7 +87,7 @@ failure_detector :: suspicion(uint64_t now)
 {
     if (m_window.empty())
     {
-        return 0;
+        return 1.0;
     }
 
     // Calculate the mean and standard deviation
@@ -110,6 +110,12 @@ failure_detector :: suspicion(uint64_t now)
     }
 
     double stdev = sqrt(M2 / (n - 1));
+
+    // A hack to initialize the failure detector.
+    if (m_window.size() * 10 < m_window_sz && now - m_window.back() < 1000000000ULL)
+    {
+        return 1.0;
+    }
 
     // Run that through phi
     double f = phi(((now - m_window.back()) - mean) / stdev);

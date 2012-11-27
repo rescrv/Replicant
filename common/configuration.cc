@@ -185,6 +185,17 @@ configuration :: validate() const
         }
     }
 
+    for (const chain_node* n = spares_begin(); n < spares_end(); ++n)
+    {
+        for (const chain_node* s = n + 1; s < spares_end(); ++s)
+        {
+            if (n->address == s->address || n->token == s->token)
+            {
+                return false;
+            }
+        }
+    }
+
     return m_member_sz <= m_standby_sz;
 }
 
@@ -467,6 +478,55 @@ configuration :: promote_standby()
 {
     assert(may_promote_standby());
     ++m_member_sz;
+    ++m_version;
+}
+
+void
+configuration :: remove(const chain_node& node)
+{
+    size_t idx = 0;
+
+    while (idx < m_standby_sz)
+    {
+        if (m_chain[idx] == node)
+        {
+            for (size_t i = idx; i + 1 < m_standby_sz; ++i)
+            {
+                m_chain[i] = m_chain[i + 1];
+            }
+
+            --m_standby_sz;
+            m_member_sz = std::min(m_member_sz, m_standby_sz);
+        }
+        else
+        {
+            ++idx;
+        }
+    }
+
+    idx = 0;
+
+    while (idx < m_spare_sz)
+    {
+        if (m_spare[idx] == node)
+        {
+            for (size_t i = idx; i + 1 < m_spare_sz; ++i)
+            {
+                m_spare[i] = m_spare[i + 1];
+            }
+
+            --m_spare_sz;
+        }
+        else
+        {
+            ++idx;
+        }
+    }
+}
+
+void
+configuration :: bump_version()
+{
     ++m_version;
 }
 

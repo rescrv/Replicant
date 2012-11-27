@@ -31,6 +31,9 @@
 #include "config.h"
 #endif
 
+// C
+#include <cmath>
+
 // POSIX
 #include <dlfcn.h>
 #include <signal.h>
@@ -103,6 +106,7 @@ replicant_daemon :: replicant_daemon()
     m_object_manager.set_callback(this, &replicant_daemon::record_execution);
     trip_periodic(0, &replicant_daemon::periodic_join_cluster);
     trip_periodic(0, &replicant_daemon::periodic_describe_cluster);
+    trip_periodic(0, &replicant_daemon::periodic_retry_reconfiguration);
     trip_periodic(0, &replicant_daemon::periodic_exchange);
 }
 
@@ -197,7 +201,7 @@ replicant_daemon :: run(bool daemonize,
 
     if (saved)
     {
-        // reuse the saved configuration
+        accept_config(m_config_manager.stable());
     }
     else if (set_existing)
     {
@@ -357,7 +361,9 @@ replicant_daemon :: process_inform(const replicant::connection&,
     }
     else
     {
-        LOG(INFO) << "received stale \"INFORM\" message for " << new_config.version();
+        LOG(INFO) << "received stale \"INFORM\" message for " << new_config.version()
+                  << "; our current configurations include " << m_config_manager.stable().version()
+                  << " through " << m_config_manager.latest().version();
     }
 }
 
@@ -494,12 +500,20 @@ replicant_daemon :: process_config_propose(const replicant::connection& conn,
     if (m_fs.is_rejected_configuration(proposal_id, proposal_time))
     {
         SEND_CONFIG_RESP(sender, REJECT, proposal_id, proposal_time, m_us);
+        LOG(INFO) << "proposal " << proposal_id << ":" << proposal_time << " previously rejected; responding";
         return;
     }
 
     if (m_fs.is_accepted_configuration(proposal_id, proposal_time))
     {
         SEND_CONFIG_RESP(sender, ACCEPT, proposal_id, proposal_time, m_us);
+        LOG(INFO) << "proposal " << proposal_id << ":" << proposal_time << " previously accpted; responding";
+        return;
+    }
+
+    if (m_fs.is_proposed_configuration(proposal_id, proposal_time))
+    {
+        LOG(INFO) << "proposal " << proposal_id << ":" << proposal_time << " previously proposed; waiting";
         return;
     }
 
@@ -559,6 +573,7 @@ replicant_daemon :: process_config_propose(const replicant::connection& conn,
 
     if (reject)
     {
+        LOG(INFO) << "proposal " << proposal_id << ":" << proposal_time << " rejected";
         m_fs.reject_configuration(proposal_id, proposal_time);
         SEND_CONFIG_RESP(sender, REJECT, proposal_id, proposal_time, m_us);
         return;
@@ -567,6 +582,7 @@ replicant_daemon :: process_config_propose(const replicant::connection& conn,
     {
         if (configs_sz == 1)
         {
+            LOG(INFO) << "proposal " << proposal_id << ":" << proposal_time << " adopted by fiat";
             m_fs.accept_configuration(proposal_id, proposal_time);
             // no need to run hooks
             SEND_CONFIG_RESP(sender, ACCEPT, proposal_id, proposal_time, m_us);
@@ -577,6 +593,7 @@ replicant_daemon :: process_config_propose(const replicant::connection& conn,
 
             if (configs[configs_sz - 1].config_tail() == m_us)
             {
+                LOG(INFO) << "proposal " << proposal_id << ":" << proposal_time << " adopted because we're the last node";
                 m_fs.accept_configuration(proposal_id, proposal_time);
                 accept_config(configs[configs_sz - 1]);
                 SEND_CONFIG_RESP(sender, ACCEPT, proposal_id, proposal_time, m_us);
@@ -770,8 +787,9 @@ replicant_daemon :: propose_config(const configuration& config)
 void
 replicant_daemon :: accept_config(const configuration& new_config)
 {
-    LOG(INFO) << "accepted new configuration " << new_config;
+    LOG(INFO) << "deploying configuration " << new_config;
     trip_periodic(0, &replicant_daemon::periodic_join_cluster);
+    trip_periodic(0, &replicant_daemon::periodic_retry_reconfiguration);
     trip_periodic(0, &replicant_daemon::periodic_maintain_cluster);
     trip_periodic(0, &replicant_daemon::periodic_describe_cluster);
     configuration old_config(m_config_manager.stable());
@@ -829,6 +847,30 @@ replicant_daemon :: periodic_join_cluster(uint64_t now)
     LOG(WARNING) << "having a little trouble joining the cluster; it seems no one wants to talk to us";
 }
 
+static void
+mean_and_stdev(const std::map<uint64_t, double>& suspicions, double* mean, double* stdev)
+{
+    double n = 0;
+    *mean = 0;
+    double M2 = 0;
+
+    for (std::map<uint64_t, double>::const_iterator it = suspicions.begin();
+            it != suspicions.end(); ++it)
+    {
+        if (isinf(it->second))
+        {
+            continue;
+        }
+
+        ++n;
+        double delta = it->second - *mean;
+        *mean = *mean + delta / n;
+        M2 = M2 + delta * (it->second - *mean);
+    }
+
+    *stdev = n > 1 ? sqrt(M2 / (n - 1)) : 0;
+}
+
 void
 replicant_daemon :: periodic_maintain_cluster(uint64_t now)
 {
@@ -838,6 +880,38 @@ replicant_daemon :: periodic_maintain_cluster(uint64_t now)
     // current fault tolerance level
     uint64_t f_c = m_config_manager.latest().fault_tolerance();
 
+    // identify nodes that the failure-detector claims failed
+    std::map<uint64_t, double> suspicions;
+    m_failure_manager.get_suspicions(now, m_config_manager.latest(), &suspicions);
+    double mean = 0;
+    double stdev = 0;
+    mean_and_stdev(suspicions, &mean, &stdev);
+    double thresh = std::max(mean + 2 * stdev, 10.0);
+    configuration fail_config(m_config_manager.latest());
+    uint64_t failed = 0;
+
+    for (std::map<uint64_t, double>::const_iterator it = suspicions.begin();
+            it != suspicions.end(); ++it)
+    {
+        if (it->second > thresh)
+        {
+            chain_node n = fail_config.get(it->first);
+            fail_config.remove(n);
+            ++failed;
+        }
+    }
+
+    if (failed && failed <= f_c && fail_config.head() == m_us &&
+        fail_config.validate() &&
+        m_config_manager.is_quorum_for_all(fail_config))
+    {
+        LOG(INFO) << "proposing new config which routes around failed nodes";
+        fail_config.bump_version();
+        propose_config(fail_config);
+        f_c = m_config_manager.latest().fault_tolerance();
+    }
+
+    // add nodes to restore fault tolerance
     while (f_c < f_d &&
            m_config_manager.latest().head() == m_us &&
            m_config_manager.latest().may_promote_spare())
@@ -867,22 +941,120 @@ void
 replicant_daemon :: periodic_describe_cluster(uint64_t now)
 {
     trip_periodic(now + m_s.REPORT_INTERVAL, &replicant_daemon::periodic_describe_cluster);
+    LOG(INFO) << "the latest stable configuration is " << m_config_manager.stable();
     LOG(INFO) << "the latest proposed configuration is " << m_config_manager.latest();
     uint64_t f_d = m_s.FAULT_TOLERANCE;
-    uint64_t f_c = m_config_manager.latest().fault_tolerance();
+    uint64_t f_c = m_config_manager.stable().fault_tolerance();
 
     if (f_c < f_d)
     {
-        LOG(WARNING) << "the most recently proposed configuration can tolerate at most "
+        LOG(WARNING) << "the most recently deployed configuration can tolerate at most "
                      << f_c << " failures which is less than the " << f_d
                      << " failures the cluster is expected to tolerate; "
-                     << "bring " << m_config_manager.latest().servers_needed_for(f_d)
+                     << "bring " << m_config_manager.stable().servers_needed_for(f_d)
                      << " more servers online to restore "
                      << f_d << "-fault tolerance";
     }
     else
     {
-        LOG(INFO) << "the most recently proposed configuration can tolerate the expected " << f_d << " failures";
+        LOG(INFO) << "the most recently deployed configuration can tolerate the expected " << f_d << " failures";
+    }
+}
+
+void
+replicant_daemon :: periodic_retry_reconfiguration(uint64_t now)
+{
+    trip_periodic(now + m_s.MAINTAIN_INTERVAL, &replicant_daemon::periodic_retry_reconfiguration);
+
+    if (m_config_manager.stable().version() == m_config_manager.latest().version())
+    {
+        return;
+    }
+
+    std::vector<configuration> config_chain;
+    std::vector<configuration_manager::proposal> proposals;
+    m_config_manager.get_config_chain(&config_chain);
+    m_config_manager.get_proposals(&proposals);
+
+    for (size_t i = 0; i < config_chain.size(); ++ i)
+    {
+        if (!config_chain[i].has_next(m_us))
+        {
+            continue;
+        }
+
+        configuration_manager::proposal* prop = NULL;
+
+        for (size_t j = 0; j < proposals.size(); ++j)
+        {
+            if (proposals[j].version == config_chain[i].version())
+            {
+                prop = &proposals[j];
+                break;
+            }
+        }
+
+        if (!prop)
+        {
+            continue;
+        }
+
+        std::vector<configuration> cc(config_chain.begin(), config_chain.begin() + i + 1);
+        size_t sz = BUSYBEE_HEADER_SIZE
+                  + pack_size(REPLNET_CONFIG_PROPOSE)
+                  + 2 * sizeof(uint64_t)
+                  + pack_size(m_us)
+                  + pack_size(cc);
+        std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
+        msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_CONFIG_PROPOSE
+                                          << prop->id << prop->time
+                                          << m_us << cc;
+        send(config_chain[i].next(m_us), msg);
+    }
+}
+
+void
+replicant_daemon :: handle_disruption_reset_reconfiguration(uint64_t token)
+{
+    std::vector<configuration> config_chain;
+    std::vector<configuration_manager::proposal> proposals;
+    m_config_manager.get_config_chain(&config_chain);
+    m_config_manager.get_proposals(&proposals);
+
+    for (size_t i = 0; i < config_chain.size(); ++ i)
+    {
+        if (!config_chain[i].has_next(m_us) || config_chain[i].next(m_us).token != token)
+        {
+            continue;
+        }
+
+        configuration_manager::proposal* prop = NULL;
+
+        for (size_t j = 0; j < proposals.size(); ++j)
+        {
+            if (proposals[j].version == config_chain[i].version())
+            {
+                prop = &proposals[j];
+                break;
+            }
+        }
+
+        if (!prop)
+        {
+            continue;
+        }
+
+        std::vector<configuration> cc(config_chain.begin(), config_chain.begin() + i + 1);
+        size_t sz = BUSYBEE_HEADER_SIZE
+                  + pack_size(REPLNET_CONFIG_PROPOSE)
+                  + 2 * sizeof(uint64_t)
+                  + pack_size(m_us)
+                  + pack_size(cc);
+        std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
+        msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_CONFIG_PROPOSE
+                                          << prop->id << prop->time
+                                          << m_us << cc;
+        send(config_chain[i].next(m_us), msg);
     }
 }
 
@@ -1507,7 +1679,20 @@ replicant_daemon :: process_ping(const replicant::connection& conn,
                                  std::auto_ptr<e::buffer> msg,
                                  e::buffer::unpacker up)
 {
+    uint64_t version = 0;
+    up = up >> version;
     CHECK_UNPACK(PING, up);
+
+    if (version < m_config_manager.stable().version())
+    {
+        size_t sz = BUSYBEE_HEADER_SIZE
+                  + pack_size(REPLNET_INFORM)
+                  + pack_size(m_config_manager.stable());
+        std::auto_ptr<e::buffer> inf(e::buffer::create(sz));
+        inf->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_INFORM << m_config_manager.stable();
+        send(conn, inf);
+    }
+
     msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_PONG;
     send(conn, msg);
 }
@@ -1526,6 +1711,7 @@ replicant_daemon :: periodic_exchange(uint64_t now)
     trip_periodic(now + m_s.PING_INTERVAL, &replicant_daemon::periodic_exchange);
     std::vector<chain_node> nodes;
     m_config_manager.get_all_nodes(&nodes);
+    uint64_t version = m_config_manager.stable().version();
 
     for (size_t i = 0; i < nodes.size(); ++i)
     {
@@ -1535,9 +1721,10 @@ replicant_daemon :: periodic_exchange(uint64_t now)
         }
 
         size_t sz = BUSYBEE_HEADER_SIZE
-                  + pack_size(REPLNET_PING);
+                  + pack_size(REPLNET_PING)
+                  + sizeof(uint64_t);
         std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
-        msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_PING;
+        msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_PING << version;
         send(nodes[i], msg);
     }
 }
@@ -1737,9 +1924,11 @@ replicant_daemon :: periodic_retry_disruption(uint64_t now)
     while (!m_disrupted_times.empty() && m_disrupted_times[0].first <= now)
     {
         std::pop_heap(m_disrupted_times.begin(), m_disrupted_times.end(), compare_disrupted);
-        handle_disruption_reset_healing(m_disrupted_times.back().second);
-        m_disrupted_backoff.erase(m_disrupted_times.back().second);
+        uint64_t token = m_disrupted_times.back().second;
         m_disrupted_times.pop_back();
+        handle_disruption_reset_reconfiguration(token);
+        handle_disruption_reset_healing(token);
+        m_disrupted_backoff.erase(token);
     }
 
     if (!m_disrupted_times.empty())

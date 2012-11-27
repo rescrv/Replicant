@@ -97,6 +97,8 @@ class replicant_daemon
         void periodic_join_cluster(uint64_t now);
         void periodic_maintain_cluster(uint64_t now);
         void periodic_describe_cluster(uint64_t now);
+        void periodic_retry_reconfiguration(uint64_t now);
+        void handle_disruption_reset_reconfiguration(uint64_t token);
 
     // Client-related functions
     private:

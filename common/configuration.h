@@ -81,6 +81,8 @@ class configuration
         void promote_spare(const chain_node& node);
         bool may_promote_standby() const;
         void promote_standby();
+        void remove(const chain_node& node);
+        void bump_version();
 
     private:
         friend bool operator == (const configuration& lhs, const configuration& rhs);

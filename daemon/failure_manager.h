@@ -38,6 +38,7 @@
 
 // Replicant
 #include "common/chain_node.h"
+#include "common/configuration.h"
 #include "daemon/failure_detector.h"
 
 namespace replicant
@@ -50,9 +51,9 @@ class failure_manager
         ~failure_manager() throw ();
 
     public:
-        void force_trust();
-        void force_suspect();
+        void force_trust(uint64_t until);
         void heartbeat(uint64_t token, uint64_t now);
+        void get_suspicions(uint64_t now, const configuration& config, std::map<uint64_t, double>* suspicions);
 
     public:
         void reset(const std::vector<chain_node>& nodes);

@@ -31,16 +31,6 @@
 // Replicant
 #include "daemon/configuration_manager.h"
 
-struct configuration_manager::proposal
-{
-    proposal() : id(), time(), version() {}
-    proposal(uint64_t i, uint64_t t, uint64_t v) : id(i), time(t), version(v) {}
-    ~proposal() throw () {}
-    uint64_t id;
-    uint64_t time;
-    uint64_t version;
-};
-
 configuration_manager :: configuration_manager()
     : m_configs()
     , m_proposals()
@@ -101,6 +91,21 @@ configuration_manager :: is_any_spare(const chain_node& n) const
     return false;
 }
 
+bool
+configuration_manager :: is_quorum_for_all(const configuration& config) const
+{
+    for (std::list<configuration>::const_iterator conf = m_configs.begin();
+            conf != m_configs.end(); ++conf)
+    {
+        if (!config.quorum_of(*conf))
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 void
 configuration_manager :: get_all_nodes(std::vector<chain_node>* nodes) const
 {
@@ -137,6 +142,18 @@ configuration_manager :: get_config_chain(std::vector<configuration>* config_cha
             c != m_configs.end(); ++c)
     {
         config_chain->push_back(*c);
+    }
+}
+
+void
+configuration_manager :: get_proposals(std::vector<proposal>* proposals) const
+{
+    proposals->clear();
+
+    for (std::list<proposal>::const_iterator p = m_proposals.begin();
+            p != m_proposals.end(); ++p)
+    {
+        proposals->push_back(*p);
     }
 }
 

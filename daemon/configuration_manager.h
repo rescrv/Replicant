@@ -37,6 +37,9 @@
 class configuration_manager
 {
     public:
+        class proposal;
+
+    public:
         configuration_manager();
         configuration_manager(const configuration_manager&);
         ~configuration_manager() throw ();
@@ -46,8 +49,10 @@ class configuration_manager
         const configuration& latest() const;
         bool in_any_cluster(const chain_node& n) const;
         bool is_any_spare(const chain_node& n) const;
+        bool is_quorum_for_all(const configuration& config) const;
         void get_all_nodes(std::vector<chain_node>* nodes) const;
         void get_config_chain(std::vector<configuration>* config_chain) const;
+        void get_proposals(std::vector<proposal>* proposals) const;
         bool get_proposal(uint64_t proposal_id,
                           uint64_t proposal_time,
                           configuration* config) const;
@@ -72,9 +77,18 @@ class configuration_manager
         friend size_t pack_size(const configuration_manager& rhs);
 
     private:
-        class proposal;
         std::list<configuration> m_configs;
         std::list<proposal> m_proposals;
+};
+
+struct configuration_manager::proposal
+{
+    proposal() : id(), time(), version() {}
+    proposal(uint64_t i, uint64_t t, uint64_t v) : id(i), time(t), version(v) {}
+    ~proposal() throw () {}
+    uint64_t id;
+    uint64_t time;
+    uint64_t version;
 };
 
 e::buffer::packer
