@@ -115,7 +115,7 @@ class replicant_client
                                    replicant_returncode* status);
         int64_t send_to_preferred_chain_member(e::intrusive_ptr<command> cmd,
                                                replicant_returncode* status);
-        int64_t handle_disconnect(const chain_node& node,
+        int64_t handle_disruption(const chain_node& node,
                                   replicant_returncode* status);
         int64_t handle_command_response(const po6::net::location& from,
                                         std::auto_ptr<e::buffer> msg,

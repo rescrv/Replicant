@@ -380,7 +380,7 @@ replicant_client :: inner_loop(replicant_returncode* status)
         case BUSYBEE_SUCCESS:
             break;
         case BUSYBEE_DISRUPTED:
-            if ((ret = handle_disconnect(node, status)) < 0)
+            if ((ret = handle_disruption(node, status)) < 0)
             {
                 return ret;
             }
@@ -681,7 +681,7 @@ replicant_client :: send_to_chain_head(std::auto_ptr<e::buffer> msg,
         case BUSYBEE_SUCCESS:
             return 0;
         case BUSYBEE_DISRUPTED:
-            if ((ret = handle_disconnect(m_config->head(), status)) < 0)
+            if ((ret = handle_disruption(m_config->head(), status)) < 0)
             {
                 return ret;
             }
@@ -720,7 +720,7 @@ replicant_client :: send_to_preferred_chain_member(e::intrusive_ptr<command> cmd
                 sent = true;
                 break;
             case BUSYBEE_DISRUPTED:
-                if ((ret = handle_disconnect(*n, status)) < 0)
+                if ((ret = handle_disruption(*n, status)) < 0)
                 {
                     return ret;
                 }
@@ -751,7 +751,7 @@ replicant_client :: send_to_preferred_chain_member(e::intrusive_ptr<command> cmd
 }
 
 int64_t
-replicant_client :: handle_disconnect(const chain_node& from,
+replicant_client :: handle_disruption(const chain_node& from,
                                       replicant_returncode*)
 {
     for (command_map::iterator it = m_commands.begin(); it != m_commands.end(); )
