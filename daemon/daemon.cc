@@ -247,6 +247,24 @@ replicant_daemon :: run(bool daemonize,
     }
 
     m_fs.remove_saved_state();
+
+    for (size_t slot = 1; slot < m_fs.next_slot_to_ack(); ++slot)
+    {
+        uint64_t object;
+        uint64_t client;
+        uint64_t nonce;
+        e::slice dat;
+        std::string backing;
+
+        if (!m_fs.get_slot(slot, &object, &client, &nonce, &dat, &backing))
+        {
+            LOG(ERROR) << "gap in the history; missing slot " << slot;
+            return EXIT_FAILURE;
+        }
+
+        m_object_manager.enqueue(slot, object, client, nonce, dat, &backing);
+    }
+
     replicant::connection conn;
     std::auto_ptr<e::buffer> msg;
 
