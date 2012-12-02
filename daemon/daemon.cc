@@ -982,7 +982,7 @@ replicant_daemon :: periodic_describe_cluster(uint64_t now)
 void
 replicant_daemon :: periodic_retry_reconfiguration(uint64_t now)
 {
-    trip_periodic(now + m_s.MAINTAIN_INTERVAL, &replicant_daemon::periodic_retry_reconfiguration);
+    trip_periodic(now + m_s.RETRY_RECONFIGURE_INTERVAL, &replicant_daemon::periodic_retry_reconfiguration);
 
     if (m_config_manager.stable().version() == m_config_manager.latest().version())
     {

@@ -45,6 +45,7 @@ class settings
         uint64_t REPORT_INTERVAL;
         uint64_t JOIN_INTERVAL;
         uint64_t MAINTAIN_INTERVAL;
+        uint64_t RETRY_RECONFIGURE_INTERVAL;
         uint64_t PING_INTERVAL;
         uint64_t FAULT_TOLERANCE;
         uint64_t HEAL_NEXT_INTERVAL;
@@ -58,6 +59,7 @@ settings :: settings()
     : REPORT_INTERVAL(60 * SECONDS)
     , JOIN_INTERVAL(1 * SECONDS)
     , MAINTAIN_INTERVAL(50 * MILLIS)
+    , RETRY_RECONFIGURE_INTERVAL(1 * SECONDS)
     , PING_INTERVAL(50 * MILLIS)
     , FAULT_TOLERANCE(2)
     , HEAL_NEXT_INTERVAL(1 * SECONDS)
