@@ -158,7 +158,7 @@ class replicant_daemon
         bool recv(replicant::connection* conn, std::auto_ptr<e::buffer>* msg);
         bool send(const replicant::connection& conn, std::auto_ptr<e::buffer> msg);
         bool send(const chain_node& node, std::auto_ptr<e::buffer> msg);
-        bool send(uint64_t token, std::auto_ptr<e::buffer> msg);
+        bool send_no_disruption(uint64_t token, std::auto_ptr<e::buffer> msg);
 
     // Handle communication disruptions
     private:

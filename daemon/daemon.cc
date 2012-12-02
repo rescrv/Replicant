@@ -1189,7 +1189,7 @@ replicant_daemon :: accept_config_inform_clients(const configuration& /*old_conf
                   + pack_size(m_config_manager.stable());
         std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
         msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_INFORM << new_config;
-        send(clients[i], msg);
+        send_no_disruption(clients[i], msg);
     }
 }
 
@@ -1247,7 +1247,7 @@ replicant_daemon :: process_command_submit(const replicant::connection& conn,
             e::buffer::packer pa = msg->pack_at(BUSYBEE_HEADER_SIZE);
             pa = pa << REPLNET_COMMAND_RESPONSE << nonce << rc;
             pa = pa.copy(data);
-            send(client, msg);
+            send_no_disruption(client, msg);
         }
         // else: drop it, it's proposed, but not executed
 
@@ -1439,7 +1439,7 @@ replicant_daemon :: acknowledge_command(uint64_t slot)
                   + sizeof(uint64_t) + pack_size(replicant::RESPONSE_SUCCESS);
         std::auto_ptr<e::buffer> response(e::buffer::create(sz));
         response->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_COMMAND_RESPONSE << nonce << replicant::RESPONSE_SUCCESS;
-        send(client, response);
+        send_no_disruption(client, response);
     }
     else
     {
@@ -1459,7 +1459,7 @@ replicant_daemon :: record_execution(uint64_t slot, uint64_t client, uint64_t no
     e::buffer::packer pa = msg->pack_at(BUSYBEE_HEADER_SIZE);
     pa = pa << REPLNET_COMMAND_RESPONSE << nonce << rc;
     pa = pa.copy(data);
-    send(client, msg);
+    send_no_disruption(client, msg);
     m_fs.exec_slot(slot, rc, data);
 }
 
@@ -1895,19 +1895,13 @@ replicant_daemon :: send(const chain_node& node, std::auto_ptr<e::buffer> msg)
 }
 
 bool
-replicant_daemon :: send(uint64_t token, std::auto_ptr<e::buffer> msg)
+replicant_daemon :: send_no_disruption(uint64_t token, std::auto_ptr<e::buffer> msg)
 {
-    if (m_disrupted_backoff.find(token) != m_disrupted_backoff.end())
-    {
-        return false;
-    }
-
     switch (m_busybee->send(token, msg))
     {
         case BUSYBEE_SUCCESS:
             return true;
         case BUSYBEE_DISRUPTED:
-            handle_disruption(token);
             return false;
         case BUSYBEE_SHUTDOWN:
         case BUSYBEE_POLLFAILED:
