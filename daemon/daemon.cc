@@ -490,31 +490,6 @@ replicant_daemon :: process_config_propose(const replicant::connection& conn,
         return;
     }
 
-    size_t idx_stable = 0;
-
-    while (idx_stable < config_chain.size() &&
-           config_chain[idx_stable] != m_config_manager.stable())
-    {
-        ++idx_stable;
-    }
-
-    if (idx_stable == config_chain.size() && config_chain[0].version() > m_config_manager.stable().version())
-    {
-        LOG(INFO) << "proposal " << proposal_id << ":" << proposal_time
-                  << " is rooted in a stable configuration that supercedes our own;"
-                  << " treating it as an inform message";
-        m_config_manager.reset(config_chain[0]);
-        m_fs.inform_configuration(config_chain[0]);
-        accept_config(config_chain[0]);
-        idx_stable = 0;
-    }
-    else if (idx_stable == config_chain.size())
-    {
-        LOG(ERROR) << "dropping proposal " << proposal_id << ":" << proposal_time
-                   << " that does not contain our stable configuration";
-        return;
-    }
-
     if (m_fs.is_rejected_configuration(proposal_id, proposal_time))
     {
         SEND_CONFIG_RESP(sender, REJECT, proposal_id, proposal_time, m_us);
@@ -535,23 +510,53 @@ replicant_daemon :: process_config_propose(const replicant::connection& conn,
         return;
     }
 
+    size_t idx_stable = 0;
+
+    while (idx_stable < config_chain.size() &&
+           config_chain[idx_stable] != m_config_manager.stable())
+    {
+        ++idx_stable;
+    }
+
+    bool reject = false;
+
+    if (idx_stable == config_chain.size() && config_chain[0].version() > m_config_manager.stable().version())
+    {
+        LOG(INFO) << "proposal " << proposal_id << ":" << proposal_time
+                  << " is rooted in a stable configuration that supercedes our own;"
+                  << " treating it as an inform message";
+        m_config_manager.reset(config_chain[0]);
+        m_fs.inform_configuration(config_chain[0]);
+        accept_config(config_chain[0]);
+        idx_stable = 0;
+    }
+    else if (idx_stable == config_chain.size())
+    {
+        LOG(ERROR) << "rejecting proposal " << proposal_id << ":" << proposal_time
+                   << " that does not contain our stable configuration (proposed="
+                   << m_config_manager.stable().version() << ","
+                   << m_config_manager.latest().version() << "; proposal="
+                   << config_chain[0].version() << "," << config_chain[config_chain.size() - 1].version()
+                   << ")";
+        reject = true;
+    }
+
     configuration* configs = &config_chain.front() + idx_stable;
     size_t configs_sz = config_chain.size() - idx_stable;
     m_fs.propose_configuration(proposal_id, proposal_time, configs, configs_sz);
-    bool reject = false;
 
     // Make sure that we could propose it
-    if (!m_config_manager.is_compatible(configs, configs_sz))
+    if (!reject && !m_config_manager.is_compatible(configs, configs_sz))
     {
         LOG(INFO) << "rejecting proposal " << proposal_id << ":" << proposal_time
                   << " that does not merge with current proposals";
         reject = true;
     }
 
-    for (size_t i = 0; i < configs_sz; ++i)
+    for (size_t i = 0; !reject && i < configs_sz; ++i)
     {
         // Check that the configs are valid
-        if (!configs[i].validate())
+        if (!reject && !configs[i].validate())
         {
             LOG(ERROR) << "rejecting proposal " << proposal_id << ":" << proposal_time
                        << " that contains a corrupt configuration";
@@ -559,7 +564,7 @@ replicant_daemon :: process_config_propose(const replicant::connection& conn,
         }
 
         // Check the sequential links
-        if (i + 1 < configs_sz &&
+        if (!reject && i + 1 < configs_sz &&
             (configs[i].version() + 1 != configs[i + 1].version() ||
              configs[i].this_token() != configs[i + 1].prev_token()))
         {
@@ -569,9 +574,9 @@ replicant_daemon :: process_config_propose(const replicant::connection& conn,
         }
 
         // Check that the proposed chain meets the quorum requirement
-        for (size_t j = i + 1; j < configs_sz; ++j)
+        for (size_t j = i + 1; !reject && j < configs_sz; ++j)
         {
-            if (!configs[j].quorum_of(configs[i]))
+            if (!reject && !configs[j].quorum_of(configs[i]))
             {
                 // This should never happen, so it's an error
                 LOG(ERROR) << "rejecting proposal " << proposal_id << ":" << proposal_time
@@ -581,7 +586,7 @@ replicant_daemon :: process_config_propose(const replicant::connection& conn,
         }
     }
 
-    if (configs[configs_sz - 1].prev(m_us) != sender)
+    if (!reject && configs[configs_sz - 1].prev(m_us) != sender)
     {
         // This should never happen, so it's an error
         LOG(ERROR) << "rejecting proposal " << proposal_id << ":" << proposal_time
