@@ -1518,11 +1518,14 @@ replicant_daemon :: process_heal_resp(const replicant::connection& conn,
     }
 
     // Process all acks up to, but not including, next to_ack
-    while (m_fs.next_slot_to_ack() < to_ack)
+    while (m_fs.next_slot_to_ack() < m_fs.next_slot_to_issue() &&
+           m_fs.next_slot_to_ack() < to_ack)
     {
         acknowledge_command(m_fs.next_slot_to_ack());
     }
 
+    // take the min in case the next host is way ahead of us
+    to_ack = std::min(to_ack, m_fs.next_slot_to_ack());
     m_heal_next.state = heal_next::HEALING;
     m_heal_next.acknowledged = to_ack;
     m_heal_next.proposed = to_ack;
