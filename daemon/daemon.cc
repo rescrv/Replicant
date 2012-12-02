@@ -390,7 +390,7 @@ replicant_daemon :: process_inform(const replicant::connection&,
         m_fs.inform_configuration(new_config);
         accept_config(new_config);
     }
-    else
+    else if (m_config_manager.latest() != new_config)
     {
         LOG(INFO) << "received stale \"INFORM\" message for " << new_config.version()
                   << "; our current configurations include " << m_config_manager.stable().version()
