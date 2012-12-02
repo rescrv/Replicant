@@ -663,6 +663,23 @@ replicant_client :: handle_inform(const po6::net::location& from,
     if (m_config->version() < new_config.version())
     {
         *m_config = new_config;
+
+        for (command_map::iterator it = m_commands.begin(); it != m_commands.end(); )
+        {
+            chain_node n = m_config->get(it->first);
+            e::intrusive_ptr<command> c = it->second;
+
+            // If this op wasn't sent to a removed host, then skip it
+            if (m_config->in_cluster(n))
+            {
+                ++it;
+                continue;
+            }
+
+            m_resend.insert(*it);
+            m_commands.erase(it);
+            it = m_commands.begin();
+        }
     }
 
     return 0;
