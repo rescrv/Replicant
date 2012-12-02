@@ -922,13 +922,18 @@ replicant_daemon :: periodic_maintain_cluster(uint64_t now)
     double mean = 0;
     double stdev = 0;
     mean_and_stdev(suspicions, &mean, &stdev);
-    double thresh = std::max(mean + 2 * stdev, 10.0);
+    double thresh = std::max(mean + 3 * stdev, 10.0);
     configuration fail_config(m_config_manager.latest());
     uint64_t failed = 0;
 
     for (std::map<uint64_t, double>::const_iterator it = suspicions.begin();
             it != suspicions.end(); ++it)
     {
+        if (it->first == m_us.token)
+        {
+            continue;
+        }
+
         if (it->second > thresh)
         {
             chain_node n = fail_config.get(it->first);
