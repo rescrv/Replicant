@@ -84,6 +84,19 @@ exit_on_signal(int /*signum*/)
     s_continue = false;
 }
 
+static uint64_t
+monotonic_time()
+{
+    timespec ts;
+
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) < 0)
+    {
+        abort();
+    }
+
+    return ts.tv_sec * 1000000000 + ts.tv_nsec;
+}
+
 replicant_daemon :: ~replicant_daemon() throw ()
 {
 }
@@ -1728,7 +1741,7 @@ replicant_daemon :: process_pong(const replicant::connection& conn,
                                  std::auto_ptr<e::buffer>,
                                  e::buffer::unpacker)
 {
-    m_failure_manager.heartbeat(conn.token, e::time());
+    m_failure_manager.heartbeat(conn.token, monotonic_time());
 }
 
 void
@@ -2003,7 +2016,7 @@ replicant_daemon :: trip_periodic(uint64_t when, periodic_fptr fp)
 void
 replicant_daemon :: run_periodic()
 {
-    uint64_t now = e::time();
+    uint64_t now = monotonic_time();
 
     while (!m_periodic.empty() && m_periodic[0].first <= now)
     {
