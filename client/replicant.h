@@ -91,6 +91,7 @@ class replicant_client
         replicant_returncode disconnect();
         int64_t loop(int timeout, replicant_returncode* status);
         int64_t loop(int64_t id, int timeout, replicant_returncode* status);
+        void kill(int64_t id);
 
     private:
         class command;

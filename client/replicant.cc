@@ -342,6 +342,14 @@ replicant_client :: loop(int64_t id, int timeout, replicant_returncode* status)
     return c->clientid();
 }
 
+void
+replicant_client :: kill(int64_t id)
+{
+    m_commands.erase(id);
+    m_complete.erase(id);
+    m_resend.erase(id);
+}
+
 int64_t
 replicant_client :: inner_loop(replicant_returncode* status)
 {
