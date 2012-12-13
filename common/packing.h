@@ -35,6 +35,9 @@
 // e
 #include <e/buffer.h>
 
+namespace replicant
+{
+
 e::buffer::packer
 operator << (e::buffer::packer lhs, const po6::net::ipaddr& rhs);
 
@@ -52,5 +55,7 @@ operator >> (e::unpacker lhs, po6::net::location& rhs);
 
 size_t
 pack_size(const po6::net::location& rhs);
+
+} // namespace replicant
 
 #endif // replicant_packing_h_

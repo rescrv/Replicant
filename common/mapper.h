@@ -25,8 +25,8 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
-#ifndef replicant_daemon_mapper_h_
-#define replicant_daemon_mapper_h_
+#ifndef replicant_common_mapper_h_
+#define replicant_common_mapper_h_
 
 // BusyBee
 #include <busybee_mapper.h>
@@ -53,4 +53,4 @@ class mapper : public busybee_mapper
 
 } // namespace replicant
 
-#endif // replicant_daemon_mapper_h_
+#endif // replicant_common_mapper_h_

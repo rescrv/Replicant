@@ -159,7 +159,7 @@ object_manager :: ~object_manager() throw ()
 }
 
 void
-object_manager :: set_callback(replicant_daemon* d, void (replicant_daemon::*func)(uint64_t slot, uint64_t client, uint64_t nonce, response_returncode rc, const e::slice& data))
+object_manager :: set_callback(daemon* d, void (daemon::*func)(uint64_t slot, uint64_t client, uint64_t nonce, response_returncode rc, const e::slice& data))
 {
     m_daemon = d;
     m_daemon_cb = func;

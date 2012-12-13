@@ -49,14 +49,14 @@ class replicant_client::command
         uint64_t nonce() const throw () { return m_nonce; }
         uint64_t clientid() const throw () { return m_clientid; }
         e::buffer* request() const throw () { return m_request.get(); }
-        const chain_node& sent_to() const throw () { return m_sent_to; }
+        const replicant::chain_node& sent_to() const throw () { return m_sent_to; }
         const char* last_error_desc() const throw() { return m_last_error_desc; }
         const char* last_error_file() const throw() { return m_last_error_file; }
         uint64_t last_error_line() const throw() { return m_last_error_line; }
 
     public:
         void set_nonce(uint64_t nonce);
-        void set_sent_to(const chain_node& sent_to);
+        void set_sent_to(const replicant::chain_node& sent_to);
         void fail(replicant_returncode status);
         void succeed(std::auto_ptr<e::buffer> msg,
                      const e::slice& resp,
@@ -86,7 +86,7 @@ class replicant_client::command
         replicant_returncode* m_status;
         const char** m_output;
         size_t* m_output_sz;
-        chain_node m_sent_to;
+        replicant::chain_node m_sent_to;
         const char* m_last_error_desc;
         const char* m_last_error_file;
         uint64_t m_last_error_line;

@@ -44,6 +44,8 @@
 #include "client/command.h"
 #include "client/replicant.h"
 
+using namespace replicant;
+
 #define REPLSETERROR(CODE, DESC) \
     do \
     { \
@@ -98,7 +100,7 @@ replicant_destroy_output(const char* output, size_t)
 replicant_client :: replicant_client(const char* host, in_port_t port)
     : m_busybee_mapper(new replicant::mapper())
     , m_busybee(new busybee_st(m_busybee_mapper.get(), 0))
-    , m_config(new configuration())
+    , m_config(new replicant::configuration())
     , m_bootstrap(host, port)
     , m_token(0x4141414141414141ULL)
     , m_nonce(1)

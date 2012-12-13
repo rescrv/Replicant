@@ -31,6 +31,9 @@
 // Replicant
 #include "daemon/configuration_manager.h"
 
+using replicant::configuration;
+using replicant::configuration_manager;
+
 configuration_manager :: configuration_manager()
     : m_configs()
     , m_proposals()
@@ -313,7 +316,7 @@ configuration_manager :: operator = (const configuration_manager& rhs)
 }
 
 e::buffer::packer
-operator << (e::buffer::packer lhs, const configuration_manager& rhs)
+replicant :: operator << (e::buffer::packer lhs, const configuration_manager& rhs)
 {
     uint32_t configs_sz = rhs.m_configs.size();
     lhs = lhs << configs_sz;
@@ -337,7 +340,7 @@ operator << (e::buffer::packer lhs, const configuration_manager& rhs)
 }
 
 e::unpacker
-operator >> (e::unpacker lhs, configuration_manager& rhs)
+replicant :: operator >> (e::unpacker lhs, configuration_manager& rhs)
 {
     rhs.m_configs.clear();
     rhs.m_proposals.clear();
@@ -383,7 +386,7 @@ operator >> (e::unpacker lhs, configuration_manager& rhs)
 }
 
 size_t
-pack_size(const configuration_manager& cm)
+replicant :: pack_size(const configuration_manager& cm)
 {
     size_t sz = 2 * sizeof(uint32_t)
               + cm.m_proposals.size() * 3 * sizeof(uint64_t);

@@ -36,6 +36,9 @@
 #define MILLIS (1000ULL * MICROS)
 #define SECONDS (1000ULL * MILLIS)
 
+namespace replicant
+{
+
 class settings
 {
     public:
@@ -68,6 +71,8 @@ settings :: settings()
     , PERIODIC_SIZE_WARNING(16)
 {
 }
+
+} // namespace replicant
 
 #undef SECONDS
 #undef MILLIS

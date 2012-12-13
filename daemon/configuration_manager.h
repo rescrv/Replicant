@@ -34,6 +34,9 @@
 // Replicant
 #include "common/configuration.h"
 
+namespace replicant
+{
+
 class configuration_manager
 {
     public:
@@ -99,5 +102,7 @@ operator >> (e::unpacker lhs, configuration_manager& rhs);
 
 size_t
 pack_size(const configuration_manager& cm);
+
+} // namespace replicant
 
 #endif // replicant_configuration_manager_h_

@@ -33,6 +33,9 @@
 
 #define REPL_CONFIG_SZ 255
 
+namespace replicant
+{
+
 class configuration
 {
     public:
@@ -124,5 +127,7 @@ pack_size(const configuration& rhs);
 
 size_t
 pack_size(const std::vector<configuration>& rhs);
+
+} // namespace replicant
 
 #endif // replicant_configuration_h_

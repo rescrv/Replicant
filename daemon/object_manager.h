@@ -45,10 +45,9 @@
 // Replicant
 #include "common/response_returncode.h"
 
-class replicant_daemon;
-
 namespace replicant
 {
+class daemon;
 
 class object_manager
 {
@@ -57,7 +56,7 @@ class object_manager
         ~object_manager() throw ();
 
     public:
-        void set_callback(replicant_daemon* d, void (replicant_daemon::*func)(uint64_t slot, uint64_t client, uint64_t nonce, response_returncode rc, const e::slice& data));
+        void set_callback(daemon* d, void (daemon::*func)(uint64_t slot, uint64_t client, uint64_t nonce, response_returncode rc, const e::slice& data));
         void enqueue(uint64_t slot, uint64_t object,
                      uint64_t client, uint64_t nonce,
                      const e::slice& data, std::string* backing);
@@ -79,8 +78,8 @@ class object_manager
         object_manager& operator = (const object_manager&);
 
     private:
-        replicant_daemon* m_daemon;
-        void (replicant_daemon::*m_daemon_cb)(uint64_t slot, uint64_t client, uint64_t nonce, response_returncode rc, const e::slice& data);
+        daemon* m_daemon;
+        void (daemon::*m_daemon_cb)(uint64_t slot, uint64_t client, uint64_t nonce, response_returncode rc, const e::slice& data);
         object_map_t m_objects;
         // protects the m_cleanup_* members
         po6::threads::mutex m_cleanup_protect;

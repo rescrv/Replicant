@@ -63,6 +63,8 @@
 #include "daemon/daemon.h"
 #include "daemon/heal_next.h"
 
+using replicant::daemon;
+
 #define CHECK_UNPACK(MSGTYPE, UNPACKER) \
     do \
     { \
@@ -97,11 +99,11 @@ monotonic_time()
     return ts.tv_sec * 1000000000 + ts.tv_nsec;
 }
 
-replicant_daemon :: ~replicant_daemon() throw ()
+daemon :: ~daemon() throw ()
 {
 }
 
-replicant_daemon :: replicant_daemon()
+daemon :: daemon()
     : m_s()
     , m_busybee_mapper()
     , m_busybee()
@@ -116,11 +118,11 @@ replicant_daemon :: replicant_daemon()
     , m_disrupted_times()
     , m_fs()
 {
-    m_object_manager.set_callback(this, &replicant_daemon::record_execution);
-    trip_periodic(0, &replicant_daemon::periodic_join_cluster);
-    trip_periodic(0, &replicant_daemon::periodic_describe_cluster);
-    trip_periodic(0, &replicant_daemon::periodic_retry_reconfiguration);
-    trip_periodic(0, &replicant_daemon::periodic_exchange);
+    m_object_manager.set_callback(this, &daemon::record_execution);
+    trip_periodic(0, &daemon::periodic_join_cluster);
+    trip_periodic(0, &daemon::periodic_describe_cluster);
+    trip_periodic(0, &daemon::periodic_retry_reconfiguration);
+    trip_periodic(0, &daemon::periodic_exchange);
 }
 
 static bool
@@ -134,12 +136,12 @@ install_signal_handler(int signum)
 }
 
 int
-replicant_daemon :: run(bool daemonize,
-                        po6::pathname data,
-                        bool set_bind_to,
-                        po6::net::location bind_to,
-                        bool set_existing,
-                        po6::net::hostname existing)
+daemon :: run(bool daemonize,
+              po6::pathname data,
+              bool set_bind_to,
+              po6::net::location bind_to,
+              bool set_existing,
+              po6::net::hostname existing)
 {
     if (!install_signal_handler(SIGHUP))
     {
@@ -356,9 +358,9 @@ replicant_daemon :: run(bool daemonize,
 }
 
 void
-replicant_daemon :: process_bootstrap(const replicant::connection& conn,
-                                      std::auto_ptr<e::buffer>,
-                                      e::unpacker)
+daemon :: process_bootstrap(const replicant::connection& conn,
+                            std::auto_ptr<e::buffer>,
+                            e::unpacker)
 {
     LOG(INFO) << "providing configuration to " << conn.token
               << " as part of the bootstrap process";
@@ -372,9 +374,9 @@ replicant_daemon :: process_bootstrap(const replicant::connection& conn,
 }
 
 void
-replicant_daemon :: process_inform(const replicant::connection&,
-                                   std::auto_ptr<e::buffer>,
-                                   e::unpacker up)
+daemon :: process_inform(const replicant::connection&,
+                         std::auto_ptr<e::buffer>,
+                         e::unpacker up)
 {
     configuration new_config;
     up = up >> new_config;
@@ -399,9 +401,9 @@ replicant_daemon :: process_inform(const replicant::connection&,
 }
 
 void
-replicant_daemon :: process_join(const replicant::connection& conn,
-                                 std::auto_ptr<e::buffer>,
-                                 e::unpacker up)
+daemon :: process_join(const replicant::connection& conn,
+                       std::auto_ptr<e::buffer>,
+                       e::unpacker up)
 {
     chain_node sender;
     up = up >> sender;
@@ -477,9 +479,9 @@ replicant_daemon :: process_join(const replicant::connection& conn,
     while(0)
 
 void
-replicant_daemon :: process_config_propose(const replicant::connection& conn,
-                                           std::auto_ptr<e::buffer>,
-                                           e::unpacker up)
+daemon :: process_config_propose(const replicant::connection& conn,
+                                 std::auto_ptr<e::buffer>,
+                                 e::unpacker up)
 {
     uint64_t proposal_id;
     uint64_t proposal_time;
@@ -656,9 +658,9 @@ replicant_daemon :: process_config_propose(const replicant::connection& conn,
 }
 
 void
-replicant_daemon :: process_config_accept(const replicant::connection& conn,
-                                          std::auto_ptr<e::buffer>,
-                                          e::unpacker up)
+daemon :: process_config_accept(const replicant::connection& conn,
+                                std::auto_ptr<e::buffer>,
+                                e::unpacker up)
 {
     uint64_t proposal_id;
     uint64_t proposal_time;
@@ -718,9 +720,9 @@ replicant_daemon :: process_config_accept(const replicant::connection& conn,
 }
 
 void
-replicant_daemon :: process_config_reject(const replicant::connection& conn,
-                                          std::auto_ptr<e::buffer>,
-                                          e::unpacker up)
+daemon :: process_config_reject(const replicant::connection& conn,
+                                std::auto_ptr<e::buffer>,
+                                e::unpacker up)
 {
     uint64_t proposal_id;
     uint64_t proposal_time;
@@ -781,7 +783,7 @@ replicant_daemon :: process_config_reject(const replicant::connection& conn,
 
 // caller must enforce quorum and chaining invariants
 void
-replicant_daemon :: propose_config(const configuration& config)
+daemon :: propose_config(const configuration& config)
 {
     assert(config.validate());
     uint64_t proposal_id = 0xdeadbeefcafebabeULL;
@@ -821,13 +823,13 @@ replicant_daemon :: propose_config(const configuration& config)
 }
 
 void
-replicant_daemon :: accept_config(const configuration& new_config)
+daemon :: accept_config(const configuration& new_config)
 {
     LOG(INFO) << "deploying configuration " << new_config;
-    trip_periodic(0, &replicant_daemon::periodic_join_cluster);
-    trip_periodic(0, &replicant_daemon::periodic_retry_reconfiguration);
-    trip_periodic(0, &replicant_daemon::periodic_maintain_cluster);
-    trip_periodic(0, &replicant_daemon::periodic_describe_cluster);
+    trip_periodic(0, &daemon::periodic_join_cluster);
+    trip_periodic(0, &daemon::periodic_retry_reconfiguration);
+    trip_periodic(0, &daemon::periodic_maintain_cluster);
+    trip_periodic(0, &daemon::periodic_describe_cluster);
     configuration old_config(m_config_manager.stable());
     m_config_manager.advance(new_config);
     accept_config_inform_spares(old_config);
@@ -839,7 +841,7 @@ replicant_daemon :: accept_config(const configuration& new_config)
 }
 
 void
-replicant_daemon :: accept_config_inform_spares(const configuration& /*old_config*/)
+daemon :: accept_config_inform_spares(const configuration& /*old_config*/)
 {
     const configuration& new_config(m_config_manager.stable());
 
@@ -856,14 +858,14 @@ replicant_daemon :: accept_config_inform_spares(const configuration& /*old_confi
 }
 
 void
-replicant_daemon :: periodic_join_cluster(uint64_t now)
+daemon :: periodic_join_cluster(uint64_t now)
 {
     if (m_config_manager.in_any_cluster(m_us))
     {
         return;
     }
 
-    trip_periodic(now + m_s.JOIN_INTERVAL, &replicant_daemon::periodic_join_cluster);
+    trip_periodic(now + m_s.JOIN_INTERVAL, &daemon::periodic_join_cluster);
 
     for (const chain_node* n = m_config_manager.stable().members_begin();
             n != m_config_manager.stable().members_end(); ++n)
@@ -908,9 +910,9 @@ mean_and_stdev(const std::map<uint64_t, double>& suspicions, double* mean, doubl
 }
 
 void
-replicant_daemon :: periodic_maintain_cluster(uint64_t now)
+daemon :: periodic_maintain_cluster(uint64_t now)
 {
-    trip_periodic(now + m_s.MAINTAIN_INTERVAL, &replicant_daemon::periodic_maintain_cluster);
+    trip_periodic(now + m_s.MAINTAIN_INTERVAL, &daemon::periodic_maintain_cluster);
     // desired fault tolerance level
     uint64_t f_d = m_s.FAULT_TOLERANCE;
     // current fault tolerance level
@@ -979,9 +981,9 @@ replicant_daemon :: periodic_maintain_cluster(uint64_t now)
 }
 
 void
-replicant_daemon :: periodic_describe_cluster(uint64_t now)
+daemon :: periodic_describe_cluster(uint64_t now)
 {
-    trip_periodic(now + m_s.REPORT_INTERVAL, &replicant_daemon::periodic_describe_cluster);
+    trip_periodic(now + m_s.REPORT_INTERVAL, &daemon::periodic_describe_cluster);
     LOG(INFO) << "the latest stable configuration is " << m_config_manager.stable();
     LOG(INFO) << "the latest proposed configuration is " << m_config_manager.latest();
     uint64_t f_d = m_s.FAULT_TOLERANCE;
@@ -1003,9 +1005,9 @@ replicant_daemon :: periodic_describe_cluster(uint64_t now)
 }
 
 void
-replicant_daemon :: periodic_retry_reconfiguration(uint64_t now)
+daemon :: periodic_retry_reconfiguration(uint64_t now)
 {
-    trip_periodic(now + m_s.RETRY_RECONFIGURE_INTERVAL, &replicant_daemon::periodic_retry_reconfiguration);
+    trip_periodic(now + m_s.RETRY_RECONFIGURE_INTERVAL, &daemon::periodic_retry_reconfiguration);
 
     if (m_config_manager.stable().version() == m_config_manager.latest().version())
     {
@@ -1055,7 +1057,7 @@ replicant_daemon :: periodic_retry_reconfiguration(uint64_t now)
 }
 
 void
-replicant_daemon :: handle_disruption_reset_reconfiguration(uint64_t token)
+daemon :: handle_disruption_reset_reconfiguration(uint64_t token)
 {
     std::vector<configuration> config_chain;
     std::vector<configuration_manager::proposal> proposals;
@@ -1100,9 +1102,9 @@ replicant_daemon :: handle_disruption_reset_reconfiguration(uint64_t token)
 }
 
 void
-replicant_daemon :: process_client_register(const replicant::connection& conn,
-                                            std::auto_ptr<e::buffer>,
-                                            e::unpacker up)
+daemon :: process_client_register(const replicant::connection& conn,
+                                  std::auto_ptr<e::buffer>,
+                                  e::unpacker up)
 {
     uint64_t client;
     up = up >> client;
@@ -1152,9 +1154,9 @@ replicant_daemon :: process_client_register(const replicant::connection& conn,
 }
 
 void
-replicant_daemon :: process_client_disconnect(const replicant::connection& conn,
-                                              std::auto_ptr<e::buffer>,
-                                              e::unpacker up)
+daemon :: process_client_disconnect(const replicant::connection& conn,
+                                    std::auto_ptr<e::buffer>,
+                                    e::unpacker up)
 {
     uint64_t nonce;
     up = up >> nonce;
@@ -1181,7 +1183,7 @@ replicant_daemon :: process_client_disconnect(const replicant::connection& conn,
 }
 
 void
-replicant_daemon :: accept_config_inform_clients(const configuration& /*old_config*/)
+daemon :: accept_config_inform_clients(const configuration& /*old_config*/)
 {
     const configuration& new_config(m_config_manager.stable());
     std::vector<uint64_t> clients;
@@ -1199,9 +1201,9 @@ replicant_daemon :: accept_config_inform_clients(const configuration& /*old_conf
 }
 
 void
-replicant_daemon :: process_command_submit(const replicant::connection& conn,
-                                           std::auto_ptr<e::buffer> msg,
-                                           e::unpacker up)
+daemon :: process_command_submit(const replicant::connection& conn,
+                                 std::auto_ptr<e::buffer> msg,
+                                 e::unpacker up)
 {
     uint64_t object;
     uint64_t client;
@@ -1272,9 +1274,9 @@ replicant_daemon :: process_command_submit(const replicant::connection& conn,
 }
 
 void
-replicant_daemon :: process_command_issue(const replicant::connection& conn,
-                                          std::auto_ptr<e::buffer>,
-                                          e::unpacker up)
+daemon :: process_command_issue(const replicant::connection& conn,
+                                std::auto_ptr<e::buffer>,
+                                e::unpacker up)
 {
     uint64_t slot = 0;
     uint64_t object = 0;
@@ -1311,9 +1313,9 @@ replicant_daemon :: process_command_issue(const replicant::connection& conn,
 }
 
 void
-replicant_daemon :: process_command_ack(const replicant::connection& conn,
-                                        std::auto_ptr<e::buffer>,
-                                        e::unpacker up)
+daemon :: process_command_ack(const replicant::connection& conn,
+                              std::auto_ptr<e::buffer>,
+                              e::unpacker up)
 {
     uint64_t slot = 0;
     up = up >> slot;
@@ -1335,11 +1337,11 @@ replicant_daemon :: process_command_ack(const replicant::connection& conn,
 }
 
 void
-replicant_daemon :: issue_command(uint64_t slot,
-                                  uint64_t object,
-                                  uint64_t client,
-                                  uint64_t nonce,
-                                  const e::slice& data)
+daemon :: issue_command(uint64_t slot,
+                        uint64_t object,
+                        uint64_t client,
+                        uint64_t nonce,
+                        const e::slice& data)
 {
     if (slot != m_fs.next_slot_to_issue())
     {
@@ -1378,7 +1380,7 @@ replicant_daemon :: issue_command(uint64_t slot,
 }
 
 void
-replicant_daemon :: acknowledge_command(uint64_t slot)
+daemon :: acknowledge_command(uint64_t slot)
 {
     if (m_heal_next.state != heal_next::HEALTHY)
     {
@@ -1453,7 +1455,7 @@ replicant_daemon :: acknowledge_command(uint64_t slot)
 }
 
 void
-replicant_daemon :: record_execution(uint64_t slot, uint64_t client, uint64_t nonce, replicant::response_returncode rc, const e::slice& data)
+daemon :: record_execution(uint64_t slot, uint64_t client, uint64_t nonce, replicant::response_returncode rc, const e::slice& data)
 {
     size_t sz = BUSYBEE_HEADER_SIZE
               + pack_size(REPLNET_COMMAND_RESPONSE)
@@ -1469,9 +1471,9 @@ replicant_daemon :: record_execution(uint64_t slot, uint64_t client, uint64_t no
 }
 
 void
-replicant_daemon :: process_heal_req(const replicant::connection& conn,
-                                     std::auto_ptr<e::buffer>,
-                                     e::unpacker up)
+daemon :: process_heal_req(const replicant::connection& conn,
+                           std::auto_ptr<e::buffer>,
+                           e::unpacker up)
 {
     uint64_t version;
     up = up >> version;
@@ -1507,9 +1509,9 @@ replicant_daemon :: process_heal_req(const replicant::connection& conn,
 }
 
 void
-replicant_daemon :: process_heal_resp(const replicant::connection& conn,
-                                      std::auto_ptr<e::buffer>,
-                                      e::unpacker up)
+daemon :: process_heal_resp(const replicant::connection& conn,
+                            std::auto_ptr<e::buffer>,
+                            e::unpacker up)
 {
     uint64_t version;
     uint64_t to_ack;
@@ -1553,9 +1555,9 @@ replicant_daemon :: process_heal_resp(const replicant::connection& conn,
 }
 
 void
-replicant_daemon :: process_heal_done(const replicant::connection& conn,
-                                      std::auto_ptr<e::buffer> msg,
-                                      e::unpacker)
+daemon :: process_heal_done(const replicant::connection& conn,
+                            std::auto_ptr<e::buffer> msg,
+                            e::unpacker)
 {
     if (conn.is_next && m_heal_next.state == heal_next::HEALTHY_SENT)
     {
@@ -1572,7 +1574,7 @@ replicant_daemon :: process_heal_done(const replicant::connection& conn,
 }
 
 void
-replicant_daemon :: transfer_more_state()
+daemon :: transfer_more_state()
 {
     while (m_heal_next.state < heal_next::HEALTHY_SENT &&
            m_heal_next.proposed < m_fs.next_slot_to_issue() &&
@@ -1633,14 +1635,14 @@ replicant_daemon :: transfer_more_state()
 }
 
 void
-replicant_daemon :: accept_config_reset_healing(const configuration& /*old_config*/)
+daemon :: accept_config_reset_healing(const configuration& /*old_config*/)
 {
     const configuration& new_config(m_config_manager.stable());
 
     if (new_config.has_next(m_us))
     {
         m_heal_next = heal_next();
-        trip_periodic(0, &replicant_daemon::periodic_heal_next);
+        trip_periodic(0, &daemon::periodic_heal_next);
     }
     else
     {
@@ -1663,12 +1665,12 @@ replicant_daemon :: accept_config_reset_healing(const configuration& /*old_confi
 }
 
 void
-replicant_daemon :: periodic_heal_next(uint64_t now)
+daemon :: periodic_heal_next(uint64_t now)
 {
     // keep running this function until we are healed
     if (m_heal_next.state != heal_next::HEALTHY)
     {
-        trip_periodic(now + m_s.HEAL_NEXT_INTERVAL, &replicant_daemon::periodic_heal_next);
+        trip_periodic(now + m_s.HEAL_NEXT_INTERVAL, &daemon::periodic_heal_next);
     }
 
     size_t sz;
@@ -1704,7 +1706,7 @@ replicant_daemon :: periodic_heal_next(uint64_t now)
 }
 
 void
-replicant_daemon :: handle_disruption_reset_healing(uint64_t token)
+daemon :: handle_disruption_reset_healing(uint64_t token)
 {
     if (m_config_manager.stable().has_next(m_us))
     {
@@ -1713,15 +1715,15 @@ replicant_daemon :: handle_disruption_reset_healing(uint64_t token)
         if (token == n.token)
         {
             m_heal_next = heal_next();
-            trip_periodic(0, &replicant_daemon::periodic_heal_next);
+            trip_periodic(0, &daemon::periodic_heal_next);
         }
     }
 }
 
 void
-replicant_daemon :: process_ping(const replicant::connection& conn,
-                                 std::auto_ptr<e::buffer> msg,
-                                 e::unpacker up)
+daemon :: process_ping(const replicant::connection& conn,
+                       std::auto_ptr<e::buffer> msg,
+                       e::unpacker up)
 {
     uint64_t version = 0;
     up = up >> version;
@@ -1742,17 +1744,17 @@ replicant_daemon :: process_ping(const replicant::connection& conn,
 }
 
 void
-replicant_daemon :: process_pong(const replicant::connection& conn,
-                                 std::auto_ptr<e::buffer>,
-                                 e::unpacker)
+daemon :: process_pong(const replicant::connection& conn,
+                       std::auto_ptr<e::buffer>,
+                       e::unpacker)
 {
     m_failure_manager.heartbeat(conn.token, monotonic_time());
 }
 
 void
-replicant_daemon :: periodic_exchange(uint64_t now)
+daemon :: periodic_exchange(uint64_t now)
 {
-    trip_periodic(now + m_s.PING_INTERVAL, &replicant_daemon::periodic_exchange);
+    trip_periodic(now + m_s.PING_INTERVAL, &daemon::periodic_exchange);
     std::vector<chain_node> nodes;
     m_config_manager.get_all_nodes(&nodes);
     uint64_t version = m_config_manager.stable().version();
@@ -1774,7 +1776,7 @@ replicant_daemon :: periodic_exchange(uint64_t now)
 }
 
 bool
-replicant_daemon :: recv(replicant::connection* conn, std::auto_ptr<e::buffer>* msg)
+daemon :: recv(replicant::connection* conn, std::auto_ptr<e::buffer>* msg)
 {
     while (s_continue)
     {
@@ -1851,7 +1853,7 @@ replicant_daemon :: recv(replicant::connection* conn, std::auto_ptr<e::buffer>* 
 }
 
 bool
-replicant_daemon :: send(const replicant::connection& conn, std::auto_ptr<e::buffer> msg)
+daemon :: send(const replicant::connection& conn, std::auto_ptr<e::buffer> msg)
 {
     if (m_disrupted_backoff.find(conn.token) != m_disrupted_backoff.end())
     {
@@ -1876,7 +1878,7 @@ replicant_daemon :: send(const replicant::connection& conn, std::auto_ptr<e::buf
 }
 
 bool
-replicant_daemon :: send(const chain_node& node, std::auto_ptr<e::buffer> msg)
+daemon :: send(const chain_node& node, std::auto_ptr<e::buffer> msg)
 {
     if (m_disrupted_backoff.find(node.token) != m_disrupted_backoff.end())
     {
@@ -1903,7 +1905,7 @@ replicant_daemon :: send(const chain_node& node, std::auto_ptr<e::buffer> msg)
 }
 
 bool
-replicant_daemon :: send_no_disruption(uint64_t token, std::auto_ptr<e::buffer> msg)
+daemon :: send_no_disruption(uint64_t token, std::auto_ptr<e::buffer> msg)
 {
     switch (m_busybee->send(token, msg))
     {
@@ -1922,10 +1924,10 @@ replicant_daemon :: send_no_disruption(uint64_t token, std::auto_ptr<e::buffer> 
 }
 
 void
-replicant_daemon :: handle_disruption(uint64_t token)
+daemon :: handle_disruption(uint64_t token)
 {
     m_disrupted_unhandled.push(token);
-    trip_periodic(0, &replicant_daemon::periodic_handle_disruption);
+    trip_periodic(0, &daemon::periodic_handle_disruption);
 }
 
 static bool
@@ -1935,7 +1937,7 @@ compare_disrupted(const std::pair<uint64_t, uint64_t>& lhs, const std::pair<uint
 }
 
 void
-replicant_daemon :: periodic_handle_disruption(uint64_t now)
+daemon :: periodic_handle_disruption(uint64_t now)
 {
     uint64_t start = m_disrupted_times.empty() ? UINT64_MAX : m_disrupted_times[0].first;
 
@@ -1956,12 +1958,12 @@ replicant_daemon :: periodic_handle_disruption(uint64_t now)
 
     if (end < start)
     {
-        trip_periodic(end, &replicant_daemon::periodic_retry_disruption);
+        trip_periodic(end, &daemon::periodic_retry_disruption);
     }
 }
 
 void
-replicant_daemon :: periodic_retry_disruption(uint64_t now)
+daemon :: periodic_retry_disruption(uint64_t now)
 {
     while (!m_disrupted_times.empty() && m_disrupted_times[0].first <= now)
     {
@@ -1975,11 +1977,11 @@ replicant_daemon :: periodic_retry_disruption(uint64_t now)
 
     if (!m_disrupted_times.empty())
     {
-        trip_periodic(m_disrupted_times[0].first, &replicant_daemon::periodic_retry_disruption);
+        trip_periodic(m_disrupted_times[0].first, &daemon::periodic_retry_disruption);
     }
 }
 
-typedef void (replicant_daemon::*_periodic_fptr)(uint64_t now);
+typedef void (daemon::*_periodic_fptr)(uint64_t now);
 typedef std::pair<uint64_t, _periodic_fptr> _periodic;
 
 static bool
@@ -1989,25 +1991,25 @@ compare_periodic(const _periodic& lhs, const _periodic& rhs)
 }
 
 void
-replicant_daemon :: trip_periodic(uint64_t when, periodic_fptr fp)
+daemon :: trip_periodic(uint64_t when, periodic_fptr fp)
 {
     for (size_t i = 0; i < m_periodic.size(); ++i)
     {
         if (m_periodic[i].second == fp)
         {
-            m_periodic[i].second = &replicant_daemon::periodic_nop;
+            m_periodic[i].second = &daemon::periodic_nop;
         }
     }
 
     // Clean up dead functions from the front
-    while (!m_periodic.empty() && m_periodic[0].second == &replicant_daemon::periodic_nop)
+    while (!m_periodic.empty() && m_periodic[0].second == &daemon::periodic_nop)
     {
         std::pop_heap(m_periodic.begin(), m_periodic.end(), compare_periodic);
         m_periodic.pop_back();
     }
 
     // And from the back
-    while (!m_periodic.empty() && m_periodic.back().second == &replicant_daemon::periodic_nop)
+    while (!m_periodic.empty() && m_periodic.back().second == &daemon::periodic_nop)
     {
         m_periodic.pop_back();
     }
@@ -2017,7 +2019,7 @@ replicant_daemon :: trip_periodic(uint64_t when, periodic_fptr fp)
 }
 
 void
-replicant_daemon :: run_periodic()
+daemon :: run_periodic()
 {
     uint64_t now = monotonic_time();
 
@@ -2039,12 +2041,12 @@ replicant_daemon :: run_periodic()
 }
 
 void
-replicant_daemon :: periodic_nop(uint64_t)
+daemon :: periodic_nop(uint64_t)
 {
 }
 
 bool
-replicant_daemon :: generate_token(uint64_t* token)
+daemon :: generate_token(uint64_t* token)
 {
     po6::io::fd sysrand(open("/dev/urandom", O_RDONLY));
 

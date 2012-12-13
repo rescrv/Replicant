@@ -33,7 +33,7 @@
 #include "common/network_msgtype.h"
 
 std::ostream&
-operator << (std::ostream& lhs, replicant_network_msgtype rhs)
+replicant :: operator << (std::ostream& lhs, replicant_network_msgtype rhs)
 {
     switch (rhs)
     {
@@ -63,14 +63,14 @@ operator << (std::ostream& lhs, replicant_network_msgtype rhs)
 }
 
 e::buffer::packer
-operator << (e::buffer::packer lhs, const replicant_network_msgtype& rhs)
+replicant :: operator << (e::buffer::packer lhs, const replicant_network_msgtype& rhs)
 {
     uint8_t mt = static_cast<uint8_t>(rhs);
     return lhs << mt;
 }
 
 e::unpacker
-operator >> (e::unpacker lhs, replicant_network_msgtype& rhs)
+replicant :: operator >> (e::unpacker lhs, replicant_network_msgtype& rhs)
 {
     uint8_t mt;
     lhs = lhs >> mt;
@@ -79,7 +79,7 @@ operator >> (e::unpacker lhs, replicant_network_msgtype& rhs)
 }
 
 size_t
-pack_size(const replicant_network_msgtype&)
+replicant :: pack_size(const replicant_network_msgtype&)
 {
     return sizeof(uint8_t);
 }

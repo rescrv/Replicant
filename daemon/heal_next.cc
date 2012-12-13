@@ -28,6 +28,8 @@
 // Replicant
 #include "daemon/heal_next.h"
 
+using replicant::heal_next;
+
 heal_next :: heal_next()
     : state(BROKEN)
     , acknowledged(0)

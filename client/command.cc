@@ -33,6 +33,8 @@
 // Replicant
 #include "client/command.h"
 
+using replicant::chain_node;
+
 replicant_client :: command :: command(replicant_returncode* st,
                                        uint64_t n,
                                        std::auto_ptr<e::buffer> m,

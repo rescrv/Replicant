@@ -29,7 +29,7 @@
 #include "common/packing.h"
 
 e::buffer::packer
-operator << (e::buffer::packer lhs, const po6::net::ipaddr& rhs)
+replicant :: operator << (e::buffer::packer lhs, const po6::net::ipaddr& rhs)
 {
     assert(rhs.family() == AF_INET || rhs.family() == AF_INET6 || rhs.family() == AF_UNSPEC);
     uint8_t type;
@@ -60,7 +60,7 @@ operator << (e::buffer::packer lhs, const po6::net::ipaddr& rhs)
 }
 
 e::unpacker
-operator >> (e::unpacker lhs, po6::net::ipaddr& rhs)
+replicant :: operator >> (e::unpacker lhs, po6::net::ipaddr& rhs)
 {
     uint8_t type;
     lhs = lhs >> type;
@@ -97,25 +97,25 @@ operator >> (e::unpacker lhs, po6::net::ipaddr& rhs)
 }
 
 size_t
-pack_size(const po6::net::ipaddr&)
+replicant :: pack_size(const po6::net::ipaddr&)
 {
     return 17; // One byte for family, and 4/16 for address
 }
 
 e::buffer::packer
-operator << (e::buffer::packer lhs, const po6::net::location& rhs)
+replicant :: operator << (e::buffer::packer lhs, const po6::net::location& rhs)
 {
     return lhs << rhs.address << rhs.port;
 }
 
 e::unpacker
-operator >> (e::unpacker lhs, po6::net::location& rhs)
+replicant :: operator >> (e::unpacker lhs, po6::net::location& rhs)
 {
     return lhs >> rhs.address >> rhs.port;
 }
 
 size_t
-pack_size(const po6::net::location& rhs)
+replicant :: pack_size(const po6::net::location& rhs)
 {
     return pack_size(rhs.address) + sizeof(uint16_t);
 }

@@ -31,6 +31,9 @@
 // e
 #include <e/buffer.h>
 
+namespace replicant
+{
+
 enum replicant_network_msgtype
 {
     REPLNET_NOP,
@@ -64,5 +67,7 @@ operator >> (e::unpacker lhs, replicant_network_msgtype& rhs);
 
 size_t
 pack_size(const replicant_network_msgtype& rhs);
+
+} // namespace replicant
 
 #endif // replicant_network_msgtype_h_

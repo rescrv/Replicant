@@ -59,9 +59,10 @@ enum replicant_returncode
 void
 replicant_destroy_output(const char* output, size_t output_sz);
 
-class chain_node;
 namespace replicant
 {
+class chain_node;
+class configuration;
 class mapper;
 } // namespace replicant
 
@@ -92,6 +93,7 @@ class replicant_client
         int64_t loop(int timeout, replicant_returncode* status);
         int64_t loop(int64_t id, int timeout, replicant_returncode* status);
         void kill(int64_t id);
+        int poll_fd();
 
     private:
         class command;
@@ -116,7 +118,7 @@ class replicant_client
                                    replicant_returncode* status);
         int64_t send_to_preferred_chain_member(e::intrusive_ptr<command> cmd,
                                                replicant_returncode* status);
-        int64_t handle_disruption(const chain_node& node,
+        int64_t handle_disruption(const replicant::chain_node& node,
                                   replicant_returncode* status);
         int64_t handle_command_response(const po6::net::location& from,
                                         std::auto_ptr<e::buffer> msg,
@@ -132,7 +134,7 @@ class replicant_client
     private:
         std::auto_ptr<replicant::mapper> m_busybee_mapper;
         std::auto_ptr<class busybee_st> m_busybee;
-        std::auto_ptr<class configuration> m_config;
+        std::auto_ptr<replicant::configuration> m_config;
         po6::net::hostname m_bootstrap;
         uint64_t m_token;
         uint64_t m_nonce;

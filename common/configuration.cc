@@ -34,6 +34,9 @@
 // Replicant
 #include "common/configuration.h"
 
+using replicant::chain_node;
+using replicant::configuration;
+
 configuration :: configuration()
     : m_version(0)
     , m_chain()
@@ -531,7 +534,7 @@ configuration :: bump_version()
 }
 
 bool
-operator == (const configuration& lhs, const configuration& rhs)
+replicant :: operator == (const configuration& lhs, const configuration& rhs)
 {
     if (lhs.m_version != rhs.m_version ||
         lhs.m_member_sz != rhs.m_member_sz ||
@@ -569,7 +572,7 @@ operator == (const configuration& lhs, const configuration& rhs)
 }
 
 std::ostream&
-operator << (std::ostream& lhs, const configuration& rhs)
+replicant :: operator << (std::ostream& lhs, const configuration& rhs)
 {
     lhs << "configuration(version="
         << rhs.version() << ", members=";
@@ -598,7 +601,7 @@ operator << (std::ostream& lhs, const configuration& rhs)
 }
 
 e::buffer::packer
-operator << (e::buffer::packer lhs, const configuration& rhs)
+replicant :: operator << (e::buffer::packer lhs, const configuration& rhs)
 {
     lhs = lhs << rhs.m_version
               << rhs.m_member_sz
@@ -624,7 +627,7 @@ operator << (e::buffer::packer lhs, const configuration& rhs)
 }
 
 e::unpacker
-operator >> (e::unpacker lhs, configuration& rhs)
+replicant :: operator >> (e::unpacker lhs, configuration& rhs)
 {
     lhs = lhs >> rhs.m_version
               >> rhs.m_member_sz
@@ -650,7 +653,7 @@ operator >> (e::unpacker lhs, configuration& rhs)
 }
 
 char*
-pack_config(const configuration& config, char* ptr)
+replicant :: pack_config(const configuration& config, char* ptr)
 {
     // XXX inefficient, lazy hack
     std::auto_ptr<e::buffer> msg(e::buffer::create(pack_size(config)));
@@ -660,7 +663,7 @@ pack_config(const configuration& config, char* ptr)
 }
 
 size_t
-pack_size(const configuration& rhs)
+replicant :: pack_size(const configuration& rhs)
 {
     size_t sz = 0;
 
@@ -683,7 +686,7 @@ pack_size(const configuration& rhs)
 }
 
 size_t
-pack_size(const std::vector<configuration>& rhs)
+replicant :: pack_size(const std::vector<configuration>& rhs)
 {
     size_t sz = sizeof(uint32_t);
 

@@ -35,6 +35,9 @@
 // e
 #include <e/buffer.h>
 
+namespace replicant
+{
+
 class chain_node
 {
     public:
@@ -64,5 +67,7 @@ operator >> (e::unpacker lhs, chain_node& rhs);
 
 size_t
 pack_size(const chain_node& rhs);
+
+} // namespace replicant
 
 #endif // replicant_chain_node_h_

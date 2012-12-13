@@ -164,7 +164,7 @@ main(int argc, const char* argv[])
 
     try
     {
-        replicant_daemon d;
+        replicant::daemon d;
 
         if (strcmp(_listen_host, "auto") == 0)
         {

@@ -31,6 +31,9 @@
 // C
 #include <stdint.h>
 
+namespace replicant
+{
+
 class heal_next
 {
     public:
@@ -52,5 +55,7 @@ class heal_next
         uint64_t acknowledged;
         uint64_t proposed;
 };
+
+} // namespace replicant
 
 #endif // replicant_heal_next_h_

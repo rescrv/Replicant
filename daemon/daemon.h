@@ -57,11 +57,14 @@
 #include "daemon/object_manager.h"
 #include "daemon/settings.h"
 
-class replicant_daemon
+namespace replicant
+{
+
+class daemon
 {
     public:
-        replicant_daemon();
-        ~replicant_daemon() throw ();
+        daemon();
+        ~daemon() throw ();
 
     public:
         int run(bool daemonize,
@@ -168,7 +171,7 @@ class replicant_daemon
 
     // Periodically run certain functions
     private:
-        typedef void (replicant_daemon::*periodic_fptr)(uint64_t now);
+        typedef void (daemon::*periodic_fptr)(uint64_t now);
         typedef std::pair<uint64_t, periodic_fptr> periodic;
         void trip_periodic(uint64_t when, periodic_fptr fp);
         void run_periodic();
@@ -193,5 +196,7 @@ class replicant_daemon
         std::vector<std::pair<uint64_t, uint64_t> > m_disrupted_times;
         replicant::fact_store m_fs;
 };
+
+} // namespace replicant
 
 #endif // replicant_daemon_h_

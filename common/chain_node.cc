@@ -29,6 +29,8 @@
 #include "common/chain_node.h"
 #include "packing.h"
 
+using replicant::chain_node;
+
 chain_node :: chain_node()
     : token()
     , address()
@@ -40,7 +42,7 @@ chain_node :: ~chain_node() throw ()
 }
 
 bool
-operator < (const chain_node& lhs, const chain_node& rhs)
+replicant :: operator < (const chain_node& lhs, const chain_node& rhs)
 {
     if (lhs.token == rhs.token)
     {
@@ -51,33 +53,33 @@ operator < (const chain_node& lhs, const chain_node& rhs)
 }
 
 bool
-operator == (const chain_node& lhs, const chain_node& rhs)
+replicant :: operator == (const chain_node& lhs, const chain_node& rhs)
 {
     return lhs.token == rhs.token &&
            lhs.address == rhs.address;
 }
 
 std::ostream&
-operator << (std::ostream& lhs, const chain_node& rhs)
+replicant :: operator << (std::ostream& lhs, const chain_node& rhs)
 {
     return lhs << "chain_node(bind_to=" << rhs.address
                << ", token=" << rhs.token << ")";
 }
 
 e::buffer::packer
-operator << (e::buffer::packer lhs, const chain_node& rhs)
+replicant :: operator << (e::buffer::packer lhs, const chain_node& rhs)
 {
     return lhs << rhs.token << rhs.address;
 }
 
 e::unpacker
-operator >> (e::unpacker lhs, chain_node& rhs)
+replicant :: operator >> (e::unpacker lhs, chain_node& rhs)
 {
     return lhs >> rhs.token >> rhs.address;
 } 
 
 size_t
-pack_size(const chain_node& rhs)
+replicant :: pack_size(const chain_node& rhs)
 {
     return sizeof(uint64_t) + pack_size(rhs.address);
 }
