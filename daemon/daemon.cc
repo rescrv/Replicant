@@ -1793,6 +1793,7 @@ replicant_daemon :: recv(replicant::connection* conn, std::auto_ptr<e::buffer>* 
             case BUSYBEE_SHUTDOWN:
             case BUSYBEE_POLLFAILED:
             case BUSYBEE_ADDFDFAIL:
+            case BUSYBEE_EXTERNAL:
             default:
                 LOG(ERROR) << "BusyBee returned " << rc << " during a \"recv\" call";
                 return false;
@@ -1868,6 +1869,7 @@ replicant_daemon :: send(const replicant::connection& conn, std::auto_ptr<e::buf
         case BUSYBEE_POLLFAILED:
         case BUSYBEE_ADDFDFAIL:
         case BUSYBEE_TIMEOUT:
+        case BUSYBEE_EXTERNAL:
         default:
             return false;
     }
@@ -1894,6 +1896,7 @@ replicant_daemon :: send(const chain_node& node, std::auto_ptr<e::buffer> msg)
         case BUSYBEE_POLLFAILED:
         case BUSYBEE_ADDFDFAIL:
         case BUSYBEE_TIMEOUT:
+        case BUSYBEE_EXTERNAL:
         default:
             return false;
     }
@@ -1912,6 +1915,7 @@ replicant_daemon :: send_no_disruption(uint64_t token, std::auto_ptr<e::buffer> 
         case BUSYBEE_POLLFAILED:
         case BUSYBEE_ADDFDFAIL:
         case BUSYBEE_TIMEOUT:
+        case BUSYBEE_EXTERNAL:
         default:
             return false;
     }

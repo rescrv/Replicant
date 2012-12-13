@@ -391,6 +391,7 @@ replicant_client :: inner_loop(replicant_returncode* status)
         BUSYBEE_ERROR(INTERNAL_ERROR, SHUTDOWN);
         BUSYBEE_ERROR(INTERNAL_ERROR, POLLFAILED);
         BUSYBEE_ERROR(INTERNAL_ERROR, ADDFDFAIL);
+        BUSYBEE_ERROR(INTERNAL_ERROR, EXTERNAL);
         default:
             REPLSETERROR(REPLICANT_INTERNAL_ERROR, "BusyBee returned unknown error");
             return -1;
@@ -555,6 +556,7 @@ replicant_client :: wait_for_token_registration(replicant_returncode* status)
             BUSYBEE_ERROR_DISCONNECT(INTERNAL_ERROR, SHUTDOWN);
             BUSYBEE_ERROR_DISCONNECT(INTERNAL_ERROR, POLLFAILED);
             BUSYBEE_ERROR_DISCONNECT(INTERNAL_ERROR, ADDFDFAIL);
+            BUSYBEE_ERROR_DISCONNECT(INTERNAL_ERROR, EXTERNAL);
             default:
                 REPLSETERROR(REPLICANT_INTERNAL_ERROR, "BusyBee returned unknown error");
                 reset_to_disconnected();
@@ -709,6 +711,7 @@ replicant_client :: send_to_chain_head(std::auto_ptr<e::buffer> msg,
         BUSYBEE_ERROR(INTERNAL_ERROR, SHUTDOWN);
         BUSYBEE_ERROR(INTERNAL_ERROR, POLLFAILED);
         BUSYBEE_ERROR(INTERNAL_ERROR, ADDFDFAIL);
+        BUSYBEE_ERROR(INTERNAL_ERROR, EXTERNAL);
         default:
             REPLSETERROR(REPLICANT_INTERNAL_ERROR, "BusyBee returned unknown error");
             return -1;
@@ -748,6 +751,7 @@ replicant_client :: send_to_preferred_chain_member(e::intrusive_ptr<command> cmd
             BUSYBEE_ERROR_CONTINUE(INTERNAL_ERROR, SHUTDOWN);
             BUSYBEE_ERROR_CONTINUE(INTERNAL_ERROR, POLLFAILED);
             BUSYBEE_ERROR_CONTINUE(INTERNAL_ERROR, ADDFDFAIL);
+            BUSYBEE_ERROR_CONTINUE(INTERNAL_ERROR, EXTERNAL);
             default:
                 REPLSETERROR(REPLICANT_INTERNAL_ERROR, "BusyBee returned unknown error");
                 continue;
