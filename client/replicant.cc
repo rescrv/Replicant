@@ -352,6 +352,12 @@ replicant_client :: kill(int64_t id)
     m_resend.erase(id);
 }
 
+int
+replicant_client :: poll_fd()
+{
+    return m_busybee->poll_fd();
+}
+
 int64_t
 replicant_client :: inner_loop(replicant_returncode* status)
 {
