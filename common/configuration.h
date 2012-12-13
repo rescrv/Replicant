@@ -88,7 +88,7 @@ class configuration
         friend bool operator == (const configuration& lhs, const configuration& rhs);
         friend std::ostream& operator << (std::ostream& lhs, const configuration& rhs);
         friend e::buffer::packer operator << (e::buffer::packer lhs, const configuration& rhs);
-        friend e::buffer::unpacker operator >> (e::buffer::unpacker lhs, configuration& rhs);
+        friend e::unpacker operator >> (e::unpacker lhs, configuration& rhs);
         friend size_t pack_size(const configuration& rhs);
 
     private:
@@ -113,8 +113,8 @@ operator << (std::ostream& lhs, const configuration& rhs);
 e::buffer::packer
 operator << (e::buffer::packer lhs, const configuration& rhs);
 
-e::buffer::unpacker
-operator >> (e::buffer::unpacker lhs, configuration& rhs);
+e::unpacker
+operator >> (e::unpacker lhs, configuration& rhs);
 
 char*
 pack_config(const configuration& config, char* ptr);

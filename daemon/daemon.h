@@ -75,22 +75,22 @@ class replicant_daemon
     private:
         void process_bootstrap(const replicant::connection& conn,
                                std::auto_ptr<e::buffer> msg,
-                               e::buffer::unpacker up);
+                               e::unpacker up);
         void process_inform(const replicant::connection& conn,
                             std::auto_ptr<e::buffer> msg,
-                            e::buffer::unpacker up);
+                            e::unpacker up);
         void process_join(const replicant::connection& conn,
                           std::auto_ptr<e::buffer> msg,
-                          e::buffer::unpacker up);
+                          e::unpacker up);
         void process_config_propose(const replicant::connection& conn,
                                     std::auto_ptr<e::buffer> msg,
-                                    e::buffer::unpacker up);
+                                    e::unpacker up);
         void process_config_accept(const replicant::connection& conn,
                                    std::auto_ptr<e::buffer> msg,
-                                   e::buffer::unpacker up);
+                                   e::unpacker up);
         void process_config_reject(const replicant::connection& conn,
                                    std::auto_ptr<e::buffer> msg,
-                                   e::buffer::unpacker up);
+                                   e::unpacker up);
         void propose_config(const configuration& config);
         void accept_config(const configuration& config);
         void accept_config_inform_spares(const configuration& old_config);
@@ -104,23 +104,23 @@ class replicant_daemon
     private:
         void process_client_register(const replicant::connection& conn,
                                      std::auto_ptr<e::buffer> msg,
-                                     e::buffer::unpacker up);
+                                     e::unpacker up);
         void process_client_disconnect(const replicant::connection& conn,
                                        std::auto_ptr<e::buffer> msg,
-                                       e::buffer::unpacker up);
+                                       e::unpacker up);
         void accept_config_inform_clients(const configuration& old_config);
 
     // Normal-case chain-replication-related goodness.
     private:
         void process_command_submit(const replicant::connection& conn,
                                     std::auto_ptr<e::buffer> msg,
-                                    e::buffer::unpacker up);
+                                    e::unpacker up);
         void process_command_issue(const replicant::connection& conn,
                                    std::auto_ptr<e::buffer> msg,
-                                   e::buffer::unpacker up);
+                                   e::unpacker up);
         void process_command_ack(const replicant::connection& conn,
                                  std::auto_ptr<e::buffer> msg,
-                                 e::buffer::unpacker up);
+                                 e::unpacker up);
         void issue_command(uint64_t slot, uint64_t object,
                            uint64_t client, uint64_t nonce,
                            const e::slice& data);
@@ -131,13 +131,13 @@ class replicant_daemon
     private:
         void process_heal_req(const replicant::connection& conn,
                               std::auto_ptr<e::buffer> msg,
-                              e::buffer::unpacker up);
+                              e::unpacker up);
         void process_heal_resp(const replicant::connection& conn,
                                std::auto_ptr<e::buffer> msg,
-                               e::buffer::unpacker up);
+                               e::unpacker up);
         void process_heal_done(const replicant::connection& conn,
                                std::auto_ptr<e::buffer> msg,
-                               e::buffer::unpacker up);
+                               e::unpacker up);
         void transfer_more_state();
         void accept_config_reset_healing(const configuration& old_config);
         void periodic_heal_next(uint64_t now);
@@ -147,10 +147,10 @@ class replicant_daemon
     public:
         void process_ping(const replicant::connection& conn,
                           std::auto_ptr<e::buffer> msg,
-                          e::buffer::unpacker up);
+                          e::unpacker up);
         void process_pong(const replicant::connection& conn,
                           std::auto_ptr<e::buffer> msg,
-                          e::buffer::unpacker up);
+                          e::unpacker up);
         void periodic_exchange(uint64_t now);
 
     // Manage communication

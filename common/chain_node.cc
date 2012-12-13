@@ -70,8 +70,8 @@ operator << (e::buffer::packer lhs, const chain_node& rhs)
     return lhs << rhs.token << rhs.address;
 }
 
-e::buffer::unpacker
-operator >> (e::buffer::unpacker lhs, chain_node& rhs)
+e::unpacker
+operator >> (e::unpacker lhs, chain_node& rhs)
 {
     return lhs >> rhs.token >> rhs.address;
 } 

@@ -69,8 +69,8 @@ operator << (e::buffer::packer lhs, const replicant_network_msgtype& rhs)
     return lhs << mt;
 }
 
-e::buffer::unpacker
-operator >> (e::buffer::unpacker lhs, replicant_network_msgtype& rhs)
+e::unpacker
+operator >> (e::unpacker lhs, replicant_network_msgtype& rhs)
 {
     uint8_t mt;
     lhs = lhs >> mt;

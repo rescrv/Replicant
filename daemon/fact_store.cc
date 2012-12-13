@@ -300,7 +300,7 @@ fact_store :: open(const po6::pathname& path,
     std::auto_ptr<e::buffer> buf(e::buffer::create(sbacking.size()));
     memmove(buf->data(), sbacking.data(), sbacking.size());
     buf->resize(sbacking.size());
-    e::buffer::unpacker up = buf->unpack_from(0);
+    e::unpacker up = buf->unpack_from(0);
     up = up >> *saved_us >> *saved_config_manager;
 
     if (up.error())

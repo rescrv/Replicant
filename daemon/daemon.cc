@@ -285,7 +285,7 @@ replicant_daemon :: run(bool daemonize,
     {
         assert(msg.get());
         replicant_network_msgtype mt = REPLNET_NOP;
-        e::buffer::unpacker up = msg->unpack_from(BUSYBEE_HEADER_SIZE);
+        e::unpacker up = msg->unpack_from(BUSYBEE_HEADER_SIZE);
         up = up >> mt;
 
         switch (mt)
@@ -358,7 +358,7 @@ replicant_daemon :: run(bool daemonize,
 void
 replicant_daemon :: process_bootstrap(const replicant::connection& conn,
                                       std::auto_ptr<e::buffer>,
-                                      e::buffer::unpacker)
+                                      e::unpacker)
 {
     LOG(INFO) << "providing configuration to " << conn.token
               << " as part of the bootstrap process";
@@ -374,7 +374,7 @@ replicant_daemon :: process_bootstrap(const replicant::connection& conn,
 void
 replicant_daemon :: process_inform(const replicant::connection&,
                                    std::auto_ptr<e::buffer>,
-                                   e::buffer::unpacker up)
+                                   e::unpacker up)
 {
     configuration new_config;
     up = up >> new_config;
@@ -401,7 +401,7 @@ replicant_daemon :: process_inform(const replicant::connection&,
 void
 replicant_daemon :: process_join(const replicant::connection& conn,
                                  std::auto_ptr<e::buffer>,
-                                 e::buffer::unpacker up)
+                                 e::unpacker up)
 {
     chain_node sender;
     up = up >> sender;
@@ -479,7 +479,7 @@ replicant_daemon :: process_join(const replicant::connection& conn,
 void
 replicant_daemon :: process_config_propose(const replicant::connection& conn,
                                            std::auto_ptr<e::buffer>,
-                                           e::buffer::unpacker up)
+                                           e::unpacker up)
 {
     uint64_t proposal_id;
     uint64_t proposal_time;
@@ -658,7 +658,7 @@ replicant_daemon :: process_config_propose(const replicant::connection& conn,
 void
 replicant_daemon :: process_config_accept(const replicant::connection& conn,
                                           std::auto_ptr<e::buffer>,
-                                          e::buffer::unpacker up)
+                                          e::unpacker up)
 {
     uint64_t proposal_id;
     uint64_t proposal_time;
@@ -720,7 +720,7 @@ replicant_daemon :: process_config_accept(const replicant::connection& conn,
 void
 replicant_daemon :: process_config_reject(const replicant::connection& conn,
                                           std::auto_ptr<e::buffer>,
-                                          e::buffer::unpacker up)
+                                          e::unpacker up)
 {
     uint64_t proposal_id;
     uint64_t proposal_time;
@@ -1102,7 +1102,7 @@ replicant_daemon :: handle_disruption_reset_reconfiguration(uint64_t token)
 void
 replicant_daemon :: process_client_register(const replicant::connection& conn,
                                             std::auto_ptr<e::buffer>,
-                                            e::buffer::unpacker up)
+                                            e::unpacker up)
 {
     uint64_t client;
     up = up >> client;
@@ -1154,7 +1154,7 @@ replicant_daemon :: process_client_register(const replicant::connection& conn,
 void
 replicant_daemon :: process_client_disconnect(const replicant::connection& conn,
                                               std::auto_ptr<e::buffer>,
-                                              e::buffer::unpacker up)
+                                              e::unpacker up)
 {
     uint64_t nonce;
     up = up >> nonce;
@@ -1201,7 +1201,7 @@ replicant_daemon :: accept_config_inform_clients(const configuration& /*old_conf
 void
 replicant_daemon :: process_command_submit(const replicant::connection& conn,
                                            std::auto_ptr<e::buffer> msg,
-                                           e::buffer::unpacker up)
+                                           e::unpacker up)
 {
     uint64_t object;
     uint64_t client;
@@ -1274,7 +1274,7 @@ replicant_daemon :: process_command_submit(const replicant::connection& conn,
 void
 replicant_daemon :: process_command_issue(const replicant::connection& conn,
                                           std::auto_ptr<e::buffer>,
-                                          e::buffer::unpacker up)
+                                          e::unpacker up)
 {
     uint64_t slot = 0;
     uint64_t object = 0;
@@ -1313,7 +1313,7 @@ replicant_daemon :: process_command_issue(const replicant::connection& conn,
 void
 replicant_daemon :: process_command_ack(const replicant::connection& conn,
                                         std::auto_ptr<e::buffer>,
-                                        e::buffer::unpacker up)
+                                        e::unpacker up)
 {
     uint64_t slot = 0;
     up = up >> slot;
@@ -1471,7 +1471,7 @@ replicant_daemon :: record_execution(uint64_t slot, uint64_t client, uint64_t no
 void
 replicant_daemon :: process_heal_req(const replicant::connection& conn,
                                      std::auto_ptr<e::buffer>,
-                                     e::buffer::unpacker up)
+                                     e::unpacker up)
 {
     uint64_t version;
     up = up >> version;
@@ -1509,7 +1509,7 @@ replicant_daemon :: process_heal_req(const replicant::connection& conn,
 void
 replicant_daemon :: process_heal_resp(const replicant::connection& conn,
                                       std::auto_ptr<e::buffer>,
-                                      e::buffer::unpacker up)
+                                      e::unpacker up)
 {
     uint64_t version;
     uint64_t to_ack;
@@ -1555,7 +1555,7 @@ replicant_daemon :: process_heal_resp(const replicant::connection& conn,
 void
 replicant_daemon :: process_heal_done(const replicant::connection& conn,
                                       std::auto_ptr<e::buffer> msg,
-                                      e::buffer::unpacker)
+                                      e::unpacker)
 {
     if (conn.is_next && m_heal_next.state == heal_next::HEALTHY_SENT)
     {
@@ -1721,7 +1721,7 @@ replicant_daemon :: handle_disruption_reset_healing(uint64_t token)
 void
 replicant_daemon :: process_ping(const replicant::connection& conn,
                                  std::auto_ptr<e::buffer> msg,
-                                 e::buffer::unpacker up)
+                                 e::unpacker up)
 {
     uint64_t version = 0;
     up = up >> version;
@@ -1744,7 +1744,7 @@ replicant_daemon :: process_ping(const replicant::connection& conn,
 void
 replicant_daemon :: process_pong(const replicant::connection& conn,
                                  std::auto_ptr<e::buffer>,
-                                 e::buffer::unpacker)
+                                 e::unpacker)
 {
     m_failure_manager.heartbeat(conn.token, monotonic_time());
 }

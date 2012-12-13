@@ -59,8 +59,8 @@ operator << (e::buffer::packer lhs, const po6::net::ipaddr& rhs)
     return lhs.copy(e::slice(data, 16));
 }
 
-e::buffer::unpacker
-operator >> (e::buffer::unpacker lhs, po6::net::ipaddr& rhs)
+e::unpacker
+operator >> (e::unpacker lhs, po6::net::ipaddr& rhs)
 {
     uint8_t type;
     lhs = lhs >> type;
@@ -108,8 +108,8 @@ operator << (e::buffer::packer lhs, const po6::net::location& rhs)
     return lhs << rhs.address << rhs.port;
 }
 
-e::buffer::unpacker
-operator >> (e::buffer::unpacker lhs, po6::net::location& rhs)
+e::unpacker
+operator >> (e::unpacker lhs, po6::net::location& rhs)
 {
     return lhs >> rhs.address >> rhs.port;
 }

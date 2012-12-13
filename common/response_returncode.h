@@ -60,8 +60,8 @@ operator << (std::ostream& lhs, response_returncode rhs);
 e::buffer::packer
 operator << (e::buffer::packer lhs, const response_returncode& rhs);
 
-e::buffer::unpacker
-operator >> (e::buffer::unpacker lhs, response_returncode& rhs);
+e::unpacker
+operator >> (e::unpacker lhs, response_returncode& rhs);
 
 size_t
 pack_size(const response_returncode& rhs);

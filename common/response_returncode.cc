@@ -63,8 +63,8 @@ replicant :: operator << (e::buffer::packer lhs, const response_returncode& rhs)
     return lhs << mt;
 }
 
-e::buffer::unpacker
-replicant :: operator >> (e::buffer::unpacker lhs, response_returncode& rhs)
+e::unpacker
+replicant :: operator >> (e::unpacker lhs, response_returncode& rhs)
 {
     uint8_t mt;
     lhs = lhs >> mt;

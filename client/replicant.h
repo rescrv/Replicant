@@ -108,7 +108,7 @@ class replicant_client
         int64_t wait_for_token_registration(replicant_returncode* status);
         int64_t handle_inform(const po6::net::location& from,
                               std::auto_ptr<e::buffer> msg,
-                              e::buffer::unpacker up,
+                              e::unpacker up,
                               replicant_returncode* status);
         // Send commands and receive responses
         int64_t send_to_chain_head(std::auto_ptr<e::buffer> msg,
@@ -119,7 +119,7 @@ class replicant_client
                                   replicant_returncode* status);
         int64_t handle_command_response(const po6::net::location& from,
                                         std::auto_ptr<e::buffer> msg,
-                                        e::buffer::unpacker up,
+                                        e::unpacker up,
                                         replicant_returncode* status);
         // Utilities
         uint64_t generate_token();

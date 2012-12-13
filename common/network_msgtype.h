@@ -59,8 +59,8 @@ operator << (std::ostream& lhs, replicant_network_msgtype rhs);
 e::buffer::packer
 operator << (e::buffer::packer lhs, const replicant_network_msgtype& rhs);
 
-e::buffer::unpacker
-operator >> (e::buffer::unpacker lhs, replicant_network_msgtype& rhs);
+e::unpacker
+operator >> (e::unpacker lhs, replicant_network_msgtype& rhs);
 
 size_t
 pack_size(const replicant_network_msgtype& rhs);

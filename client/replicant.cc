@@ -397,7 +397,7 @@ replicant_client :: inner_loop(replicant_returncode* status)
             return -1;
     }
 
-    e::buffer::unpacker up = msg->unpack_from(BUSYBEE_HEADER_SIZE);
+    e::unpacker up = msg->unpack_from(BUSYBEE_HEADER_SIZE);
     replicant_network_msgtype mt;
     up = up >> mt;
 
@@ -573,7 +573,7 @@ replicant_client :: wait_for_token_registration(replicant_returncode* status)
             return -1;
         }
 
-        e::buffer::unpacker up = msg->unpack_from(BUSYBEE_HEADER_SIZE);
+        e::unpacker up = msg->unpack_from(BUSYBEE_HEADER_SIZE);
         replicant_network_msgtype mt;
         up = up >> mt;
 
@@ -642,7 +642,7 @@ replicant_client :: wait_for_token_registration(replicant_returncode* status)
 int64_t
 replicant_client :: handle_inform(const po6::net::location& from,
                                   std::auto_ptr<e::buffer>,
-                                  e::buffer::unpacker up,
+                                  e::unpacker up,
                                   replicant_returncode* status)
 {
     configuration new_config;
@@ -797,7 +797,7 @@ replicant_client :: handle_disruption(const chain_node& from,
 int64_t
 replicant_client :: handle_command_response(const po6::net::location& from,
                                             std::auto_ptr<e::buffer> msg,
-                                            e::buffer::unpacker up,
+                                            e::unpacker up,
                                             replicant_returncode* status)
 {
     // Parse the command response

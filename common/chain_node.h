@@ -59,8 +59,8 @@ operator << (std::ostream& lhs, const chain_node& rhs);
 e::buffer::packer
 operator << (e::buffer::packer lhs, const chain_node& rhs);
 
-e::buffer::unpacker
-operator >> (e::buffer::unpacker lhs, chain_node& rhs);
+e::unpacker
+operator >> (e::unpacker lhs, chain_node& rhs);
 
 size_t
 pack_size(const chain_node& rhs);

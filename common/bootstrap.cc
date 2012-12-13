@@ -87,7 +87,7 @@ replicant :: bootstrap(const po6::net::hostname& hn, configuration* config)
         }
 
         replicant_network_msgtype mt = REPLNET_NOP;
-        e::buffer::unpacker up = msg->unpack_from(BUSYBEE_HEADER_SIZE);
+        e::unpacker up = msg->unpack_from(BUSYBEE_HEADER_SIZE);
         up >> mt >> *config;
 
         if (up.error() || mt != REPLNET_INFORM || !config->validate())

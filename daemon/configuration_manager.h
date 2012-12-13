@@ -73,7 +73,7 @@ class configuration_manager
 
     private:
         friend e::buffer::packer operator << (e::buffer::packer lhs, const configuration_manager& rhs);
-        friend e::buffer::unpacker operator >> (e::buffer::unpacker lhs, configuration_manager& rhs);
+        friend e::unpacker operator >> (e::unpacker lhs, configuration_manager& rhs);
         friend size_t pack_size(const configuration_manager& rhs);
 
     private:
@@ -94,8 +94,8 @@ struct configuration_manager::proposal
 e::buffer::packer
 operator << (e::buffer::packer lhs, const configuration_manager& rhs);
 
-e::buffer::unpacker
-operator >> (e::buffer::unpacker lhs, configuration_manager& rhs);
+e::unpacker
+operator >> (e::unpacker lhs, configuration_manager& rhs);
 
 size_t
 pack_size(const configuration_manager& cm);

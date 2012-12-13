@@ -336,8 +336,8 @@ operator << (e::buffer::packer lhs, const configuration_manager& rhs)
     return lhs;
 }
 
-e::buffer::unpacker
-operator >> (e::buffer::unpacker lhs, configuration_manager& rhs)
+e::unpacker
+operator >> (e::unpacker lhs, configuration_manager& rhs)
 {
     rhs.m_configs.clear();
     rhs.m_proposals.clear();

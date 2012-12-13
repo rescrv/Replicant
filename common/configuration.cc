@@ -623,8 +623,8 @@ operator << (e::buffer::packer lhs, const configuration& rhs)
     return lhs;
 }
 
-e::buffer::unpacker
-operator >> (e::buffer::unpacker lhs, configuration& rhs)
+e::unpacker
+operator >> (e::unpacker lhs, configuration& rhs)
 {
     lhs = lhs >> rhs.m_version
               >> rhs.m_member_sz
