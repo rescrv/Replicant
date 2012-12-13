@@ -41,7 +41,7 @@
 // Replicant
 #include "daemon/daemon.h"
 
-static bool daemonize = true;
+static bool _daemonize = true;
 static const char* _data = ".";
 static const char* _listen_host = "auto";
 static unsigned long _listen_port = 1982;
@@ -93,10 +93,12 @@ main(int argc, const char* argv[])
         switch (rc)
         {
             case 'd':
-                daemonize = true;
+                _daemonize = true;
                 break;
             case 'f':
-                daemonize = false;
+                _daemonize = false;
+                break;
+            case 'D':
                 break;
             case 'l':
                 try
@@ -182,7 +184,7 @@ main(int argc, const char* argv[])
             existing = po6::net::hostname(_connect_host, _connect_port);
         }
 
-        return d.run(daemonize, data, _listen, bind_to, _connect, existing);
+        return d.run(_daemonize, data, _listen, bind_to, _connect, existing);
     }
     catch (po6::error& e)
     {

@@ -64,7 +64,8 @@ struct prog
 #define PROG(N) prog(N, "replicant " N, REPLICANT_EXEC_DIR "/replicant-" N)
 
 static prog progs[] = {
-    PROG("create-object"),
+    PROG("new-object"),
+    PROG("del-object"),
     PROG("daemon"),
     prog(NULL, NULL, NULL)
 };
@@ -75,7 +76,8 @@ help(poptContext poptcon)
     poptPrintHelp(poptcon, stderr, 0);
     std::cerr << "\n"
               << "Available commands:\n"
-              << "    create-object     Create a new replicated object\n"
+              << "    new-object        Create a new replicated object\n"
+              << "    del-object        Destroy an existing replicated object\n"
               << "    daemon            Create a new replicant daemon\n"
               << std::flush;
     return EXIT_FAILURE;

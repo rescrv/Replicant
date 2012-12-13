@@ -822,10 +822,10 @@ replicant_client :: handle_command_response(const po6::net::location& from,
 
     // Find the command
     command_map::iterator it = m_commands.find(nonce);
+    // XXX perhaps we should consider m_resend as well
 
     if (it == m_commands.end())
     {
-        REPLSETERROR(REPLICANT_INTERNAL_ERROR, "this should not happen");
         return 0;
     }
 

@@ -185,7 +185,7 @@ replicant_daemon :: run(bool daemonize,
     }
     else
     {
-        LOG(INFO) << "starting daemon new state from command-line arguments";
+        LOG(INFO) << "starting new daemon from command-line arguments";
 
         if (!generate_token(&m_us.token))
         {
