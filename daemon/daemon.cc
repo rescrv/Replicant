@@ -277,7 +277,10 @@ daemon :: run(bool daemonize,
             return EXIT_FAILURE;
         }
 
-        m_object_manager.enqueue(slot, object, client, nonce, dat, &backing);
+        if (!IS_SPECIAL_OBJECT(object))
+        {
+            m_object_manager.enqueue(slot, object, client, nonce, dat, &backing);
+        }
     }
 
     replicant::connection conn;
