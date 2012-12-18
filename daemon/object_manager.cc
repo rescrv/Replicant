@@ -191,8 +191,8 @@ object_manager :: enqueue(uint64_t slot, uint64_t obj_id,
 
         e::intrusive_ptr<object> obj = new object();
         po6::threads::mutex::hold hold(&obj->mtx);
-        char buf[38 /*strlen("./libreplicant<slot \lt 2**64>.so\x00")*/];
-        sprintf(buf, "./libreplicant%lu.so", slot);
+        char buf[43 /*strlen("./libreplicant-slot<slot \lt 2**64>.so\x00")*/];
+        sprintf(buf, "./libreplicant-slot%lu.so", slot);
         po6::io::fd tmplib(open(buf, O_WRONLY|O_CREAT|O_EXCL, S_IRWXU));
 
         if (tmplib.get() < 0)
