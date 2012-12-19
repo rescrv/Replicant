@@ -277,7 +277,9 @@ daemon :: run(bool daemonize,
             return EXIT_FAILURE;
         }
 
-        if (!IS_SPECIAL_OBJECT(object))
+        if (object == OBJECT_OBJ_NEW ||
+            object == OBJECT_OBJ_DEL ||
+            !IS_SPECIAL_OBJECT(object))
         {
             m_object_manager.enqueue(slot, object, client, nonce, dat, &backing);
         }
