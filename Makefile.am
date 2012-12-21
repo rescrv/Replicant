@@ -107,16 +107,13 @@ libreplicant_la_SOURCES = \
 			client/replicant.cc
 libreplicant_la_LIBADD = -le -lbusybee -lrt
 
-replicant_cli_SOURCES = \
-			tools/cli.cc
+replicant_cli_SOURCES = tools/cli.cc
 replicant_cli_LDADD = libreplicant.la
 
-replicant_new_object_SOURCES = \
-			tools/new-object.cc
+replicant_new_object_SOURCES = tools/new-object.cc
 replicant_new_object_LDADD = libreplicant.la
 
-replicant_del_object_SOURCES = \
-			tools/del-object.cc
+replicant_del_object_SOURCES = tools/del-object.cc
 replicant_del_object_LDADD = libreplicant.la
 
 if ENABLE_EXAMPLES
