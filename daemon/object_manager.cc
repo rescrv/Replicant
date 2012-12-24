@@ -117,7 +117,6 @@ class object_manager::object
         replicant_state_machine* sym;
         void* rsm;
         std::map<uint64_t, condition> conditions;
-        uint64_t next_condition;
 
     private:
         object(const object&);
@@ -140,7 +139,6 @@ object_manager :: object :: object()
     , sym(NULL)
     , rsm(NULL)
     , conditions()
-    , next_condition(1)
     , m_ref(0)
 {
 }
@@ -475,13 +473,17 @@ object_manager :: wait(uint64_t obj_id, uint64_t client, uint64_t nonce, uint64_
 }
 
 int
-object_manager :: condition_create(void* o, uint64_t* cond)
+object_manager :: condition_create(void* o, uint64_t cond)
 {
     object* obj = static_cast<object*>(o);
-    assert(obj->conditions.empty() ||
-           obj->conditions.rbegin()->first < obj->next_condition);
-    obj->conditions.insert(std::make_pair(obj->next_condition, object::condition()));
-    *cond = obj->next_condition;
+    std::map<uint64_t, object::condition>::iterator it = obj->conditions.find(cond);
+
+    if (it != obj->conditions.end())
+    {
+        return -1;
+    }
+
+    obj->conditions.insert(std::make_pair(cond, object::condition()));
     return 0;
 }
 

@@ -134,7 +134,7 @@ main(int argc, const char* argv[])
             const char* output;
             size_t output_sz;
 
-            rid = r.send(_object, strlen(_object), _function, s.c_str(), s.size() + 1,
+            rid = r.send(_object, _function, s.c_str(), s.size() + 1,
                          &re, &output, &output_sz);
 
             if (rid < 0)

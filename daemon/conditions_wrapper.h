@@ -43,7 +43,7 @@ class conditions_wrapper
         ~conditions_wrapper() throw () {}
 
     public:
-        int create(uint64_t* cond)
+        int create(uint64_t cond)
         { return m_om->condition_create(m_o, cond); }
         int destroy(uint64_t cond)
         { return m_om->condition_destroy(m_o, cond); }

@@ -71,7 +71,7 @@ class object_manager
         friend class conditions_wrapper;
 
     private:
-        int condition_create(void* o, uint64_t* cond);
+        int condition_create(void* o, uint64_t cond);
         int condition_destroy(void* o, uint64_t cond);
         int condition_broadcast(void* o, uint64_t cond, uint64_t* state);
 

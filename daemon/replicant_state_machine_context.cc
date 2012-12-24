@@ -28,9 +28,25 @@
 // Google Log
 #include <glog/logging.h>
 
+// e
+#include <e/endian.h>
+
 // Replicant
 #include "daemon/replicant_state_machine.h"
 #include "daemon/replicant_state_machine_context.h"
+
+#define COND_STR2NUM(STR, NUM) \
+    do \
+    { \
+        if (strlen(STR) > sizeof(uint64_t)) \
+        { \
+            return -1; \
+        } \
+        char cond_buf[sizeof(uint64_t)]; \
+        memset(cond_buf, 0, sizeof(cond_buf)); \
+        memmove(cond_buf, STR, strlen(STR)); \
+        e::unpack64be(cond_buf, &NUM); \
+    } while (0)
 
 replicant_state_machine_context :: replicant_state_machine_context()
     : object(0)
@@ -71,23 +87,30 @@ replicant_state_machine_set_response(struct replicant_state_machine_context* ctx
 
 int
 replicant_state_machine_condition_create(struct replicant_state_machine_context* ctx,
-                                         uint64_t* cond)
+                                         const char* cond)
 {
-    return ctx->conditions.create(cond);
+    uint64_t _cond;
+    COND_STR2NUM(cond, _cond);
+    return ctx->conditions.create(_cond);
 }
 
 int
 replicant_state_machine_condition_destroy(struct replicant_state_machine_context* ctx,
-                                          uint64_t cond)
+                                          const char* cond)
 {
-    return ctx->conditions.destroy(cond);
+    uint64_t _cond;
+    COND_STR2NUM(cond, _cond);
+    return ctx->conditions.destroy(_cond);
 }
 
 int
 replicant_state_machine_condition_broadcast(struct replicant_state_machine_context* ctx,
-                                            uint64_t cond, uint64_t* state)
+                                            const char* cond,
+                                            uint64_t* state)
 {
-    return ctx->conditions.broadcast(cond, state);
+    uint64_t _cond;
+    COND_STR2NUM(cond, _cond);
+    return ctx->conditions.broadcast(_cond, state);
 }
 
 } // extern "C"

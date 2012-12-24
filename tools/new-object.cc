@@ -109,7 +109,7 @@ main(int argc, const char* argv[])
         const char* errmsg;
         size_t errmsg_sz;
 
-        rid = r.new_object(args[0], strlen(args[0]), args[1], &re, &errmsg, &errmsg_sz);
+        rid = r.new_object(args[0], args[1], &re, &errmsg, &errmsg_sz);
 
         if (rid < 0)
         {

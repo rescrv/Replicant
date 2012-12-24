@@ -49,13 +49,15 @@ replicant_state_machine_set_response(struct replicant_state_machine_context* ctx
                                      const char* data, size_t data_sz);
 
 int
-replicant_state_machine_condition_create(struct replicant_state_machine_context* ctx, uint64_t* cond);
+replicant_state_machine_condition_create(struct replicant_state_machine_context* ctx,
+                                         const char* cond);
 int
 replicant_state_machine_condition_destroy(struct replicant_state_machine_context* ctx,
-                                          uint64_t cond);
+                                          const char* cond);
 int
 replicant_state_machine_condition_broadcast(struct replicant_state_machine_context* ctx,
-                                            uint64_t cond, uint64_t* state);
+                                            const char* cond,
+                                            uint64_t* state);
 
 struct replicant_state_machine_step
 {

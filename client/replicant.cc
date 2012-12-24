@@ -88,6 +88,20 @@ using namespace replicant;
         reset_to_disconnected(); \
         return -1
 
+#define OBJ_STR2NUM(STR, NUM) \
+    do \
+    { \
+        if (strlen(STR) > sizeof(uint64_t)) \
+        { \
+            *status = REPLICANT_NAME_TOO_LONG; \
+            return -1; \
+        } \
+        char object_buf[sizeof(uint64_t)]; \
+        memset(object_buf, 0, sizeof(object_buf)); \
+        memmove(object_buf, STR, strlen(STR)); \
+        e::unpack64be(object_buf, &NUM); \
+    } while (0)
+
 void
 replicant_destroy_output(const char* output, size_t)
 {
@@ -120,7 +134,7 @@ replicant_client :: ~replicant_client() throw ()
 }
 
 int64_t
-replicant_client :: new_object(const char* obj, size_t obj_sz,
+replicant_client :: new_object(const char* obj,
                                const char* path,
                                replicant_returncode* status,
                                const char** errmsg, size_t* errmsg_sz)
@@ -159,16 +173,13 @@ replicant_client :: new_object(const char* obj, size_t obj_sz,
     }
 
     // Pack the message to send
+    uint64_t nonce = m_nonce;
+    ++m_nonce;
+    uint64_t object;
+    OBJ_STR2NUM(obj, object);
     size_t sz = COMMAND_HEADER_SIZE + sizeof(uint64_t) + lib.size();
     std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
     e::buffer::packer pa = msg->pack_at(BUSYBEE_HEADER_SIZE);
-    uint64_t nonce = m_nonce;
-    ++m_nonce;
-    char object_buf[sizeof(uint64_t)];
-    memset(object_buf, 0, sizeof(object_buf));
-    memmove(object_buf, obj, std::min(obj_sz, sizeof(object_buf)));
-    uint64_t object;
-    e::unpack64be(object_buf, &object);
     pa = pa << REPLNET_COMMAND_SUBMIT << uint64_t(OBJECT_OBJ_NEW)
             << m_token << nonce << object;
     pa = pa.copy(e::slice(&lib[0], lib.size()));
@@ -178,7 +189,7 @@ replicant_client :: new_object(const char* obj, size_t obj_sz,
 }
 
 int64_t
-replicant_client :: del_object(const char* obj, size_t obj_sz,
+replicant_client :: del_object(const char* obj,
                                replicant_returncode* status,
                                const char** errmsg, size_t* errmsg_sz)
 {
@@ -190,15 +201,12 @@ replicant_client :: del_object(const char* obj, size_t obj_sz,
     }
 
     // Pack the message to send
-    size_t sz = COMMAND_HEADER_SIZE + sizeof(uint64_t);
-    std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
     uint64_t nonce = m_nonce;
     ++m_nonce;
-    char object_buf[sizeof(uint64_t)];
-    memset(object_buf, 0, sizeof(object_buf));
-    memmove(object_buf, obj, std::min(obj_sz, sizeof(object_buf)));
     uint64_t object;
-    e::unpack64be(object_buf, &object);
+    OBJ_STR2NUM(obj, object);
+    size_t sz = COMMAND_HEADER_SIZE + sizeof(uint64_t);
+    std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
     msg->pack_at(BUSYBEE_HEADER_SIZE)
         << REPLNET_COMMAND_SUBMIT << uint64_t(OBJECT_OBJ_DEL) << m_token << nonce << object;
     // Create the command object
@@ -207,7 +215,8 @@ replicant_client :: del_object(const char* obj, size_t obj_sz,
 }
 
 int64_t
-replicant_client :: send(const char* obj, size_t obj_sz, const char* func,
+replicant_client :: send(const char* obj,
+                         const char* func,
                          const char* data, size_t data_sz,
                          replicant_returncode* status,
                          const char** output, size_t* output_sz)
@@ -220,17 +229,14 @@ replicant_client :: send(const char* obj, size_t obj_sz, const char* func,
     }
 
     // Pack the message to send
+    uint64_t nonce = m_nonce;
+    ++m_nonce;
+    uint64_t object;
+    OBJ_STR2NUM(obj, object);
     size_t func_sz = strlen(func) + 1;
     size_t sz = COMMAND_HEADER_SIZE + func_sz + data_sz;
     std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
     e::buffer::packer pa = msg->pack_at(BUSYBEE_HEADER_SIZE);
-    uint64_t nonce = m_nonce;
-    ++m_nonce;
-    char object_buf[sizeof(uint64_t)];
-    memset(object_buf, 0, sizeof(object_buf));
-    memmove(object_buf, obj, std::min(obj_sz, sizeof(object_buf)));
-    uint64_t object;
-    e::unpack64be(object_buf, &object);
     pa = pa << REPLNET_COMMAND_SUBMIT << object << m_token << nonce;
     pa = pa.copy(e::slice(func, func_sz));
     pa = pa.copy(e::slice(data, data_sz));
@@ -240,8 +246,9 @@ replicant_client :: send(const char* obj, size_t obj_sz, const char* func,
 }
 
 int64_t
-replicant_client :: wait(const char* obj, size_t obj_sz,
-                         uint64_t cond, uint64_t state,
+replicant_client :: wait(const char* obj,
+                         const char* cond,
+                         uint64_t state,
                          replicant_returncode* status)
 {
     int64_t ret = maintain_connection(status);
@@ -251,6 +258,12 @@ replicant_client :: wait(const char* obj, size_t obj_sz,
         return ret;
     }
 
+    uint64_t nonce = m_nonce;
+    ++m_nonce;
+    uint64_t object;
+    OBJ_STR2NUM(obj, object);
+    uint64_t condition;
+    OBJ_STR2NUM(cond, condition);
     size_t sz = BUSYBEE_HEADER_SIZE
               + pack_size(REPLNET_CONDITION_WAIT)
               + sizeof(uint64_t) /*nonce*/
@@ -258,15 +271,8 @@ replicant_client :: wait(const char* obj, size_t obj_sz,
               + sizeof(uint64_t) /*cond*/
               + sizeof(uint64_t) /*state*/;
     std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
-    uint64_t nonce = m_nonce;
-    ++m_nonce;
-    char object_buf[sizeof(uint64_t)];
-    memset(object_buf, 0, sizeof(object_buf));
-    memmove(object_buf, obj, std::min(obj_sz, sizeof(object_buf)));
-    uint64_t object;
-    e::unpack64be(object_buf, &object);
     msg->pack_at(BUSYBEE_HEADER_SIZE)
-        << REPLNET_CONDITION_WAIT << nonce << object << cond << state;
+        << REPLNET_CONDITION_WAIT << nonce << object << condition << state;
     e::intrusive_ptr<command> cmd = new command(status, nonce, msg, NULL, 0);
     return send_to_preferred_chain_member(cmd, status);
 }
@@ -882,6 +888,12 @@ replicant_client :: handle_command_response(const po6::net::location& from,
         case replicant::RESPONSE_SUCCESS:
             c->succeed(msg, up.as_slice(), REPLICANT_SUCCESS);
             break;
+        case replicant::RESPONSE_COND_NOT_EXIST:
+            c->fail(REPLICANT_COND_NOT_FOUND);
+            m_last_error_desc = "condition not found";
+            m_last_error_file = __FILE__;
+            m_last_error_line = __LINE__;
+            break;
         case replicant::RESPONSE_REGISTRATION_FAIL:
             c->fail(REPLICANT_MISBEHAVING_SERVER);
             m_last_error_desc = "server treated request as a registration";
@@ -1038,9 +1050,11 @@ operator << (std::ostream& lhs, replicant_returncode rhs)
     switch (rhs)
     {
         stringify(REPLICANT_SUCCESS);
+        stringify(REPLICANT_NAME_TOO_LONG);
         stringify(REPLICANT_FUNC_NOT_FOUND);
         stringify(REPLICANT_OBJ_EXIST);
         stringify(REPLICANT_OBJ_NOT_FOUND);
+        stringify(REPLICANT_COND_NOT_FOUND);
         stringify(REPLICANT_SERVER_ERROR);
         stringify(REPLICANT_BAD_LIBRARY);
         stringify(REPLICANT_TIMEOUT);

@@ -43,9 +43,11 @@
 enum replicant_returncode
 {
     REPLICANT_SUCCESS,
+    REPLICANT_NAME_TOO_LONG,
     REPLICANT_FUNC_NOT_FOUND,
     REPLICANT_OBJ_EXIST,
     REPLICANT_OBJ_NOT_FOUND,
+    REPLICANT_COND_NOT_FOUND,
     REPLICANT_SERVER_ERROR,
     REPLICANT_BAD_LIBRARY,
     REPLICANT_TIMEOUT,
@@ -78,18 +80,21 @@ class replicant_client
         uint64_t last_error_line() const { return m_last_error_line; }
 
     public:
-        int64_t new_object(const char* obj, size_t obj_sz,
+        int64_t new_object(const char* object,
                            const char* path,
                            replicant_returncode* status,
                            const char** errmsg, size_t* errmsg_sz);
-        int64_t del_object(const char* obj, size_t obj_sz,
+        int64_t del_object(const char* object,
                            replicant_returncode* status,
                            const char** errmsg, size_t* errmsg_sz);
-        int64_t send(const char* obj, size_t obj_sz, const char* func,
+        int64_t send(const char* object,
+                     const char* func,
                      const char* data, size_t data_sz,
                      replicant_returncode* status,
                      const char** output, size_t* output_sz);
-        int64_t wait(const char* obj, size_t obj_sz, uint64_t cond, uint64_t state,
+        int64_t wait(const char* object,
+                     const char* cond,
+                     uint64_t state,
                      replicant_returncode* status);
         replicant_returncode disconnect();
         int64_t loop(int timeout, replicant_returncode* status);

@@ -42,14 +42,14 @@
 #include "tools/common.h"
 
 static const char* _object = "cond";
-static long _condition = 1;
+static const char* _condition = "cond";
 
 static struct poptOption obj_popts[] = {
     {"object", 'o', POPT_ARG_STRING, &_object, 'o',
      "manipulate a specific object (default: \"cond\")",
      "object"},
-    {"condition", 'c', POPT_ARG_LONG, &_condition, 'c',
-     "wait on a specific condition (default: 1)",
+    {"condition", 'c', POPT_ARG_STRING, &_condition, 'c',
+     "wait on a specific condition (default: \"cond\")",
      "condition"},
     POPT_TABLEEND
 };
@@ -88,7 +88,7 @@ main(int argc, const char* argv[])
                 break;
             case 'o':
                 break;
-            case 'f':
+            case 'c':
                 break;
             case POPT_ERROR_NOARG:
             case POPT_ERROR_BADOPT:
@@ -127,7 +127,7 @@ main(int argc, const char* argv[])
 
         for (uint64_t state = 0; ; ++state)
         {
-            int64_t wid = r.wait(_object, strlen(_object), _condition, state, &re);
+            int64_t wid = r.wait(_object, _condition, state, &re);
 
             if (wid < 0)
             {
