@@ -40,6 +40,7 @@ replicant :: operator << (std::ostream& lhs, response_returncode rhs)
         stringify(RESPONSE_REGISTRATION_FAIL);
         stringify(RESPONSE_OBJ_EXIST);
         stringify(RESPONSE_OBJ_NOT_EXIST);
+        stringify(RESPONSE_COND_NOT_EXIST);
         stringify(RESPONSE_SERVER_ERROR);
         stringify(RESPONSE_DLOPEN_FAIL);
         stringify(RESPONSE_DLSYM_FAIL);

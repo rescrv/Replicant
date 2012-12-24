@@ -29,6 +29,8 @@
 #define replicant_state_machine_context_h_
 
 // Replicant
+#include "daemon/conditions_wrapper.h"
+#include "daemon/object_manager.h"
 #include "daemon/replicant_state_machine.h"
 
 struct replicant_state_machine_context
@@ -37,6 +39,7 @@ struct replicant_state_machine_context
     ~replicant_state_machine_context() throw ();
     uint64_t object;
     uint64_t client;
+    replicant::conditions_wrapper conditions;
     const char* response;
     size_t response_sz;
 

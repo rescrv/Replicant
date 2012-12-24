@@ -41,16 +41,16 @@
 #include "client/replicant.h"
 #include "tools/common.h"
 
-const char* _object = "echo";
-const char* _function = "func";
+static const char* _object = "cond";
+static long _condition = 1;
 
 static struct poptOption obj_popts[] = {
     {"object", 'o', POPT_ARG_STRING, &_object, 'o',
-     "manipulate a specific object (default: \"echo\")",
+     "manipulate a specific object (default: \"cond\")",
      "object"},
-    {"function", 'f', POPT_ARG_STRING, &_function, 'f',
-     "call a specific function (default: \"func\")",
-     "function"},
+    {"condition", 'c', POPT_ARG_LONG, &_condition, 'c',
+     "wait on a specific condition (default: 1)",
+     "condition"},
     POPT_TABLEEND
 };
 
@@ -123,28 +123,21 @@ main(int argc, const char* argv[])
     try
     {
         replicant_client r(_connect_host, _connect_port);
-        std::string s;
+        replicant_returncode re;
 
-        while (std::getline(std::cin, s))
+        for (uint64_t state = 0; ; ++state)
         {
-            replicant_returncode re = REPLICANT_GARBAGE;
-            replicant_returncode le = REPLICANT_GARBAGE;
-            int64_t rid = 0;
-            int64_t lid = 0;
-            const char* output;
-            size_t output_sz;
+            int64_t wid = r.wait(_object, strlen(_object), _condition, state, &re);
 
-            rid = r.send(_object, strlen(_object), _function, s.c_str(), s.size() + 1,
-                         &re, &output, &output_sz);
-
-            if (rid < 0)
+            if (wid < 0)
             {
-                std::cerr << "could not send request: " << r.last_error_desc()
+                std::cerr << "could not initiate wait: " << r.last_error_desc()
                           << " (" << re << ")" << std::endl;
                 return EXIT_FAILURE;
             }
 
-            lid = r.loop(-1, &le);
+            replicant_returncode le;
+            int64_t lid = r.loop(wid, -1, &le);
 
             if (lid < 0)
             {
@@ -153,7 +146,7 @@ main(int argc, const char* argv[])
                 return EXIT_FAILURE;
             }
 
-            if (rid != lid)
+            if (wid != lid)
             {
                 std::cerr << "could not process request: internal error" << std::endl;
                 return EXIT_FAILURE;
@@ -166,18 +159,7 @@ main(int argc, const char* argv[])
                 return EXIT_FAILURE;
             }
 
-            std::string out(output, output_sz);
-            std::cout << out << std::endl;
-            replicant_destroy_output(output, output_sz);
-        }
-
-        replicant_returncode e = r.disconnect();
-
-        if (e != REPLICANT_SUCCESS)
-        {
-            std::cerr << "error disconnecting from cluster: " << r.last_error_desc()
-                          << " (" << e << ")" << std::endl;
-            return EXIT_FAILURE;
+            std::cout << "counter exceeds " << state << std::endl;
         }
 
         return EXIT_SUCCESS;

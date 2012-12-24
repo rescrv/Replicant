@@ -25,6 +25,7 @@ Makefile
 Makefile.in
 missing
 replicant
+replicant-block
 replicant-cli
 replicant-daemon
 replicant-del-object

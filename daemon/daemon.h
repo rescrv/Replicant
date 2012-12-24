@@ -146,8 +146,15 @@ class daemon
         void periodic_heal_next(uint64_t now);
         void handle_disruption_reset_healing(uint64_t token);
 
+    // Notify/wait-style conditions
+    private:
+        void process_condition_wait(const replicant::connection& conn,
+                                    std::auto_ptr<e::buffer> msg,
+                                    e::unpacker up);
+        void send_notify(uint64_t client, uint64_t nonce, replicant::response_returncode rc, const e::slice& data);
+
     // Check for faults
-    public:
+    private:
         void process_ping(const replicant::connection& conn,
                           std::auto_ptr<e::buffer> msg,
                           e::unpacker up);

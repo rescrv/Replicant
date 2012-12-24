@@ -56,22 +56,34 @@ class object_manager
         ~object_manager() throw ();
 
     public:
-        void set_callback(daemon* d, void (daemon::*func)(uint64_t slot, uint64_t client, uint64_t nonce, response_returncode rc, const e::slice& data));
+        void set_callback(daemon* d, void (daemon::*command_cb)(uint64_t slot, uint64_t client, uint64_t nonce, response_returncode rc, const e::slice& data),
+                                     void (daemon::*notify_cb)(uint64_t client, uint64_t nonce, response_returncode rc, const e::slice& data));
         void enqueue(uint64_t slot, uint64_t object,
                      uint64_t client, uint64_t nonce,
                      const e::slice& data, std::string* backing);
+        void wait(uint64_t object, uint64_t client, uint64_t nonce, uint64_t cond, uint64_t state);
 
     private:
         class command;
         class object;
         typedef std::map<uint64_t, e::intrusive_ptr<object> > object_map_t;
         typedef std::set<e::intrusive_ptr<object> > object_set_t;
+        friend class conditions_wrapper;
 
     private:
-        void send_error_response(uint64_t slot, uint64_t client, uint64_t nonce, response_returncode rc);
-        void send_error_msg_response(uint64_t slot, uint64_t client, uint64_t nonce, response_returncode rc, const char* resp);
-        void send_response(uint64_t slot, uint64_t client, uint64_t nonce, response_returncode rc, const e::slice& resp);
+        int condition_create(void* o, uint64_t* cond);
+        int condition_destroy(void* o, uint64_t cond);
+        int condition_broadcast(void* o, uint64_t cond, uint64_t* state);
+
+    private:
+        void command_send_error_response(uint64_t slot, uint64_t client, uint64_t nonce, response_returncode rc);
+        void command_send_error_msg_response(uint64_t slot, uint64_t client, uint64_t nonce, response_returncode rc, const char* resp);
+        void command_send_response(uint64_t slot, uint64_t client, uint64_t nonce, response_returncode rc, const e::slice& resp);
+        void notify_send_error_response(uint64_t client, uint64_t nonce, response_returncode rc);
+        void notify_send_error_msg_response(uint64_t client, uint64_t nonce, response_returncode rc, const char* resp);
+        void notify_send_response(uint64_t client, uint64_t nonce, response_returncode rc, const e::slice& resp);
         void worker_thread(uint64_t obj_id, e::intrusive_ptr<object> obj);
+        void dispatch_command(uint64_t obj_id, e::intrusive_ptr<object> obj, const command& cmd, bool* shutdown);
 
     private:
         object_manager(const object_manager&);
@@ -79,7 +91,8 @@ class object_manager
 
     private:
         daemon* m_daemon;
-        void (daemon::*m_daemon_cb)(uint64_t slot, uint64_t client, uint64_t nonce, response_returncode rc, const e::slice& data);
+        void (daemon::*m_command_cb)(uint64_t slot, uint64_t client, uint64_t nonce, response_returncode rc, const e::slice& data);
+        void (daemon::*m_notify_cb)(uint64_t client, uint64_t nonce, response_returncode rc, const e::slice& data);
         object_map_t m_objects;
         // protects the m_cleanup_* members
         po6::threads::mutex m_cleanup_protect;

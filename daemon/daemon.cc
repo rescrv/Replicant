@@ -118,7 +118,7 @@ daemon :: daemon()
     , m_disrupted_times()
     , m_fs()
 {
-    m_object_manager.set_callback(this, &daemon::record_execution);
+    m_object_manager.set_callback(this, &daemon::record_execution, &daemon::send_notify);
     trip_periodic(0, &daemon::periodic_join_cluster);
     trip_periodic(0, &daemon::periodic_describe_cluster);
     trip_periodic(0, &daemon::periodic_retry_reconfiguration);
@@ -343,6 +343,12 @@ daemon :: run(bool daemonize,
                 break;
             case REPLNET_HEAL_DONE:
                 process_heal_done(conn, msg, up);
+                break;
+            case REPLNET_CONDITION_WAIT:
+                process_condition_wait(conn, msg, up);
+                break;
+            case REPLNET_CONDITION_NOTIFY:
+                LOG(WARNING) << "dropping \"CONDITION_NOTIFY\" received by server";
                 break;
             case REPLNET_PING:
                 process_ping(conn, msg, up);
@@ -1107,6 +1113,27 @@ daemon :: handle_disruption_reset_reconfiguration(uint64_t token)
 }
 
 void
+daemon :: process_condition_wait(const replicant::connection& conn,
+                                 std::auto_ptr<e::buffer>,
+                                 e::unpacker up)
+{
+    uint64_t nonce;
+    uint64_t object;
+    uint64_t cond;
+    uint64_t state;
+    up = up >> nonce >> object >> cond >> state;
+    CHECK_UNPACK(CONDITION_WAIT, up);
+
+    if (!conn.is_client)
+    {
+        LOG(WARNING) << "dropping \"CONDITION_WAIT\" that did not come from a client";
+        return;
+    }
+
+    m_object_manager.wait(object, conn.token, nonce, cond, state);
+}
+
+void
 daemon :: process_client_register(const replicant::connection& conn,
                                   std::auto_ptr<e::buffer>,
                                   e::unpacker up)
@@ -1723,6 +1750,21 @@ daemon :: handle_disruption_reset_healing(uint64_t token)
             trip_periodic(0, &daemon::periodic_heal_next);
         }
     }
+}
+
+void
+daemon :: send_notify(uint64_t client, uint64_t nonce, replicant::response_returncode rc, const e::slice& data)
+{
+    size_t sz = BUSYBEE_HEADER_SIZE
+              + pack_size(REPLNET_CONDITION_NOTIFY)
+              + sizeof(uint64_t)
+              + pack_size(rc)
+              + data.size();
+    std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
+    e::buffer::packer pa = msg->pack_at(BUSYBEE_HEADER_SIZE);
+    pa = pa << REPLNET_CONDITION_NOTIFY << nonce << rc;
+    pa = pa.copy(data);
+    send_no_disruption(client, msg);
 }
 
 void

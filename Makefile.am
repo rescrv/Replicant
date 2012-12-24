@@ -62,6 +62,7 @@ bin_PROGRAMS = replicant
 
 replicantexecdir = $(exec_prefix)/libexec/$(PACKAGE)-$(VERSION)
 replicantexec_PROGRAMS = \
+			replicant-block \
 			replicant-cli \
 			replicant-daemon \
 			replicant-new-object \
@@ -107,6 +108,9 @@ libreplicant_la_SOURCES = \
 			client/replicant.cc
 libreplicant_la_LIBADD = -le -lbusybee -lrt
 
+replicant_block_SOURCES = tools/block.cc
+replicant_block_LDADD = libreplicant.la
+
 replicant_cli_SOURCES = tools/cli.cc
 replicant_cli_LDADD = libreplicant.la
 
@@ -117,11 +121,13 @@ replicant_del_object_SOURCES = tools/del-object.cc
 replicant_del_object_LDADD = libreplicant.la
 
 if ENABLE_EXAMPLES
-replicantexec_LTLIBRARIES = libreplicant-example-echo.la libreplicant-example-log.la libreplicant-example-nop.la
+replicantexec_LTLIBRARIES = libreplicant-example-condition.la libreplicant-example-echo.la libreplicant-example-log.la libreplicant-example-nop.la
+endif
+libreplicant_example_condition_la_SOURCES = examples/condition.c
+libreplicant_example_condition_la_CPPFLAGS = -I$(abs_top_srcdir)/daemon/ $(CPPFLAGS)
 libreplicant_example_echo_la_SOURCES = examples/echo.c
 libreplicant_example_echo_la_CPPFLAGS = -I$(abs_top_srcdir)/daemon/ $(CPPFLAGS)
 libreplicant_example_log_la_SOURCES = examples/log.c
 libreplicant_example_log_la_CPPFLAGS = -I$(abs_top_srcdir)/daemon/ $(CPPFLAGS)
 libreplicant_example_nop_la_SOURCES = examples/nop.c
 libreplicant_example_nop_la_CPPFLAGS = -I$(abs_top_srcdir)/daemon/ $(CPPFLAGS)
-endif

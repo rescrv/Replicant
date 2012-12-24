@@ -35,6 +35,7 @@
 replicant_state_machine_context :: replicant_state_machine_context()
     : object(0)
     , client(0)
+    , conditions()
     , response(NULL)
     , response_sz(0)
 {
@@ -66,6 +67,27 @@ replicant_state_machine_set_response(struct replicant_state_machine_context* ctx
 {
     ctx->response = data;
     ctx->response_sz = data_sz;
+}
+
+int
+replicant_state_machine_condition_create(struct replicant_state_machine_context* ctx,
+                                         uint64_t* cond)
+{
+    return ctx->conditions.create(cond);
+}
+
+int
+replicant_state_machine_condition_destroy(struct replicant_state_machine_context* ctx,
+                                          uint64_t cond)
+{
+    return ctx->conditions.destroy(cond);
+}
+
+int
+replicant_state_machine_condition_broadcast(struct replicant_state_machine_context* ctx,
+                                            uint64_t cond, uint64_t* state)
+{
+    return ctx->conditions.broadcast(cond, state);
 }
 
 } // extern "C"

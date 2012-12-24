@@ -25,63 +25,40 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
-// C++
-#include <iostream>
+#ifndef replicant_daemon_conditions_wrapper_h_
+#define replicant_daemon_conditions_wrapper_h_
 
 // Replicant
-#include "common/macros.h"
-#include "common/network_msgtype.h"
+#include "daemon/object_manager.h"
 
-std::ostream&
-replicant :: operator << (std::ostream& lhs, replicant_network_msgtype rhs)
+namespace replicant
 {
-    switch (rhs)
-    {
-        stringify(REPLNET_NOP);
-        stringify(REPLNET_BOOTSTRAP);
-        stringify(REPLNET_INFORM);
-        stringify(REPLNET_JOIN);
-        stringify(REPLNET_CONFIG_PROPOSE);
-        stringify(REPLNET_CONFIG_ACCEPT);
-        stringify(REPLNET_CONFIG_REJECT);
-        stringify(REPLNET_CLIENT_REGISTER);
-        stringify(REPLNET_CLIENT_DISCONNECT);
-        stringify(REPLNET_COMMAND_SUBMIT);
-        stringify(REPLNET_COMMAND_ISSUE);
-        stringify(REPLNET_COMMAND_ACK);
-        stringify(REPLNET_COMMAND_RESPONSE);
-        stringify(REPLNET_HEAL_REQ);
-        stringify(REPLNET_HEAL_RESP);
-        stringify(REPLNET_HEAL_DONE);
-        stringify(REPLNET_CONDITION_WAIT);
-        stringify(REPLNET_CONDITION_NOTIFY);
-        stringify(REPLNET_PING);
-        stringify(REPLNET_PONG);
-        default:
-            lhs << "unknown msgtype";
-    }
 
-    return lhs;
-}
-
-e::buffer::packer
-replicant :: operator << (e::buffer::packer lhs, const replicant_network_msgtype& rhs)
+class conditions_wrapper
 {
-    uint8_t mt = static_cast<uint8_t>(rhs);
-    return lhs << mt;
-}
+    public:
+        conditions_wrapper() : m_om(NULL), m_o(NULL) {}
+        conditions_wrapper(object_manager* om, void* o) : m_om(om), m_o(o) {}
+        conditions_wrapper(conditions_wrapper& other) : m_om(other.m_om), m_o(other.m_o) {}
+        ~conditions_wrapper() throw () {}
 
-e::unpacker
-replicant :: operator >> (e::unpacker lhs, replicant_network_msgtype& rhs)
-{
-    uint8_t mt;
-    lhs = lhs >> mt;
-    rhs = static_cast<replicant_network_msgtype>(mt);
-    return lhs;
-}
+    public:
+        int create(uint64_t* cond)
+        { return m_om->condition_create(m_o, cond); }
+        int destroy(uint64_t cond)
+        { return m_om->condition_destroy(m_o, cond); }
+        int broadcast(uint64_t cond, uint64_t* state)
+        { return m_om->condition_broadcast(m_o, cond, state); }
 
-size_t
-replicant :: pack_size(const replicant_network_msgtype&)
-{
-    return sizeof(uint8_t);
-}
+    public:
+        conditions_wrapper& operator = (const conditions_wrapper& rhs)
+        { m_om = rhs.m_om; m_o = rhs.m_o; return *this; }
+
+    private:
+        object_manager* m_om;
+        void* m_o;
+};
+
+} // namespace replicant
+
+#endif // replicant_daemon_conditions_wrapper_h_

@@ -239,6 +239,38 @@ replicant_client :: send(const char* obj, size_t obj_sz, const char* func,
     return send_to_preferred_chain_member(cmd, status);
 }
 
+int64_t
+replicant_client :: wait(const char* obj, size_t obj_sz,
+                         uint64_t cond, uint64_t state,
+                         replicant_returncode* status)
+{
+    int64_t ret = maintain_connection(status);
+
+    if (ret < 0)
+    {
+        return ret;
+    }
+
+    size_t sz = BUSYBEE_HEADER_SIZE
+              + pack_size(REPLNET_CONDITION_WAIT)
+              + sizeof(uint64_t) /*nonce*/
+              + sizeof(uint64_t) /*object*/
+              + sizeof(uint64_t) /*cond*/
+              + sizeof(uint64_t) /*state*/;
+    std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
+    uint64_t nonce = m_nonce;
+    ++m_nonce;
+    char object_buf[sizeof(uint64_t)];
+    memset(object_buf, 0, sizeof(object_buf));
+    memmove(object_buf, obj, std::min(obj_sz, sizeof(object_buf)));
+    uint64_t object;
+    e::unpack64be(object_buf, &object);
+    msg->pack_at(BUSYBEE_HEADER_SIZE)
+        << REPLNET_CONDITION_WAIT << nonce << object << cond << state;
+    e::intrusive_ptr<command> cmd = new command(status, nonce, msg, NULL, 0);
+    return send_to_preferred_chain_member(cmd, status);
+}
+
 replicant_returncode
 replicant_client :: disconnect()
 {
@@ -427,6 +459,7 @@ replicant_client :: inner_loop(replicant_returncode* status)
     switch (mt)
     {
         case REPLNET_COMMAND_RESPONSE:
+        case REPLNET_CONDITION_NOTIFY:
             if ((ret = handle_command_response(from, msg, up, status)) < 0)
             {
                 return ret;
@@ -452,6 +485,7 @@ replicant_client :: inner_loop(replicant_returncode* status)
         REPL_UNEXPECTED(HEAL_REQ);
         REPL_UNEXPECTED(HEAL_RESP);
         REPL_UNEXPECTED(HEAL_DONE);
+        REPL_UNEXPECTED(CONDITION_WAIT);
         REPL_UNEXPECTED(PING);
         REPL_UNEXPECTED(PONG);
         default:
@@ -620,6 +654,8 @@ replicant_client :: wait_for_token_registration(replicant_returncode* status)
             REPL_UNEXPECTED_DISCONNECT(HEAL_REQ);
             REPL_UNEXPECTED_DISCONNECT(HEAL_RESP);
             REPL_UNEXPECTED_DISCONNECT(HEAL_DONE);
+            REPL_UNEXPECTED_DISCONNECT(CONDITION_WAIT);
+            REPL_UNEXPECTED_DISCONNECT(CONDITION_NOTIFY);
             REPL_UNEXPECTED_DISCONNECT(PING);
             REPL_UNEXPECTED_DISCONNECT(PONG);
             default:
