@@ -439,6 +439,9 @@ replicant_client :: inner_loop(replicant_returncode* status)
                 return ret;
             }
             return 0;
+        case BUSYBEE_INTERRUPTED:
+            REPLSETERROR(REPLICANT_INTERRUPTED, "signal received");
+            return -1;
         case BUSYBEE_TIMEOUT:
             REPLSETERROR(REPLICANT_TIMEOUT, "operation timed out");
             return -1;
@@ -608,6 +611,9 @@ replicant_client :: wait_for_token_registration(replicant_returncode* status)
             case BUSYBEE_TIMEOUT:
                 REPLSETERROR(REPLICANT_TIMEOUT, "operation timed out");
                 return -1;
+            case BUSYBEE_INTERRUPTED:
+                REPLSETERROR(REPLICANT_INTERRUPTED, "signal received");
+                return -1;
             BUSYBEE_ERROR_DISCONNECT(NEED_BOOTSTRAP, DISRUPTED);
             BUSYBEE_ERROR_DISCONNECT(INTERNAL_ERROR, SHUTDOWN);
             BUSYBEE_ERROR_DISCONNECT(INTERNAL_ERROR, POLLFAILED);
@@ -766,6 +772,9 @@ replicant_client :: send_to_chain_head(std::auto_ptr<e::buffer> msg,
         case BUSYBEE_TIMEOUT:
             REPLSETERROR(REPLICANT_TIMEOUT, "operation timed out");
             return -1;
+        case BUSYBEE_INTERRUPTED:
+            REPLSETERROR(REPLICANT_INTERRUPTED, "signal received");
+            return -1;
         BUSYBEE_ERROR(INTERNAL_ERROR, SHUTDOWN);
         BUSYBEE_ERROR(INTERNAL_ERROR, POLLFAILED);
         BUSYBEE_ERROR(INTERNAL_ERROR, ADDFDFAIL);
@@ -805,6 +814,9 @@ replicant_client :: send_to_preferred_chain_member(e::intrusive_ptr<command> cmd
                 continue;
             case BUSYBEE_TIMEOUT:
                 REPLSETERROR(REPLICANT_TIMEOUT, "operation timed out");
+                return -1;
+            case BUSYBEE_INTERRUPTED:
+                REPLSETERROR(REPLICANT_INTERRUPTED, "signal received");
                 return -1;
             BUSYBEE_ERROR_CONTINUE(INTERNAL_ERROR, SHUTDOWN);
             BUSYBEE_ERROR_CONTINUE(INTERNAL_ERROR, POLLFAILED);
@@ -1062,6 +1074,7 @@ operator << (std::ostream& lhs, replicant_returncode rhs)
         stringify(REPLICANT_MISBEHAVING_SERVER);
         stringify(REPLICANT_INTERNAL_ERROR);
         stringify(REPLICANT_NONE_PENDING);
+        stringify(REPLICANT_INTERRUPTED);
         stringify(REPLICANT_GARBAGE);
         default:
             lhs << "unknown returncode (" << static_cast<unsigned int>(rhs) << ")";

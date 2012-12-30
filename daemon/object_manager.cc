@@ -30,6 +30,7 @@
 
 // POSIX
 #include <dlfcn.h>
+#include <signal.h>
 
 // STL
 #include <list>
@@ -580,6 +581,23 @@ void
 object_manager :: worker_thread(uint64_t obj_id, e::intrusive_ptr<object> obj)
 {
     LOG(INFO) << "spawning worker thread for object " << obj_id;
+    sigset_t ss;
+
+    if (sigfillset(&ss) < 0)
+    {
+        PLOG(ERROR) << "could not block signals";
+        return;
+    }
+
+    int err = pthread_sigmask(SIG_BLOCK, &ss, NULL);
+
+    if (err < 0)
+    {
+        errno = err;
+        PLOG(ERROR) << "could not block signals";
+        return;
+    }
+
     bool shutdown = false;
 
     while (!shutdown)

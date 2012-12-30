@@ -64,6 +64,7 @@ replicant :: bootstrap(const po6::net::hostname& hn, configuration* config)
             case BUSYBEE_DISRUPTED:
             case BUSYBEE_ADDFDFAIL:
             case BUSYBEE_EXTERNAL:
+            case BUSYBEE_INTERRUPTED:
                 return BOOTSTRAP_COMM_FAIL;
             default:
                 abort();
@@ -81,6 +82,7 @@ replicant :: bootstrap(const po6::net::hostname& hn, configuration* config)
             case BUSYBEE_DISRUPTED:
             case BUSYBEE_ADDFDFAIL:
             case BUSYBEE_EXTERNAL:
+            case BUSYBEE_INTERRUPTED:
                 return BOOTSTRAP_COMM_FAIL;
             default:
                 abort();

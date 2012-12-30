@@ -285,6 +285,23 @@ daemon :: run(bool daemonize,
         }
     }
 
+    sigset_t ss;
+
+    if (sigfillset(&ss) < 0)
+    {
+        PLOG(ERROR) << "could not block signals";
+        return EXIT_FAILURE;
+    }
+
+    int err = pthread_sigmask(SIG_BLOCK, &ss, NULL);
+
+    if (err < 0)
+    {
+        errno = err;
+        PLOG(ERROR) << "could not block signals";
+        return EXIT_FAILURE;
+    }
+
     replicant::connection conn;
     std::auto_ptr<e::buffer> msg;
 
@@ -1836,6 +1853,8 @@ daemon :: recv(replicant::connection* conn, std::auto_ptr<e::buffer>* msg)
                 break;
             case BUSYBEE_TIMEOUT:
                 continue;
+            case BUSYBEE_INTERRUPTED:
+                continue;
             case BUSYBEE_DISRUPTED:
                 handle_disruption(conn->token);
                 continue;
@@ -1919,6 +1938,7 @@ daemon :: send(const replicant::connection& conn, std::auto_ptr<e::buffer> msg)
         case BUSYBEE_ADDFDFAIL:
         case BUSYBEE_TIMEOUT:
         case BUSYBEE_EXTERNAL:
+        case BUSYBEE_INTERRUPTED:
         default:
             return false;
     }
@@ -1946,6 +1966,7 @@ daemon :: send(const chain_node& node, std::auto_ptr<e::buffer> msg)
         case BUSYBEE_ADDFDFAIL:
         case BUSYBEE_TIMEOUT:
         case BUSYBEE_EXTERNAL:
+        case BUSYBEE_INTERRUPTED:
         default:
             return false;
     }
@@ -1965,6 +1986,7 @@ daemon :: send_no_disruption(uint64_t token, std::auto_ptr<e::buffer> msg)
         case BUSYBEE_ADDFDFAIL:
         case BUSYBEE_TIMEOUT:
         case BUSYBEE_EXTERNAL:
+        case BUSYBEE_INTERRUPTED:
         default:
             return false;
     }
