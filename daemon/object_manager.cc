@@ -405,7 +405,7 @@ object_manager :: enqueue(uint64_t slot, uint64_t obj_id,
         tmp.back().data = data;
         tmp.back().backing.swap(*backing);
         po6::threads::mutex::hold hold(&obj->mtx);
-        // XXX issue a shutdown
+        obj->commands.splice(obj->commands.end(), tmp, tmp.begin());
         obj->commands_avail.signal();
         return command_send_response(slot, client, nonce, RESPONSE_SUCCESS, e::slice());
     }
