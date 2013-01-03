@@ -45,6 +45,7 @@ noinst_HEADERS = \
 			common/response_returncode.h \
 			common/special_objects.h \
 			client/command.h \
+			daemon/conditions_wrapper.h \
 			daemon/configuration_manager.h \
 			daemon/connection.h \
 			daemon/daemon.h \
