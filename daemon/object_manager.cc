@@ -675,6 +675,16 @@ object_manager :: log_messages(uint64_t obj_id, e::intrusive_ptr<object> obj, ui
 void
 object_manager :: dispatch_command(uint64_t obj_id, e::intrusive_ptr<object> obj, const command& cmd, bool* shutdown)
 {
+    if (cmd.type == command::SHUTDOWN)
+    {
+        *shutdown = true;
+    }
+
+    if (!obj->lib || !obj->sym)
+    {
+        return;
+    }
+
     if (cmd.type == command::NORMAL)
     {
         const char* func = reinterpret_cast<const char*>(cmd.data.data());
@@ -749,7 +759,6 @@ object_manager :: dispatch_command(uint64_t obj_id, e::intrusive_ptr<object> obj
     }
     else if (cmd.type == command::SHUTDOWN)
     {
-        *shutdown = true;
         replicant_state_machine_context ctx;
         ctx.object = obj_id;
         ctx.client = cmd.client;
