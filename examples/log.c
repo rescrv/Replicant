@@ -66,6 +66,8 @@ log_log(struct replicant_state_machine_context* ctx,
         void* obj,
         const char* data, size_t data_sz)
 {
+    FILE* log = replicant_state_machine_log_stream(ctx);
+    fprintf(log, "begin logging of slot\n");
     int is_print = 1;
     int saw_null = 0;
     size_t i = 0;
@@ -84,12 +86,14 @@ log_log(struct replicant_state_machine_context* ctx,
 
     if (is_print && saw_null)
     {
-        replicant_state_machine_log_error(ctx, data);
+        fprintf(log, "log was asked to log \"%s\" and it is %lld bytes long\n", data, i);
     }
     else
     {
-        replicant_state_machine_log_error(ctx, "will not log unprintable characters");
+        fprintf(log, "will not log unprintable characters\n");
     }
+
+    fprintf(log, "end logging of slot\n");
 }
 
 struct replicant_state_machine rsm = {

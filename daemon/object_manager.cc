@@ -117,6 +117,8 @@ class object_manager::object
         void* lib;
         replicant_state_machine* sym;
         void* rsm;
+        char* output;
+        size_t output_sz;
         std::map<uint64_t, condition> conditions;
 
     private:
@@ -139,6 +141,8 @@ object_manager :: object :: object()
     , lib(NULL)
     , sym(NULL)
     , rsm(NULL)
+    , output(NULL)
+    , output_sz(0)
     , conditions()
     , m_ref(0)
 {
@@ -374,8 +378,14 @@ object_manager :: enqueue(uint64_t slot, uint64_t obj_id,
         replicant_state_machine_context ctx;
         ctx.object = obj_id;
         ctx.client = client;
+        ctx.output = open_memstream(&obj->output, &obj->output_sz);
         ctx.conditions = conditions_wrapper(this, obj.get());
+        ctx.response = NULL;
+        ctx.response_sz = 0;
         obj->rsm = obj->sym->ctor(&ctx);
+        fclose(ctx.output);
+        ctx.output = NULL;
+        log_messages(obj_id, obj, slot, "the constructor");
         return command_send_response(slot, client, nonce, RESPONSE_SUCCESS, e::slice());
     }
     else if (obj_id == OBJECT_OBJ_DEL)
@@ -629,6 +639,40 @@ object_manager :: worker_thread(uint64_t obj_id, e::intrusive_ptr<object> obj)
 }
 
 void
+object_manager :: log_messages(uint64_t obj_id, e::intrusive_ptr<object> obj, uint64_t slot, const char* func)
+{
+    char* ptr = obj->output;
+    char* end = obj->output + obj->output_sz;
+
+    while (ptr < end)
+    {
+        void* ptr_nl = memchr(ptr, '\n', end - ptr);
+        void* ptr_0  = memchr(ptr, 0, end - ptr);
+        char* eol = end;
+
+        if (ptr_nl && ptr_0 && ptr_0 <= ptr_nl)
+        {
+            eol = static_cast<char*>(ptr_0);
+        }
+        else if (ptr_nl)
+        {
+            eol = static_cast<char*>(ptr_nl);
+        }
+        else if (ptr_0)
+        {
+            eol = static_cast<char*>(ptr_0);
+        }
+
+        LOG(INFO) << "object=" << obj_id << " slot=" << slot << " func=\"" << func << "\": " << std::string(ptr, eol);
+        ptr = eol + 1;
+    }
+
+    free(obj->output);
+    obj->output = NULL;
+    obj->output_sz = 0;
+}
+
+void
 object_manager :: dispatch_command(uint64_t obj_id, e::intrusive_ptr<object> obj, const command& cmd, bool* shutdown)
 {
     if (cmd.type == command::NORMAL)
@@ -661,10 +705,14 @@ object_manager :: dispatch_command(uint64_t obj_id, e::intrusive_ptr<object> obj
             replicant_state_machine_context ctx;
             ctx.object = obj_id;
             ctx.client = cmd.client;
+            ctx.output = open_memstream(&obj->output, &obj->output_sz);
             ctx.conditions = conditions_wrapper(this, obj.get());
             const char* data = func + func_sz + 1;
             size_t data_sz = cmd.data.size() - func_sz - 1;
             trans->func(&ctx, obj->rsm, data, data_sz);
+            fclose(ctx.output);
+            ctx.output = NULL;
+            log_messages(obj_id, obj, cmd.slot, func);
 
             if (!ctx.response)
             {
@@ -702,5 +750,16 @@ object_manager :: dispatch_command(uint64_t obj_id, e::intrusive_ptr<object> obj
     else if (cmd.type == command::SHUTDOWN)
     {
         *shutdown = true;
+        replicant_state_machine_context ctx;
+        ctx.object = obj_id;
+        ctx.client = cmd.client;
+        ctx.output = open_memstream(&obj->output, &obj->output_sz);
+        ctx.conditions = conditions_wrapper(this, obj.get());
+        ctx.response = NULL;
+        ctx.response_sz = 0;
+        obj->sym->dtor(&ctx, obj->rsm);
+        fclose(ctx.output);
+        ctx.output = NULL;
+        log_messages(obj_id, obj, cmd.slot, "the destructor");
     }
 }

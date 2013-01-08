@@ -1198,6 +1198,7 @@ daemon :: process_client_register(const replicant::connection& conn,
         return;
     }
 
+    LOG(INFO) << "registering client " << client;
     uint64_t slot = m_fs.next_slot_to_issue();
     issue_command(slot, OBJECT_CLI_REG, client, 0, e::slice("", 0));
 }
@@ -1228,6 +1229,7 @@ daemon :: process_client_disconnect(const replicant::connection& conn,
     std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
     msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_CLIENT_DISCONNECT;
     uint64_t slot = m_fs.next_slot_to_issue();
+    LOG(INFO) << "disconnecting client " << conn.token;
     issue_command(slot, OBJECT_CLI_DIE, conn.token, nonce, e::slice("", 0));
 }
 

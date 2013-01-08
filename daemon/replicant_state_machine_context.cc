@@ -51,6 +51,7 @@
 replicant_state_machine_context :: replicant_state_machine_context()
     : object(0)
     , client(0)
+    , output()
     , conditions()
     , response(NULL)
     , response_sz(0)
@@ -70,11 +71,10 @@ replicant_state_machine_get_client(struct replicant_state_machine_context* ctx)
     return ctx->client;
 }
 
-void
-replicant_state_machine_log_error(struct replicant_state_machine_context* ctx,
-                                  const char* msg)
+FILE*
+replicant_state_machine_log_stream(struct replicant_state_machine_context* ctx)
 {
-    LOG(INFO) << "object=" << ctx->object << " log message: " << msg;
+    return ctx->output;
 }
 
 void

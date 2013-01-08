@@ -83,6 +83,7 @@ class object_manager
         void notify_send_error_msg_response(uint64_t client, uint64_t nonce, response_returncode rc, const char* resp);
         void notify_send_response(uint64_t client, uint64_t nonce, response_returncode rc, const e::slice& resp);
         void worker_thread(uint64_t obj_id, e::intrusive_ptr<object> obj);
+        void log_messages(uint64_t obj_id, e::intrusive_ptr<object> obj, uint64_t slot, const char* func);
         void dispatch_command(uint64_t obj_id, e::intrusive_ptr<object> obj, const command& cmd, bool* shutdown);
 
     private:

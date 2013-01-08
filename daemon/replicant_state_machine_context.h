@@ -39,6 +39,7 @@ struct replicant_state_machine_context
     ~replicant_state_machine_context() throw ();
     uint64_t object;
     uint64_t client;
+    FILE* output;
     replicant::conditions_wrapper conditions;
     const char* response;
     size_t response_sz;

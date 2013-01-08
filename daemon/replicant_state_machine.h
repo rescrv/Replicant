@@ -35,15 +35,15 @@ extern "C"
 
 /* C */
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 
 struct replicant_state_machine_context;
 
 uint64_t
 replicant_state_machine_get_client(struct replicant_state_machine_context* ctx);
-void
-replicant_state_machine_log_error(struct replicant_state_machine_context* ctx,
-                                  const char* msg);
+FILE*
+replicant_state_machine_log_stream(struct replicant_state_machine_context* ctx);
 void
 replicant_state_machine_set_response(struct replicant_state_machine_context* ctx,
                                      const char* data, size_t data_sz);
