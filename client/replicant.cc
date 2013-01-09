@@ -907,6 +907,12 @@ replicant_client :: handle_command_response(const po6::net::location& from,
             m_last_error_file = __FILE__;
             m_last_error_line = __LINE__;
             break;
+        case replicant::RESPONSE_COND_DESTROYED:
+            c->fail(REPLICANT_COND_DESTROYED);
+            m_last_error_desc = "condition destroyed";
+            m_last_error_file = __FILE__;
+            m_last_error_line = __LINE__;
+            break;
         case replicant::RESPONSE_REGISTRATION_FAIL:
             c->fail(REPLICANT_MISBEHAVING_SERVER);
             m_last_error_desc = "server treated request as a registration";
@@ -1068,6 +1074,7 @@ operator << (std::ostream& lhs, replicant_returncode rhs)
         stringify(REPLICANT_OBJ_EXIST);
         stringify(REPLICANT_OBJ_NOT_FOUND);
         stringify(REPLICANT_COND_NOT_FOUND);
+        stringify(REPLICANT_COND_DESTROYED);
         stringify(REPLICANT_SERVER_ERROR);
         stringify(REPLICANT_BAD_LIBRARY);
         stringify(REPLICANT_TIMEOUT);

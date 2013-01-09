@@ -71,9 +71,9 @@ class object_manager
         friend class conditions_wrapper;
 
     private:
-        int condition_create(void* o, uint64_t cond);
-        int condition_destroy(void* o, uint64_t cond);
-        int condition_broadcast(void* o, uint64_t cond, uint64_t* state);
+        int condition_create(object* o, uint64_t cond);
+        int condition_destroy(object* o, uint64_t cond);
+        int condition_broadcast(object* o, uint64_t cond, uint64_t* state);
 
     private:
         void command_send_error_response(uint64_t slot, uint64_t client, uint64_t nonce, response_returncode rc);

@@ -38,7 +38,7 @@ class conditions_wrapper
 {
     public:
         conditions_wrapper() : m_om(NULL), m_o(NULL) {}
-        conditions_wrapper(object_manager* om, void* o) : m_om(om), m_o(o) {}
+        conditions_wrapper(object_manager* om, object_manager::object* o) : m_om(om), m_o(o) {}
         conditions_wrapper(conditions_wrapper& other) : m_om(other.m_om), m_o(other.m_o) {}
         ~conditions_wrapper() throw () {}
 
@@ -56,7 +56,7 @@ class conditions_wrapper
 
     private:
         object_manager* m_om;
-        void* m_o;
+        object_manager::object* m_o;
 };
 
 } // namespace replicant

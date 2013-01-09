@@ -484,9 +484,8 @@ object_manager :: wait(uint64_t obj_id, uint64_t client, uint64_t nonce, uint64_
 }
 
 int
-object_manager :: condition_create(void* o, uint64_t cond)
+object_manager :: condition_create(object* obj, uint64_t cond)
 {
-    object* obj = static_cast<object*>(o);
     std::map<uint64_t, object::condition>::iterator it = obj->conditions.find(cond);
 
     if (it != obj->conditions.end())
@@ -499,9 +498,8 @@ object_manager :: condition_create(void* o, uint64_t cond)
 }
 
 int
-object_manager :: condition_destroy(void* o, uint64_t cond)
+object_manager :: condition_destroy(object* obj, uint64_t cond)
 {
-    object* obj = static_cast<object*>(o);
     std::map<uint64_t, object::condition>::iterator it = obj->conditions.find(cond);
 
     if (it == obj->conditions.end())
@@ -512,7 +510,7 @@ object_manager :: condition_destroy(void* o, uint64_t cond)
     while (!it->second.waiters.empty())
     {
         const object::condition::waiter& w(*it->second.waiters.begin());
-        notify_send_response(w.client, w.nonce, RESPONSE_COND_NOT_EXIST, e::slice("", 0));
+        notify_send_response(w.client, w.nonce, RESPONSE_COND_DESTROYED, e::slice("", 0));
         it->second.waiters.erase(it->second.waiters.begin());
     }
 
@@ -521,9 +519,8 @@ object_manager :: condition_destroy(void* o, uint64_t cond)
 }
 
 int
-object_manager :: condition_broadcast(void* o, uint64_t cond, uint64_t* state)
+object_manager :: condition_broadcast(object* obj, uint64_t cond, uint64_t* state)
 {
-    object* obj = static_cast<object*>(o);
     std::map<uint64_t, object::condition>::iterator it = obj->conditions.find(cond);
 
     if (it == obj->conditions.end())
@@ -675,16 +672,6 @@ object_manager :: log_messages(uint64_t obj_id, e::intrusive_ptr<object> obj, ui
 void
 object_manager :: dispatch_command(uint64_t obj_id, e::intrusive_ptr<object> obj, const command& cmd, bool* shutdown)
 {
-    if (cmd.type == command::SHUTDOWN)
-    {
-        *shutdown = true;
-    }
-
-    if (!obj->lib || !obj->sym)
-    {
-        return;
-    }
-
     if (cmd.type == command::NORMAL)
     {
         const char* func = reinterpret_cast<const char*>(cmd.data.data());
@@ -696,10 +683,10 @@ object_manager :: dispatch_command(uint64_t obj_id, e::intrusive_ptr<object> obj
             return;
         }
 
-        replicant_state_machine_step* rsms = obj->sym->steps;
+        replicant_state_machine_step* rsms = obj->sym ? obj->sym->steps : NULL;
         replicant_state_machine_step* trans = NULL;
 
-        while (rsms->name)
+        while (rsms && rsms->name)
         {
             if (strcmp(func, rsms->name) == 0)
             {
@@ -759,6 +746,7 @@ object_manager :: dispatch_command(uint64_t obj_id, e::intrusive_ptr<object> obj
     }
     else if (cmd.type == command::SHUTDOWN)
     {
+        *shutdown = true;
         replicant_state_machine_context ctx;
         ctx.object = obj_id;
         ctx.client = cmd.client;
@@ -766,9 +754,19 @@ object_manager :: dispatch_command(uint64_t obj_id, e::intrusive_ptr<object> obj
         ctx.conditions = conditions_wrapper(this, obj.get());
         ctx.response = NULL;
         ctx.response_sz = 0;
-        obj->sym->dtor(&ctx, obj->rsm);
+
+        if (obj->sym && obj->sym->dtor)
+        {
+            obj->sym->dtor(&ctx, obj->rsm);
+        }
+
         fclose(ctx.output);
         ctx.output = NULL;
         log_messages(obj_id, obj, cmd.slot, "the destructor");
+
+        while (!obj->conditions.empty())
+        {
+            condition_destroy(obj.get(), obj->conditions.begin()->first);
+        }
     }
 }
