@@ -811,6 +811,7 @@ replicant_client :: send_to_preferred_chain_member(e::intrusive_ptr<command> cmd
                 {
                     return ret;
                 }
+                REPLSETERROR(REPLICANT_BACKOFF, "backoff before retrying");
                 continue;
             case BUSYBEE_TIMEOUT:
                 REPLSETERROR(REPLICANT_TIMEOUT, "operation timed out");
@@ -1070,6 +1071,7 @@ operator << (std::ostream& lhs, replicant_returncode rhs)
         stringify(REPLICANT_SERVER_ERROR);
         stringify(REPLICANT_BAD_LIBRARY);
         stringify(REPLICANT_TIMEOUT);
+        stringify(REPLICANT_BACKOFF);
         stringify(REPLICANT_NEED_BOOTSTRAP);
         stringify(REPLICANT_MISBEHAVING_SERVER);
         stringify(REPLICANT_INTERNAL_ERROR);
