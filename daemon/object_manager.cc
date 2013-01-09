@@ -71,7 +71,7 @@ class object_manager::command
         ~command() throw ();
 
     public:
-        enum { NORMAL, WAIT, SHUTDOWN } type;
+        enum { NORMAL, WAIT, DELETE } type;
         uint64_t slot;
         uint64_t client;
         uint64_t nonce;
@@ -408,7 +408,7 @@ object_manager :: enqueue(uint64_t slot, uint64_t obj_id,
         // Allocate the command object
         std::list<command> tmp;
         tmp.push_back(command());
-        tmp.back().type = command::SHUTDOWN;
+        tmp.back().type = command::DELETE;
         tmp.back().slot = slot;
         tmp.back().client = client;
         tmp.back().nonce = nonce;
@@ -744,7 +744,7 @@ object_manager :: dispatch_command(uint64_t obj_id, e::intrusive_ptr<object> obj
             }
         }
     }
-    else if (cmd.type == command::SHUTDOWN)
+    else if (cmd.type == command::DELETE)
     {
         *shutdown = true;
         replicant_state_machine_context ctx;
