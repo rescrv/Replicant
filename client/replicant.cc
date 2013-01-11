@@ -434,10 +434,7 @@ replicant_client :: inner_loop(replicant_returncode* status)
         case BUSYBEE_SUCCESS:
             break;
         case BUSYBEE_DISRUPTED:
-            if ((ret = handle_disruption(node, status)) < 0)
-            {
-                return ret;
-            }
+            handle_disruption(node, status);
             return 0;
         case BUSYBEE_INTERRUPTED:
             REPLSETERROR(REPLICANT_INTERRUPTED, "signal received");
@@ -764,21 +761,15 @@ replicant_client :: send_to_chain_head(std::auto_ptr<e::buffer> msg,
         case BUSYBEE_SUCCESS:
             return 0;
         case BUSYBEE_DISRUPTED:
-            if ((ret = handle_disruption(m_config->head(), status)) < 0)
-            {
-                return ret;
-            }
-            return -1;
-        case BUSYBEE_TIMEOUT:
-            REPLSETERROR(REPLICANT_TIMEOUT, "operation timed out");
-            return -1;
-        case BUSYBEE_INTERRUPTED:
-            REPLSETERROR(REPLICANT_INTERRUPTED, "signal received");
+            handle_disruption(m_config->head(), status);
+            REPLSETERROR(REPLICANT_BACKOFF, "backoff before retrying");
             return -1;
         BUSYBEE_ERROR(INTERNAL_ERROR, SHUTDOWN);
         BUSYBEE_ERROR(INTERNAL_ERROR, POLLFAILED);
         BUSYBEE_ERROR(INTERNAL_ERROR, ADDFDFAIL);
+        BUSYBEE_ERROR(INTERNAL_ERROR, TIMEOUT);
         BUSYBEE_ERROR(INTERNAL_ERROR, EXTERNAL);
+        BUSYBEE_ERROR(INTERNAL_ERROR, INTERRUPTED);
         default:
             REPLSETERROR(REPLICANT_INTERNAL_ERROR, "BusyBee returned unknown error");
             return -1;
@@ -807,22 +798,15 @@ replicant_client :: send_to_preferred_chain_member(e::intrusive_ptr<command> cmd
                 sent = true;
                 break;
             case BUSYBEE_DISRUPTED:
-                if ((ret = handle_disruption(*n, status)) < 0)
-                {
-                    return ret;
-                }
+                handle_disruption(*n, status);
                 REPLSETERROR(REPLICANT_BACKOFF, "backoff before retrying");
                 continue;
-            case BUSYBEE_TIMEOUT:
-                REPLSETERROR(REPLICANT_TIMEOUT, "operation timed out");
-                return -1;
-            case BUSYBEE_INTERRUPTED:
-                REPLSETERROR(REPLICANT_INTERRUPTED, "signal received");
-                return -1;
             BUSYBEE_ERROR_CONTINUE(INTERNAL_ERROR, SHUTDOWN);
             BUSYBEE_ERROR_CONTINUE(INTERNAL_ERROR, POLLFAILED);
             BUSYBEE_ERROR_CONTINUE(INTERNAL_ERROR, ADDFDFAIL);
+            BUSYBEE_ERROR_CONTINUE(INTERNAL_ERROR, TIMEOUT);
             BUSYBEE_ERROR_CONTINUE(INTERNAL_ERROR, EXTERNAL);
+            BUSYBEE_ERROR_CONTINUE(INTERNAL_ERROR, INTERRUPTED);
             default:
                 REPLSETERROR(REPLICANT_INTERNAL_ERROR, "BusyBee returned unknown error");
                 continue;
@@ -842,7 +826,7 @@ replicant_client :: send_to_preferred_chain_member(e::intrusive_ptr<command> cmd
     }
 }
 
-int64_t
+void
 replicant_client :: handle_disruption(const chain_node& from,
                                       replicant_returncode*)
 {
@@ -861,8 +845,6 @@ replicant_client :: handle_disruption(const chain_node& from,
         m_commands.erase(it);
         it = m_commands.begin();
     }
-
-    return 0;
 }
 
 int64_t
@@ -885,9 +867,15 @@ replicant_client :: handle_command_response(const po6::net::location& from,
 
     // Find the command
     command_map::iterator it = m_commands.find(nonce);
-    // XXX perhaps we should consider m_resend as well
+    command_map* map = &m_commands;
 
-    if (it == m_commands.end())
+    if (it == map->end())
+    {
+        it = m_resend.find(nonce);
+        map = &m_resend;
+    }
+
+    if (it == map->end())
     {
         return 0;
     }
@@ -996,7 +984,7 @@ replicant_client :: handle_command_response(const po6::net::location& from,
     c->set_last_error_desc(m_last_error_desc);
     c->set_last_error_file(m_last_error_file);
     c->set_last_error_line(m_last_error_line);
-    m_commands.erase(it);
+    map->erase(it);
     m_complete.insert(std::make_pair(c->nonce(), c));
     return 0;
 }

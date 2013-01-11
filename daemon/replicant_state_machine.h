@@ -65,9 +65,6 @@ struct replicant_state_machine_step
     void (*func)(struct replicant_state_machine_context* ctx, void* obj, const char* data, size_t data_sz);
 };
 
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-pedantic"
-
 struct replicant_state_machine
 {
     void* (*ctor)(struct replicant_state_machine_context* ctx);
@@ -76,8 +73,6 @@ struct replicant_state_machine
     void (*snap)(struct replicant_state_machine_context* ctx, void* obj, const char** data, size_t* data_sz);
     struct replicant_state_machine_step steps[];
 };
-
-#pragma GCC diagnostic pop
 
 #ifdef __cplusplus
 } /* extern "C" */

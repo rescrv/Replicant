@@ -40,25 +40,31 @@
 #include <e/buffer.h>
 #include <e/intrusive_ptr.h>
 
+// replicant_returncode occupies [4864, 5120)
 enum replicant_returncode
 {
-    REPLICANT_SUCCESS,
-    REPLICANT_NAME_TOO_LONG,
-    REPLICANT_FUNC_NOT_FOUND,
-    REPLICANT_OBJ_EXIST,
-    REPLICANT_OBJ_NOT_FOUND,
-    REPLICANT_COND_NOT_FOUND,
-    REPLICANT_COND_DESTROYED,
-    REPLICANT_SERVER_ERROR,
-    REPLICANT_BAD_LIBRARY,
-    REPLICANT_TIMEOUT,
-    REPLICANT_BACKOFF,
-    REPLICANT_NEED_BOOTSTRAP,
-    REPLICANT_MISBEHAVING_SERVER,
-    REPLICANT_INTERNAL_ERROR,
-    REPLICANT_NONE_PENDING,
-    REPLICANT_INTERRUPTED,
-    REPLICANT_GARBAGE
+    REPLICANT_SUCCESS   = 4864,
+    /* send/wait-specific values */
+    REPLICANT_NAME_TOO_LONG = 4880,
+    /* loop-specific values */
+    REPLICANT_NONE_PENDING  = 4896,
+    /* loop/send/wait-specific values */
+    REPLICANT_BACKOFF               = 4912,
+    REPLICANT_INTERNAL_ERROR        = 4913,
+    REPLICANT_INTERRUPTED           = 4914,
+    REPLICANT_MISBEHAVING_SERVER    = 4915,
+    REPLICANT_NEED_BOOTSTRAP        = 4916,
+    REPLICANT_TIMEOUT               = 4917,
+    /* command-specific values */
+    REPLICANT_BAD_LIBRARY       = 4928,
+    REPLICANT_COND_DESTROYED    = 4929,
+    REPLICANT_COND_NOT_FOUND    = 4930,
+    REPLICANT_FUNC_NOT_FOUND    = 4931,
+    REPLICANT_OBJ_EXIST         = 4932,
+    REPLICANT_OBJ_NOT_FOUND     = 4933,
+    REPLICANT_SERVER_ERROR      = 4934,
+    /* predictable uninitialized value */
+    REPLICANT_GARBAGE   = 5119
 };
 
 void
@@ -128,8 +134,8 @@ class replicant_client
                                    replicant_returncode* status);
         int64_t send_to_preferred_chain_member(e::intrusive_ptr<command> cmd,
                                                replicant_returncode* status);
-        int64_t handle_disruption(const replicant::chain_node& node,
-                                  replicant_returncode* status);
+        void handle_disruption(const replicant::chain_node& node,
+                               replicant_returncode* status);
         int64_t handle_command_response(const po6::net::location& from,
                                         std::auto_ptr<e::buffer> msg,
                                         e::unpacker up,
