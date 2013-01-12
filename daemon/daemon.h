@@ -35,9 +35,6 @@
 #include <utility>
 #include <vector>
 
-// Google SparseHash
-#include <sparsehash/sparse_hash_map>
-
 // po6
 #include <po6/net/hostname.h>
 #include <po6/net/ipaddr.h>
