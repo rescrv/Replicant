@@ -77,7 +77,6 @@ if test x"${enable_log_commands}" = xyes; then
     AC_DEFINE([REPL_LOG_COMMANDS], [], [Log all commands that are submitted, issued and acknowledged])
 fi
 
-
 AC_ARG_ENABLE([log-suspicions], [AS_HELP_STRING([--enable-log-suspicions],
               [enable code to log suspicions @<:@default: no@:>@])],
               [enable_log_suspicions=${enableval}], [enable_log_suspicions=no])
