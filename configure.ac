@@ -50,6 +50,11 @@ AC_CHECK_LIB([popt], [poptGetContext], [], [AC_MSG_ERROR([
 Replicant relies upon the popt library.
 Please install popt to continue.
 ---------------------------------------])])
+AC_CHECK_LIB([leveldb], [leveldb_open], [], [AC_MSG_ERROR([
+---------------------------------------
+Replicant relies upon the LevelDB library.
+Please install LevelDB to continue.
+---------------------------------------])])
 PKG_CHECK_MODULES([PO6], [libpo6 >= 0.2])
 PKG_CHECK_MODULES([E], [libe >= 0.2])
 PKG_CHECK_MODULES([BUSYBEE], [busybee >= 0.1])
@@ -59,6 +64,11 @@ AC_CHECK_HEADER([popt.h],,[AC_MSG_ERROR([
 ---------------------------------------
 Replicant relies upon the popt library.
 Please install popt to continue.
+---------------------------------------])])
+AC_CHECK_HEADER([leveldb/db.h],,[AC_MSG_ERROR([
+---------------------------------------
+Replicant relies upon the LevelDB library.
+Please install LevelDB to continue.
 ---------------------------------------])])
 AC_CHECK_HEADER([glog/logging.h],,[AC_MSG_ERROR([
 ---------------------------------------
