@@ -340,6 +340,9 @@ daemon :: run(bool daemonize,
             case REPLNET_CLIENT_DISCONNECT:
                 process_client_disconnect(conn, msg, up);
                 break;
+            case REPLNET_CLIENT_UNKNOWN:
+                LOG(WARNING) << "dropping \"CLIENT_UNKNOWN\" received by server";
+                break;
             case REPLNET_COMMAND_SUBMIT:
                 process_command_submit(conn, msg, up);
                 break;
@@ -1144,6 +1147,10 @@ daemon :: process_condition_wait(const replicant::connection& conn,
     if (!conn.is_client)
     {
         LOG(WARNING) << "dropping \"CONDITION_WAIT\" that did not come from a client";
+        size_t sz = BUSYBEE_HEADER_SIZE + pack_size(REPLNET_CLIENT_UNKNOWN);
+        std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
+        msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_COMMAND_RESPONSE;
+        LOG(INFO) << "SENT " << send_no_disruption(conn.token, msg);
         return;
     }
 
@@ -1276,6 +1283,10 @@ daemon :: process_command_submit(const replicant::connection& conn,
     {
         LOG(INFO) << "dropping \"COMMAND_SUBMIT\" from " << conn.token
                   << " because it is not a client or cluster member";
+        size_t sz = BUSYBEE_HEADER_SIZE + pack_size(REPLNET_CLIENT_UNKNOWN);
+        msg.reset(e::buffer::create(sz));
+        msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_CLIENT_UNKNOWN;
+        LOG(INFO) << "SENT " << send_no_disruption(client, msg);
         return;
     }
 
@@ -1283,6 +1294,10 @@ daemon :: process_command_submit(const replicant::connection& conn,
     {
         LOG(INFO) << "dropping \"COMMAND_SUBMIT\" from " << conn.token
                   << " because it uses the wrong token";
+        size_t sz = BUSYBEE_HEADER_SIZE + pack_size(REPLNET_CLIENT_UNKNOWN);
+        msg.reset(e::buffer::create(sz));
+        msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_CLIENT_UNKNOWN;
+        LOG(INFO) << "SENT " << send_no_disruption(client, msg);
         return;
     }
 

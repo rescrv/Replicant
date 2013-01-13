@@ -477,6 +477,9 @@ replicant_client :: inner_loop(replicant_returncode* status)
                 return ret;
             }
             break;
+        case REPLNET_CLIENT_UNKNOWN:
+            reset_to_disconnected();
+            break;
         REPL_UNEXPECTED(NOP);
         REPL_UNEXPECTED(BOOTSTRAP);
         REPL_UNEXPECTED(JOIN);
@@ -657,6 +660,7 @@ replicant_client :: wait_for_token_registration(replicant_returncode* status)
             REPL_UNEXPECTED_DISCONNECT(CONFIG_REJECT);
             REPL_UNEXPECTED_DISCONNECT(CLIENT_REGISTER);
             REPL_UNEXPECTED_DISCONNECT(CLIENT_DISCONNECT);
+            REPL_UNEXPECTED_DISCONNECT(CLIENT_UNKNOWN);
             REPL_UNEXPECTED_DISCONNECT(COMMAND_SUBMIT);
             REPL_UNEXPECTED_DISCONNECT(COMMAND_ISSUE);
             REPL_UNEXPECTED_DISCONNECT(COMMAND_ACK);
@@ -752,7 +756,6 @@ int64_t
 replicant_client :: send_to_chain_head(std::auto_ptr<e::buffer> msg,
                                        replicant_returncode* status)
 {
-    int64_t ret = -1;
     m_busybee_mapper->set(m_config->head());
     busybee_returncode rc = m_busybee->send(m_config->head().token, msg);
 
@@ -780,7 +783,6 @@ int64_t
 replicant_client :: send_to_preferred_chain_member(e::intrusive_ptr<command> cmd,
                                                    replicant_returncode* status)
 {
-    int64_t ret = -1;
     bool sent = false;
     const chain_node* sent_to = NULL;
 

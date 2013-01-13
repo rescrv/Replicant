@@ -46,6 +46,7 @@ replicant :: operator << (std::ostream& lhs, replicant_network_msgtype rhs)
         stringify(REPLNET_CONFIG_REJECT);
         stringify(REPLNET_CLIENT_REGISTER);
         stringify(REPLNET_CLIENT_DISCONNECT);
+        stringify(REPLNET_CLIENT_UNKNOWN);
         stringify(REPLNET_COMMAND_SUBMIT);
         stringify(REPLNET_COMMAND_ISSUE);
         stringify(REPLNET_COMMAND_ACK);
