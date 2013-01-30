@@ -61,10 +61,12 @@ noinst_HEADERS = \
 
 bin_PROGRAMS = replicant
 
+noinst_PROGRAMS = \
+			replicant-block \
+			replicant-cli
+
 replicantexecdir = $(exec_prefix)/libexec/$(PACKAGE)-$(VERSION)
 replicantexec_PROGRAMS = \
-			replicant-block \
-			replicant-cli \
 			replicant-daemon \
 			replicant-new-object \
 			replicant-del-object
