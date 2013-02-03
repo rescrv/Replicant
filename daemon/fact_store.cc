@@ -180,7 +180,8 @@ fact_store :: open(const po6::pathname& path,
     {
         first_time = false;
 
-        if (rbacking != PACKAGE_VERSION)
+        if (rbacking != PACKAGE_VERSION &&
+            rbacking != "0.1.0")
         {
             LOG(ERROR) << "could not restore from LevelDB because "
                        << "the existing data was created by "

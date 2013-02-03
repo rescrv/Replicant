@@ -28,7 +28,7 @@
 # Process this file with autoconf to produce a configure script.
 
 AC_PREREQ([2.67])
-AC_INIT([replicant], [0.1.0], [escriva@cs.cornell.edu])
+AC_INIT([replicant], [0.1.1], [escriva@cs.cornell.edu])
 AM_INIT_AUTOMAKE([foreign subdir-objects dist-bzip2 dist-lzma])
 AM_SILENT_RULES([yes])
 LT_PREREQ([2.2])
