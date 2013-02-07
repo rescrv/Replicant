@@ -95,7 +95,7 @@ replicant_daemon_SOURCES = \
 			daemon/main.cc \
 			daemon/object_manager.cc \
 			daemon/settings.cc
-replicant_daemon_LDADD = -le -lbusybee -lglog -lleveldb -lrt -ldl -lpthread libreplicant-state-machine.la
+replicant_daemon_LDADD = $(E_LIBS) $(BUSYBEE_LIBS) -lglog -lleveldb -lrt -ldl -lpthread libreplicant-state-machine.la
 replicant_daemon_LDFLAGS = -no-install
 
 libreplicant_la_CXXFLAGS = $(CXXFLAGS) $(AM_CXXFLAGS)
@@ -109,7 +109,7 @@ libreplicant_la_SOURCES = \
 			common/response_returncode.cc \
 			client/command.cc \
 			client/replicant.cc
-libreplicant_la_LIBADD = -le -lbusybee -lrt
+libreplicant_la_LIBADD = $(E_LIBS) $(BUSYBEE_LIBS) -lrt
 
 replicant_block_SOURCES = tools/block.cc
 replicant_block_LDADD = libreplicant.la
@@ -134,3 +134,6 @@ libreplicant_example_log_la_SOURCES = examples/log.c
 libreplicant_example_log_la_CPPFLAGS = -I$(abs_top_srcdir)/daemon/ $(CPPFLAGS)
 libreplicant_example_nop_la_SOURCES = examples/nop.c
 libreplicant_example_nop_la_CPPFLAGS = -I$(abs_top_srcdir)/daemon/ $(CPPFLAGS)
+
+pkgconfigdir = $(libdir)/pkgconfig
+pkgconfig_DATA = replicant.pc
