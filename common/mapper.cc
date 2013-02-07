@@ -53,7 +53,7 @@ mapper :: lookup(uint64_t server_id,
 }
 
 void
-mapper :: set(const chain_node& n)
+mapper :: set(const replicant::chain_node& n)
 {
     m_cache = n;
 }
