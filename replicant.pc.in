@@ -1,0 +1,12 @@
+prefix=@prefix@
+exec_prefix=@exec_prefix@
+libdir=@libdir@
+includedir=@includedir@
+
+Name: busybee
+Description: High performance messaging layer
+Version: @VERSION@
+
+Requires: libpo6 >= 0.2.3 libe >= 0.2.7 
+Libs: -L${libdir} -lreplicant
+Cflags: -I${includedir}
