@@ -30,4 +30,5 @@ replicant-cli
 replicant-daemon
 replicant-del-object
 replicant-new-object
+replicant.pc
 stamp-h1
