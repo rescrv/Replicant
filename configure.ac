@@ -94,5 +94,6 @@ AC_ARG_ENABLE([example_state_machines], [AS_HELP_STRING([--enable-example-state-
               [example_state_machines=${enableval}], [example_state_machines=no])
 AM_CONDITIONAL([ENABLE_EXAMPLES], [test x"${example_state_machines}" = xyes])
 
-AC_CONFIG_FILES([Makefile])
+AC_CONFIG_FILES([Makefile
+                 replicant.pc])
 AC_OUTPUT
