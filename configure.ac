@@ -29,7 +29,7 @@
 
 AC_PREREQ([2.67])
 AC_INIT([replicant], [0.1.dev], [escriva@cs.cornell.edu])
-AM_INIT_AUTOMAKE([foreign subdir-objects dist-bzip2 dist-lzma])
+AM_INIT_AUTOMAKE([foreign subdir-objects dist-bzip2])
 AM_SILENT_RULES([yes])
 LT_PREREQ([2.2])
 LT_INIT
@@ -50,6 +50,14 @@ AC_CHECK_LIB([popt], [poptGetContext], [], [AC_MSG_ERROR([
 Replicant relies upon the popt library.
 Please install popt to continue.
 ---------------------------------------])])
+AC_CHECK_LIB([rt], [clock_gettime], [needs_lrt=yes], [needs_lrt=no])
+
+if test x"${needs_lrt}" = xyes; then
+    AC_SUBST([LRT_CFLAGS], ["-lrt"])
+else
+    AC_SUBST([LRT_CFLAGS], [""])
+fi
+
 PKG_CHECK_MODULES([PO6], [libpo6 >= 0.3])
 PKG_CHECK_MODULES([E], [libe >= 0.3])
 PKG_CHECK_MODULES([BUSYBEE], [busybee >= 0.2])
@@ -93,6 +101,8 @@ AC_ARG_ENABLE([example_state_machines], [AS_HELP_STRING([--enable-example-state-
               [build Python bindings @<:@default: no@:>@])],
               [example_state_machines=${enableval}], [example_state_machines=no])
 AM_CONDITIONAL([ENABLE_EXAMPLES], [test x"${example_state_machines}" = xyes])
+
+AC_CHECK_FUNCS([clock_gettime mach_absolute_time])
 
 AC_CONFIG_FILES([Makefile
                  replicant.pc])

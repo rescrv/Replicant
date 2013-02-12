@@ -89,14 +89,14 @@ exit_on_signal(int /*signum*/)
 static uint64_t
 monotonic_time()
 {
-    timespec ts;
+    uint64_t t;
 
-    if (clock_gettime(CLOCK_MONOTONIC, &ts) < 0)
+    if ((t = e::time()) < 0)
     {
         abort();
     }
 
-    return ts.tv_sec * 1000000000 + ts.tv_nsec;
+    return t;
 }
 
 daemon :: ~daemon() throw ()
@@ -926,7 +926,7 @@ mean_and_stdev(const std::map<uint64_t, double>& suspicions, double* mean, doubl
     for (std::map<uint64_t, double>::const_iterator it = suspicions.begin();
             it != suspicions.end(); ++it)
     {
-        if (isinf(it->second))
+        if (std::isinf(it->second))
         {
             continue;
         }
