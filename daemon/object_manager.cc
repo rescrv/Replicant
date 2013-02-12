@@ -60,8 +60,9 @@
 #include "daemon/object_manager.h"
 #include "daemon/replicant_state_machine.h"
 #include "daemon/replicant_state_machine_context.h"
-
+#if defined __APPLE__
 #include "memstream.h"
+#endif
 
 using replicant::object_manager;
 
