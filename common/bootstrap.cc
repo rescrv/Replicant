@@ -27,7 +27,7 @@
 
 // e
 #include <e/endian.h>
-#include <e/timer.h>
+#include <e/time.h>
 
 // STL
 #include <memory>
