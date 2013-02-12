@@ -27,7 +27,7 @@
 
 // e
 #include <e/endian.h>
-#include <e/timer.h>
+#include <e/time.h>
 
 // STL
 #include <memory>
@@ -47,7 +47,11 @@ replicant :: bootstrap(const po6::net::hostname& hn, configuration* config)
 {
     try
     {
+#ifdef _MSC_VER
+        std::shared_ptr<e::buffer> msg;
+#else
         std::auto_ptr<e::buffer> msg;
+#endif
         busybee_single bbs(hn);
         // Send the bootstrap message
         msg.reset(e::buffer::create(BUSYBEE_HEADER_SIZE + pack_size(REPLNET_BOOTSTRAP)));

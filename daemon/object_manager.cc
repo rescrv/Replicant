@@ -56,9 +56,13 @@
 #include "common/network_msgtype.h"
 #include "common/special_objects.h"
 #include "daemon/daemon.h"
+#include "daemon/conditions_wrapper.h"
 #include "daemon/object_manager.h"
 #include "daemon/replicant_state_machine.h"
 #include "daemon/replicant_state_machine_context.h"
+#if defined __APPLE__
+#include "memstream.h"
+#endif
 
 using replicant::object_manager;
 
@@ -379,7 +383,8 @@ object_manager :: enqueue(uint64_t slot, uint64_t obj_id,
         ctx.object = obj_id;
         ctx.client = client;
         ctx.output = open_memstream(&obj->output, &obj->output_sz);
-        ctx.conditions = conditions_wrapper(this, obj.get());
+        conditions_wrapper cw(this, obj.get());
+        ctx.conditions = cw;
         ctx.response = NULL;
         ctx.response_sz = 0;
         obj->rsm = obj->sym->ctor(&ctx);
@@ -703,7 +708,8 @@ object_manager :: dispatch_command(uint64_t obj_id, e::intrusive_ptr<object> obj
             ctx.object = obj_id;
             ctx.client = cmd.client;
             ctx.output = open_memstream(&obj->output, &obj->output_sz);
-            ctx.conditions = conditions_wrapper(this, obj.get());
+            conditions_wrapper cw(this, obj.get());
+            ctx.conditions = cw;
             const char* data = func + func_sz + 1;
             size_t data_sz = cmd.data.size() - func_sz - 1;
             trans->func(&ctx, obj->rsm, data, data_sz);
@@ -751,7 +757,8 @@ object_manager :: dispatch_command(uint64_t obj_id, e::intrusive_ptr<object> obj
         ctx.object = obj_id;
         ctx.client = cmd.client;
         ctx.output = open_memstream(&obj->output, &obj->output_sz);
-        ctx.conditions = conditions_wrapper(this, obj.get());
+        conditions_wrapper cw(this, obj.get());
+        ctx.conditions = cw;
         ctx.response = NULL;
         ctx.response_sz = 0;
 

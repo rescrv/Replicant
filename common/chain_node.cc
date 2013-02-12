@@ -76,7 +76,7 @@ e::unpacker
 replicant :: operator >> (e::unpacker lhs, chain_node& rhs)
 {
     return lhs >> rhs.token >> rhs.address;
-} 
+}
 
 size_t
 replicant :: pack_size(const chain_node& rhs)

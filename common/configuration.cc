@@ -499,6 +499,9 @@ configuration :: remove(const chain_node& node)
             }
 
             --m_standby_sz;
+#ifdef min
+#undef min
+#endif
             m_member_sz = std::min(m_member_sz, m_standby_sz);
         }
         else

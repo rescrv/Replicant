@@ -27,7 +27,7 @@
 
 // e
 #include <e/endian.h>
-#include <e/timer.h>
+#include <e/time.h>
 
 // BusyBee
 #include <busybee_constants.h>
@@ -390,7 +390,11 @@ replicant_client :: kill(int64_t id)
     m_resend.erase(id);
 }
 
+#ifdef _MSC_VER
+fd_set*
+#else
 int
+#endif
 replicant_client :: poll_fd()
 {
     return m_busybee->poll_fd();

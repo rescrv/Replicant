@@ -109,7 +109,11 @@ class replicant_client
         int64_t loop(int timeout, replicant_returncode* status);
         int64_t loop(int64_t id, int timeout, replicant_returncode* status);
         void kill(int64_t id);
+#ifdef _MSC_VER
+        fd_set* poll_fd();
+#else
         int poll_fd();
+#endif
 
     private:
         class command;
