@@ -53,6 +53,7 @@ noinst_HEADERS = \
 			daemon/failure_detector.h \
 			daemon/failure_manager.h \
 			daemon/heal_next.h \
+			daemon/memstream.h \
 			daemon/object_manager.h \
 			daemon/settings.h \
 			daemon/replicant_state_machine.h \
