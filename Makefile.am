@@ -73,9 +73,7 @@ replicantexec_PROGRAMS = \
 			replicant-del-object
 
 replicant_SOURCES = replicant.cc
-			
-replicant_CPPFLAGS = \
-			-DREPLICANT_EXEC_DIR="\"$(replicantexecdir)\""
+replicant_CPPFLAGS = -DREPLICANT_EXEC_DIR="\"$(replicantexecdir)\""
 
 libreplicant_state_machine_la_SOURCES = daemon/replicant_state_machine_context.cc
 replicant_daemon_SOURCES = \
