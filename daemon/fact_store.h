@@ -31,8 +31,8 @@
 // po6
 #include <po6/pathname.h>
 
-// LevelDB
-#include <leveldb/db.h>
+// Lightning MDB
+#include <lmdb.h>
 
 // Replicant
 #include "common/configuration.h"
@@ -115,7 +115,8 @@ class fact_store
         fact_store& operator = (const fact_store&);
 
     private:
-        leveldb::DB* m_db;
+        MDB_env *m_db;
+        MDB_dbi m_dbi;
         uint64_t m_cache_next_slot_issue;
         uint64_t m_cache_next_slot_ack;
 };

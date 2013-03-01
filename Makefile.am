@@ -95,7 +95,7 @@ replicant_daemon_SOURCES = \
 			daemon/main.cc \
 			daemon/object_manager.cc \
 			daemon/settings.cc
-replicant_daemon_LDADD = $(E_LIBS) $(BUSYBEE_LIBS) -lglog -lleveldb -ldl -lpthread libreplicant-state-machine.la
+replicant_daemon_LDADD = $(E_LIBS) $(BUSYBEE_LIBS) -lglog -llmdb -ldl -lpthread libreplicant-state-machine.la
 
 libreplicant_la_CXXFLAGS = $(CXXFLAGS) $(AM_CXXFLAGS)
 libreplicant_la_SOURCES = \
