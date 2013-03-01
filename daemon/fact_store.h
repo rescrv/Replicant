@@ -105,7 +105,7 @@ class fact_store
     private:
         bool check_key_exists(const char* key, size_t key_sz);
         bool retrieve_value(const char* key, size_t key_sz,
-                            std::string* backing);
+                            MDB_val *backing);
         void store_key_value(const char* key, size_t key_sz,
                              const char* value, size_t value_sz);
         void delete_key(const char* key, size_t key_sz);
@@ -116,6 +116,8 @@ class fact_store
 
     private:
         MDB_env *m_db;
+		MDB_txn *m_rtxn;
+		MDB_cursor *m_rcsr;
         MDB_dbi m_dbi;
         uint64_t m_cache_next_slot_issue;
         uint64_t m_cache_next_slot_ack;

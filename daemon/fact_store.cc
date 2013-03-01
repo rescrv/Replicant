@@ -175,7 +175,6 @@ fact_store :: open(const po6::pathname& path,
     if (rc)
     {
         LOG(ERROR) << "could not open LMDB txn: " << mdb_strerror(rc);
-        mdb_env_close(m_db);
         return false;
     }
     rc = mdb_open(txn, NULL, 0, &m_dbi);
@@ -183,9 +182,23 @@ fact_store :: open(const po6::pathname& path,
     {
         LOG(ERROR) << "could not open LMDB dbi: " << mdb_strerror(rc);
         mdb_txn_abort(txn);
-        mdb_env_close(m_db);
         return false;
     }
+
+	/* Set this up for readers to use later */
+	rc = mdb_txn_begin(m_db, NULL, MDB_RDONLY, &m_rtxn);
+    if (rc)
+    {
+        LOG(ERROR) << "could not open LMDB read txn: " << mdb_strerror(rc);
+        return false;
+    }
+	rc = mdb_cursor_open(m_rtxn, m_dbi, &m_rcsr);
+    if (rc)
+    {
+        LOG(ERROR) << "could not open LMDB read cursor: " << mdb_strerror(rc);
+        return false;
+    }
+	mdb_txn_reset(m_rtxn);
 
     bool first_time = false;
 
@@ -424,58 +437,55 @@ fact_store :: is_live_client(uint64_t client)
 {
     char key[KEY_SIZE_CLIENT];
     pack_key_client(client, key);
-    std::string backing;
+	MDB_val backing;
+	bool ret = false;
 
     if (!retrieve_value(key, KEY_SIZE_CLIENT, &backing))
     {
         return false;
     }
 
-    if (backing.size() != 3)
+    if (backing.mv_size != 3)
     {
         abort();
     }
 
-    if (backing == "reg")
+    if (!memcmp(backing.mv_data, "reg", 3))
     {
-        return true;
+        ret = true;
     }
-    else if (backing == "die")
-    {
-        return false;
-    }
-    else
+    else if (memcmp(backing.mv_data, "die", 3))
     {
         abort();
     }
+	mdb_txn_reset(m_rtxn);
+	return ret;
 }
 
 void
 fact_store :: get_all_clients(std::vector<uint64_t>* clients)
 {
-    MDB_txn *txn;
-    MDB_cursor *cursor;
     MDB_val key;
     int rc;
 
-    rc = mdb_txn_begin(m_db, NULL, MDB_RDONLY, &txn);
+    rc = mdb_txn_renew(m_rtxn);
     if (rc)
     {
-            LOG(ERROR) << "could not read client list because txn_begin failed:  "
+            LOG(ERROR) << "could not read client list because txn_renew failed:  "
                        << mdb_strerror(rc);
             return;
     }
-    rc = mdb_cursor_open(txn, m_dbi, &cursor);
+    rc = mdb_cursor_renew(m_rtxn, m_rcsr);
     if (rc)
     {
             LOG(ERROR) << "could not read client list because cursor_open failed:  "
                        << mdb_strerror(rc);
-            mdb_txn_abort(txn);
+            mdb_txn_reset(m_rtxn);
             return;
     }
     MVS(key, "client\x00\x00\x00\x00\x00\x00\x00\x00");
 
-    rc = mdb_cursor_get(cursor, &key, NULL, MDB_SET_RANGE);
+    rc = mdb_cursor_get(m_rcsr, &key, NULL, MDB_SET_RANGE);
     while (rc == MDB_SUCCESS)
     {
         if (strncmp((const char *)key.mv_data, "client", 6) == 0 && key.mv_size == 14)
@@ -488,10 +498,9 @@ fact_store :: get_all_clients(std::vector<uint64_t>* clients)
         {
             break;
         }
-        rc = mdb_cursor_get(cursor, &key, NULL, MDB_NEXT);
+        rc = mdb_cursor_get(m_rcsr, &key, NULL, MDB_NEXT);
     }
-    mdb_cursor_close(cursor);
-    mdb_txn_abort(txn);
+    mdb_txn_reset(m_rtxn);
 }
 
 void
@@ -519,23 +528,26 @@ fact_store :: get_slot(uint64_t slot,
                        std::string* backing)
 {
     char key[KEY_SIZE_SLOT];
+	MDB_val bdata;
     pack_key_slot(slot, key);
 
-    if (!retrieve_value(key, KEY_SIZE_SLOT, backing))
+    if (!retrieve_value(key, KEY_SIZE_SLOT, &bdata))
     {
         return false;
     }
 
-    if (backing->size() < 3 * sizeof(uint64_t))
+    if (bdata.mv_size < 3 * sizeof(uint64_t))
     {
         abort();
     }
 
+    backing->assign((const char *)bdata.mv_data, bdata.mv_size);
+	mdb_txn_reset(m_rtxn);
     const char* ptr = backing->data();
     ptr = e::unpack64be(ptr, object);
     ptr = e::unpack64be(ptr, client);
     ptr = e::unpack64be(ptr, nonce);
-    *data = e::slice(ptr, backing->size() - 3 * sizeof(uint64_t));
+    *data = e::slice(ptr, bdata.mv_size - 3 * sizeof(uint64_t));
     return true;
 }
 
@@ -546,19 +558,20 @@ fact_store :: get_slot(uint64_t client,
 {
     char key[KEY_SIZE_NONCE];
     pack_key_nonce(client, nonce, key);
-    std::string backing;
+    MDB_val backing;
 
     if (!retrieve_value(key, KEY_SIZE_NONCE, &backing))
     {
         return false;
     }
 
-    if (backing.size() < sizeof(uint64_t))
+    if (backing.mv_size < sizeof(uint64_t))
     {
         abort();
     }
 
-    e::unpack64be(backing.data(), slot);
+    e::unpack64be((const char *)backing.mv_data, slot);
+	mdb_txn_reset(m_rtxn);
     return true;
 }
 
@@ -570,17 +583,20 @@ fact_store :: get_exec(uint64_t slot,
 {
     char key[KEY_SIZE_EXEC];
     pack_key_exec(slot, key);
+	MDB_val bdata;
 
-    if (!retrieve_value(key, KEY_SIZE_EXEC, backing))
+    if (!retrieve_value(key, KEY_SIZE_EXEC, &bdata))
     {
         return false;
     }
 
-    if (backing->size() == 0)
+    if (bdata.mv_size == 0)
     {
         abort();
     }
 
+    backing->assign((const char *)bdata.mv_data, bdata.mv_size);
+	mdb_txn_reset(m_rtxn);
     *rc = static_cast<replicant::response_returncode>((*backing)[0]);
     *data = e::slice(backing->data() + 1, backing->size() - 1);
     return true;
@@ -605,8 +621,6 @@ fact_store :: is_issued_slot(uint64_t slot)
 uint64_t
 fact_store :: next_slot_to_issue()
 {
-    MDB_txn *txn;
-    MDB_cursor *cursor;
     MDB_val key;
     int rc;
 
@@ -615,19 +629,19 @@ fact_store :: next_slot_to_issue()
         return m_cache_next_slot_issue;
     }
 
-    rc = mdb_txn_begin(m_db, NULL, MDB_RDONLY, &txn);
+    rc = mdb_txn_renew(m_rtxn);
     if (rc)
     {
-            LOG(ERROR) << "could not read slot list because txn_begin failed:  "
+            LOG(ERROR) << "could not read slot list because txn_renew failed:  "
                        << mdb_strerror(rc);
             abort();
     }
-    rc = mdb_cursor_open(txn, m_dbi, &cursor);
+    rc = mdb_cursor_renew(m_rtxn, m_rcsr);
     if (rc)
     {
             LOG(ERROR) << "could not read slot list because cursor_open failed:  "
                        << mdb_strerror(rc);
-            mdb_txn_abort(txn);
+            mdb_txn_reset(m_rtxn);
             abort();
     }
 
@@ -635,7 +649,7 @@ fact_store :: next_slot_to_issue()
 
     uint64_t next_to_issue = 1;
 
-    rc = mdb_cursor_get(cursor, &key, NULL, MDB_SET_RANGE);
+    rc = mdb_cursor_get(m_rcsr, &key, NULL, MDB_SET_RANGE);
     while (rc == MDB_SUCCESS)
     {
         if (strncmp((const char *)key.mv_data, "slot", 4) == 0 && key.mv_size == 12)
@@ -648,10 +662,9 @@ fact_store :: next_slot_to_issue()
         {
             break;
         }
-        rc = mdb_cursor_get(cursor, &key, NULL, MDB_NEXT);
+        rc = mdb_cursor_get(m_rcsr, &key, NULL, MDB_NEXT);
     }
-    mdb_cursor_close(cursor);
-    mdb_txn_abort(txn);
+    mdb_txn_reset(m_rtxn);
 
     m_cache_next_slot_issue = next_to_issue;
     return next_to_issue;
@@ -660,8 +673,6 @@ fact_store :: next_slot_to_issue()
 uint64_t
 fact_store :: next_slot_to_ack()
 {
-    MDB_txn *txn;
-    MDB_cursor *cursor;
     MDB_val key;
     int rc;
 
@@ -670,19 +681,19 @@ fact_store :: next_slot_to_ack()
         return m_cache_next_slot_ack;
     }
 
-    rc = mdb_txn_begin(m_db, NULL, MDB_RDONLY, &txn);
+    rc = mdb_txn_renew(m_rtxn);
     if (rc)
     {
             LOG(ERROR) << "could not read ack list because txn_begin failed:  "
                        << mdb_strerror(rc);
             abort();
     }
-    rc = mdb_cursor_open(txn, m_dbi, &cursor);
+    rc = mdb_cursor_renew(m_rtxn, m_rcsr);
     if (rc)
     {
             LOG(ERROR) << "could not read ack list because cursor_open failed:  "
                        << mdb_strerror(rc);
-            mdb_txn_abort(txn);
+            mdb_txn_reset(m_rtxn);
             abort();
     }
 
@@ -690,7 +701,7 @@ fact_store :: next_slot_to_ack()
 
     uint64_t next_to_ack = 1;
 
-    rc = mdb_cursor_get(cursor, &key, NULL, MDB_SET_RANGE);
+    rc = mdb_cursor_get(m_rcsr, &key, NULL, MDB_SET_RANGE);
     while (rc == MDB_SUCCESS)
     {
         if (strncmp((const char *)key.mv_data, "ack", 3) == 0 && key.mv_size == 11)
@@ -703,10 +714,9 @@ fact_store :: next_slot_to_ack()
         {
             break;
         }
-        rc = mdb_cursor_get(cursor, &key, NULL, MDB_NEXT);
+        rc = mdb_cursor_get(m_rcsr, &key, NULL, MDB_NEXT);
     }
-    mdb_cursor_close(cursor);
-    mdb_txn_abort(txn);
+    mdb_txn_reset(m_rtxn);
 
     m_cache_next_slot_ack = next_to_ack;
     return next_to_ack;
@@ -792,21 +802,20 @@ fact_store :: clear_unacked_slots()
 bool
 fact_store :: check_key_exists(const char* key, size_t key_sz)
 {
-    MDB_txn *txn;
     MDB_val k;
     int rc;
 
     k.mv_data = (void *)key;
     k.mv_size = key_sz;
 
-    rc = mdb_txn_begin(m_db, NULL, MDB_RDONLY, &txn);
+    rc = mdb_txn_renew(m_rtxn);
     if (rc)
     {
-        LOG(ERROR) << "txn_begin failed:  " << mdb_strerror(rc);
+        LOG(ERROR) << "txn_renew failed:  " << mdb_strerror(rc);
         abort();
     }
-    rc = mdb_get(txn, m_dbi, &k, NULL);
-    mdb_txn_abort(txn);
+    rc = mdb_get(m_rtxn, m_dbi, &k, NULL);
+    mdb_txn_reset(m_rtxn);
     if (rc == MDB_SUCCESS)
     {
         return true;
@@ -824,27 +833,25 @@ fact_store :: check_key_exists(const char* key, size_t key_sz)
 
 bool
 fact_store :: retrieve_value(const char* key, size_t key_sz,
-                             std::string* backing)
+                             MDB_val *backing)
 {
-    MDB_txn *txn;
     MDB_val k, data;
     int rc;
 
-    rc = mdb_txn_begin(m_db, NULL, MDB_RDONLY, &txn);
+    rc = mdb_txn_renew(m_rtxn);
     if (rc)
     {
-        LOG(ERROR) << "txn_begin failed:  " << mdb_strerror(rc);
+        LOG(ERROR) << "txn_renew failed:  " << mdb_strerror(rc);
         abort();
     }
-    rc = mdb_get(txn, m_dbi, &k, &data);
-    mdb_txn_abort(txn);
+    rc = mdb_get(m_rtxn, m_dbi, &k, backing);
     if (rc == MDB_SUCCESS)
     {
-        backing->assign((const char *)data.mv_data, data.mv_size);
         return true;
     }
     else if (rc == MDB_NOTFOUND)
     {
+		mdb_txn_reset(m_rtxn);
         return false;
     }
     else
