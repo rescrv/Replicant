@@ -68,11 +68,16 @@ AC_CHECK_HEADER([popt.h],,[AC_MSG_ERROR([
 Replicant relies upon the popt library.
 Please install popt to continue.
 ---------------------------------------])])
-AC_CHECK_HEADER([leveldb/db.h],,[AC_MSG_ERROR([
+AC_CHECK_HEADER([lmdb.h],,[AC_MSG_ERROR([
 ---------------------------------------
-Replicant relies upon the LevelDB library.
-Please install LevelDB to continue.
+Replicant relies upon the Lightning MDB library.
+Please install Lightning MDB to continue.
 ---------------------------------------])])
+#AC_CHECK_HEADER([leveldb/db.h],,[AC_MSG_ERROR([
+#---------------------------------------
+#Replicant relies upon the LevelDB library.
+#Please install LevelDB to continue.
+#---------------------------------------])])
 AC_CHECK_HEADER([glog/logging.h],,[AC_MSG_ERROR([
 ---------------------------------------
 Replicant relies upon the glog library.
