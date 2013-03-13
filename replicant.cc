@@ -61,6 +61,7 @@ static struct poptOption help_popts[] = {
 
 static struct poptOption global_popts[] = {
     {"exec-path", 0, POPT_ARG_STRING, &_path, 'p', "Path to where the Replicant programs are installed", "PATH"},
+    POPT_TABLEEND
 };
 
 static struct poptOption popts[] = {
@@ -192,8 +193,8 @@ main(int argc, const char* argv[])
 
             if (execvp(args[0], const_cast<char*const*>(args)) < 0)
             {
-                std::cerr << "failed to exec " << name << ": " << strerror(errno) << std::endl;
-                std::cerr << "PATH=" << path << std::endl;
+                std::cerr << "failed to exec " << s->name << ": " << strerror(errno) << std::endl;
+                std::cerr << "REPLICANT_EXEC_PATH=" << path << std::endl;
                 return EXIT_FAILURE;
             }
         }
