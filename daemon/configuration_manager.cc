@@ -64,51 +64,6 @@ configuration_manager :: latest() const
     return m_configs.back();
 }
 
-bool
-configuration_manager :: in_any_cluster(const chain_node& n) const
-{
-    for (std::list<configuration>::const_iterator conf = m_configs.begin();
-            conf != m_configs.end(); ++conf)
-    {
-        if (conf->in_cluster(n))
-        {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-bool
-configuration_manager :: is_any_spare(const chain_node& n) const
-{
-    for (std::list<configuration>::const_iterator conf = m_configs.begin();
-            conf != m_configs.end(); ++conf)
-    {
-        if (conf->is_spare(n))
-        {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-bool
-configuration_manager :: is_quorum_for_all(const configuration& config) const
-{
-    for (std::list<configuration>::const_iterator conf = m_configs.begin();
-            conf != m_configs.end(); ++conf)
-    {
-        if (!config.quorum_of(*conf))
-        {
-            return false;
-        }
-    }
-
-    return true;
-}
-
 void
 configuration_manager :: get_all_nodes(std::vector<chain_node>* nodes) const
 {
@@ -116,16 +71,6 @@ configuration_manager :: get_all_nodes(std::vector<chain_node>* nodes) const
             c != m_configs.end(); ++c)
     {
         for (const chain_node* n = c->members_begin(); n != c->members_end(); ++n)
-        {
-            nodes->push_back(*n);
-        }
-
-        for (const chain_node* n = c->standbys_begin(); n != c->standbys_end(); ++n)
-        {
-            nodes->push_back(*n);
-        }
-
-        for (const chain_node* n = c->spares_begin(); n != c->spares_end(); ++n)
         {
             nodes->push_back(*n);
         }
@@ -145,18 +90,6 @@ configuration_manager :: get_config_chain(std::vector<configuration>* config_cha
             c != m_configs.end(); ++c)
     {
         config_chain->push_back(*c);
-    }
-}
-
-void
-configuration_manager :: get_proposals(std::vector<proposal>* proposals) const
-{
-    proposals->clear();
-
-    for (std::list<proposal>::const_iterator p = m_proposals.begin();
-            p != m_proposals.end(); ++p)
-    {
-        proposals->push_back(*p);
     }
 }
 
@@ -196,6 +129,18 @@ configuration_manager :: get_proposal(uint64_t proposal_id,
     return true;
 }
 
+void
+configuration_manager :: get_proposals(std::vector<proposal>* proposals) const
+{
+    proposals->clear();
+
+    for (std::list<proposal>::const_iterator p = m_proposals.begin();
+            p != m_proposals.end(); ++p)
+    {
+        proposals->push_back(*p);
+    }
+}
+
 bool
 configuration_manager :: is_compatible(const configuration* configs,
                                        size_t configs_sz) const
@@ -215,6 +160,36 @@ configuration_manager :: is_compatible(const configuration* configs,
     }
 
     return true;
+}
+
+bool
+configuration_manager :: contains_quorum_of_all(const configuration& config) const
+{
+    for (std::list<configuration>::const_iterator it = m_configs.begin();
+            it != m_configs.end(); ++it)
+    {
+        if (!config.quorum_of(*it))
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+bool
+configuration_manager :: any(bool (configuration::*func)(uint64_t) const, uint64_t token) const
+{
+    for (std::list<configuration>::const_iterator it = m_configs.begin();
+            it != m_configs.end(); ++it)
+    {
+        if (((*it).*func)(token))
+        {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 void

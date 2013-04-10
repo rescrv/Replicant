@@ -32,8 +32,11 @@
 #include <queue>
 #include <functional>
 #include <set>
+#include <tr1/memory>
 #include <utility>
 #include <vector>
+
+// po6
 #include <po6/net/hostname.h>
 #include <po6/net/ipaddr.h>
 
@@ -47,7 +50,7 @@
 #include "daemon/configuration_manager.h"
 #include "daemon/connection.h"
 #include "daemon/fact_store.h"
-#include "daemon/failure_manager.h"
+#include "daemon/failure_detector.h"
 #include "daemon/heal_next.h"
 #include "daemon/object_manager.h"
 #include "daemon/settings.h"
@@ -77,9 +80,9 @@ class daemon
         void process_inform(const replicant::connection& conn,
                             std::auto_ptr<e::buffer> msg,
                             e::unpacker up);
-        void process_join(const replicant::connection& conn,
-                          std::auto_ptr<e::buffer> msg,
-                          e::unpacker up);
+        void process_server_register(const replicant::connection& conn,
+                                     std::auto_ptr<e::buffer> msg,
+                                     e::unpacker up);
         void process_config_propose(const replicant::connection& conn,
                                     std::auto_ptr<e::buffer> msg,
                                     e::unpacker up);
@@ -89,14 +92,24 @@ class daemon
         void process_config_reject(const replicant::connection& conn,
                                    std::auto_ptr<e::buffer> msg,
                                    e::unpacker up);
+        // send accept message for proposal
+        void accept_proposal(const chain_node& dest,
+                             uint64_t proposal_id,
+                             uint64_t proposal_time);
+        // send reject message for proposal
+        void reject_proposal(const chain_node& dest,
+                             uint64_t proposal_id,
+                             uint64_t proposal_time);
+        // create an INFORM message ready to pass to "send"
+        std::auto_ptr<e::buffer> create_inform_message();
+        // invoke all hooks, presumably because the configuration changed
+        void post_reconfiguration_hooks();
+        // propose a new configuration.  the caller must enforce all invariants
+        // about this configuration w.r.t. previously issued ones and this call
+        // will assert that
         void propose_config(const configuration& config);
-        void accept_config(const configuration& config);
-        void accept_config_inform_spares(const configuration& old_config);
-        void periodic_join_cluster(uint64_t now);
-        void periodic_maintain_cluster(uint64_t now);
         void periodic_describe_cluster(uint64_t now);
-        void periodic_retry_reconfiguration(uint64_t now);
-        void handle_disruption_reset_reconfiguration(uint64_t token);
+        void periodic_maintain_cluster(uint64_t now);
 
     // Client-related functions
     private:
@@ -106,7 +119,6 @@ class daemon
         void process_client_disconnect(const replicant::connection& conn,
                                        std::auto_ptr<e::buffer> msg,
                                        e::unpacker up);
-        void accept_config_inform_clients(const configuration& old_config);
 
     // Normal-case chain-replication-related goodness.
     private:
@@ -137,9 +149,7 @@ class daemon
                                std::auto_ptr<e::buffer> msg,
                                e::unpacker up);
         void transfer_more_state();
-        void accept_config_reset_healing(const configuration& old_config);
         void periodic_heal_next(uint64_t now);
-        void handle_disruption_reset_healing(uint64_t token);
 
     // Notify/wait-style conditions
     private:
@@ -169,7 +179,8 @@ class daemon
     private:
         void handle_disruption(uint64_t token);
         void periodic_handle_disruption(uint64_t now);
-        void periodic_retry_disruption(uint64_t now);
+        void handle_disruption_reset_healing(uint64_t token);
+        void handle_disruption_reset_reconfiguration(uint64_t token);
 
     // Periodically run certain functions
     private:
@@ -184,18 +195,21 @@ class daemon
         bool generate_token(uint64_t* token);
 
     private:
+        typedef std::map<uint64_t, std::tr1::shared_ptr<failure_detector> > failure_detector_map_t;
+
+    private:
         settings m_s;
         replicant::mapper m_busybee_mapper;
         std::auto_ptr<busybee_mta> m_busybee;
         chain_node m_us;
         configuration_manager m_config_manager;
-        replicant::failure_manager m_failure_manager;
         replicant::object_manager m_object_manager;
+        failure_detector_map_t m_failure_detectors;
         std::vector<periodic> m_periodic;
+        std::map<uint64_t, uint64_t> m_temporary_servers;
         heal_next m_heal_next;
-        std::queue<uint64_t> m_disrupted_unhandled;
         std::set<uint64_t> m_disrupted_backoff;
-        std::vector<std::pair<uint64_t, uint64_t> > m_disrupted_times;
+        bool m_disrupted_retry_scheduled;
         replicant::fact_store m_fs;
 };
 

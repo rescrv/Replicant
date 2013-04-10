@@ -37,6 +37,12 @@ chain_node :: chain_node()
 {
 }
 
+chain_node :: chain_node(uint64_t t, const po6::net::location& a)
+    : token(t)
+    , address(a)
+{
+}
+
 chain_node :: ~chain_node() throw ()
 {
 }

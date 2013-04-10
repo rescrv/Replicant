@@ -101,18 +101,7 @@ replicant :: bootstrap(const po6::net::hostname& hn, configuration* config)
             return BOOTSTRAP_CORRUPT_INFORM;
         }
 
-        bool found = false;
-
-        for (const chain_node* n = config->members_begin();
-                !found && n != config->members_end(); ++n)
-        {
-            if (n->address == bbs.remote() && n->token == bbs.token())
-            {
-                found = true;
-            }
-        }
-
-        if (!found)
+        if (!config->is_member(chain_node(bbs.token(), bbs.remote())))
         {
             return BOOTSTRAP_NOT_CLUSTER_MEMBER;
         }

@@ -31,7 +31,6 @@
 using replicant::connection;
 
 connection :: connection()
-    //: address()
     : is_cluster_member(false)
     , is_client(false)
     , is_prev(false)

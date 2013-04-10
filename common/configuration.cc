@@ -26,6 +26,7 @@
 // POSSIBILITY OF SUCH DAMAGE.
 
 // STL
+#include <algorithm>
 #include <memory>
 
 // Google Log
@@ -38,48 +39,77 @@ using replicant::chain_node;
 using replicant::configuration;
 
 configuration :: configuration()
-    : m_version(0)
+    : m_cluster()
+    , m_prev_token()
+    , m_this_token()
+    , m_version()
+    , m_members()
     , m_chain()
-    , m_member_sz(0)
-    , m_standby_sz(0)
-    , m_spare()
-    , m_spare_sz(0)
+    , m_command_sz()
 {
 }
 
-configuration :: configuration(uint64_t v, const chain_node& h)
-    : m_version(v)
+configuration :: configuration(uint64_t c,
+                               uint64_t pt,
+                               uint64_t tt,
+                               uint64_t v,
+                               const chain_node& h)
+    : m_cluster(c)
+    , m_prev_token(pt)
+    , m_this_token(tt)
+    , m_version(v)
+    , m_members()
     , m_chain()
-    , m_member_sz(0)
-    , m_standby_sz(0)
-    , m_spare()
-    , m_spare_sz(0)
+    , m_command_sz()
 {
-    m_chain[0] = h;
-    m_member_sz = 1;
-    m_standby_sz = 1;
+    m_members.push_back(h);
+    m_chain.push_back(h.token);
+    m_command_sz = 1;
 }
 
 configuration :: ~configuration() throw ()
 {
 }
 
-uint64_t
-configuration :: version() const
+bool
+configuration :: validate() const
 {
-    return m_version;
-}
+    for (size_t i = 0; i < m_members.size(); ++i)
+    {
+        for (size_t j = i + 1; j < m_members.size(); ++j)
+        {
+            if (m_members[i].token == m_members[j].token ||
+                m_members[i].address == m_members[j].address)
+            {
+                return false;
+            }
+        }
+    }
 
-uint64_t
-configuration :: prev_token() const
-{
-    return 0xdeadbeefcafebabeULL;
-}
+    if (m_command_sz > m_chain.size())
+    {
+        return false;
+    }
 
-uint64_t
-configuration :: this_token() const
-{
-    return 0xdeadbeefcafebabeULL;
+    for (size_t i = 0; i < m_chain.size(); ++i)
+    {
+        const chain_node* n = node_from_token(m_chain[i]);
+
+        if (n == NULL)
+        {
+            return false;
+        }
+
+        for (size_t j = i + 1; j < m_chain.size(); ++j)
+        {
+            if (m_chain[i] == m_chain[j])
+            {
+                return false;
+            }
+        }
+    }
+
+    return true;
 }
 
 bool
@@ -87,155 +117,34 @@ configuration :: quorum_of(const configuration& other) const
 {
     assert(validate());
     assert(other.validate());
+    assert(cluster() == other.cluster());
     size_t count = 0;
 
-    for (const chain_node* n = members_begin(); n < members_end(); ++n)
+    for (size_t i = 0; i < m_chain.size(); ++i)
     {
-        bool found = false;
-
-        for (const chain_node* o = other.members_begin(); !found && o < other.members_end(); ++o)
+        for (size_t j = 0; j < other.m_chain.size(); ++j)
         {
-            if (*n == *o)
+            if (m_chain[i] == other.m_chain[j])
             {
                 ++count;
-                found = true;
-            }
-        }
-
-        for (const chain_node* o = other.standbys_begin(); !found && o < other.standbys_end(); ++o)
-        {
-            if (*n == *o)
-            {
-                ++count;
-                found = true;
+                break;
             }
         }
     }
 
-    for (const chain_node* n = standbys_begin(); n < standbys_end(); ++n)
-    {
-        bool found = false;
-
-        for (const chain_node* o = other.members_begin(); !found && o < other.members_end(); ++o)
-        {
-            if (*n == *o)
-            {
-                ++count;
-                found = true;
-            }
-        }
-
-        for (const chain_node* o = other.standbys_begin(); !found && o < other.standbys_end(); ++o)
-        {
-            if (*n == *o)
-            {
-                ++count;
-                found = true;
-            }
-        }
-    }
-
-    size_t quorum = other.m_standby_sz / 2 + 1;
+    size_t quorum = other.m_chain.size() / 2 + 1;
     return count >= quorum;
-}
-
-bool
-configuration :: validate() const
-{
-    for (const chain_node* n = members_begin(); n < members_end(); ++n)
-    {
-        for (const chain_node* m = n + 1; m < members_end(); ++m)
-        {
-            if (n->address == m->address || n->token == m->token)
-            {
-                return false;
-            }
-        }
-
-        for (const chain_node* s = standbys_begin(); s < standbys_end(); ++s)
-        {
-            if (n->address == s->address || n->token == s->token)
-            {
-                return false;
-            }
-        }
-
-        for (const chain_node* s = spares_begin(); s < spares_end(); ++s)
-        {
-            if (n->address == s->address || n->token == s->token)
-            {
-                return false;
-            }
-        }
-    }
-
-    for (const chain_node* n = standbys_begin(); n < standbys_end(); ++n)
-    {
-        for (const chain_node* s = n + 1; s < standbys_end(); ++s)
-        {
-            if (n->address == s->address || n->token == s->token)
-            {
-                return false;
-            }
-        }
-
-        for (const chain_node* s = spares_begin(); s < spares_end(); ++s)
-        {
-            if (n->address == s->address || n->token == s->token)
-            {
-                return false;
-            }
-        }
-    }
-
-    for (const chain_node* n = spares_begin(); n < spares_end(); ++n)
-    {
-        for (const chain_node* s = n + 1; s < spares_end(); ++s)
-        {
-            if (n->address == s->address || n->token == s->token)
-            {
-                return false;
-            }
-        }
-    }
-
-    return m_member_sz <= m_standby_sz;
-}
-
-const chain_node&
-configuration :: get(uint64_t token) const
-{
-    for (const chain_node* n = members_begin(); n < members_end(); ++n)
-    {
-        if (n->token == token)
-        {
-            return *n;
-        }
-    }
-
-    for (const chain_node* n = standbys_begin(); n < standbys_end(); ++n)
-    {
-        if (n->token == token)
-        {
-            return *n;
-        }
-    }
-
-    for (const chain_node* n = spares_begin(); n < spares_end(); ++n)
-    {
-        if (n->token == token)
-        {
-            return *n;
-        }
-    }
-
-    return m_chain[REPL_CONFIG_SZ];
 }
 
 uint64_t
 configuration :: fault_tolerance() const
 {
-    return (m_standby_sz - 1) / 2;
+    if (m_chain.empty())
+    {
+        return 0;
+    }
+
+    return (m_chain.size() - 1) / 2;
 }
 
 uint64_t
@@ -243,329 +152,286 @@ configuration :: servers_needed_for(uint64_t f) const
 {
     uint64_t needed = f * 2 + 1;
 
-    if (needed < m_standby_sz)
+    if (needed < m_chain.size())
     {
         return 0;
     }
     else
     {
-        return needed - m_standby_sz;
+        return needed - m_chain.size();
     }
-}
-
-const chain_node&
-configuration :: head() const
-{
-    if (m_member_sz == 0)
-    {
-        return m_chain[REPL_CONFIG_SZ];
-    }
-
-    return m_chain[0];
-}
-
-const chain_node&
-configuration :: command_tail() const
-{
-    if (m_member_sz == 0)
-    {
-        return m_chain[REPL_CONFIG_SZ];
-    }
-
-    return m_chain[m_member_sz - 1];
-}
-
-const chain_node&
-configuration :: config_tail() const
-{
-    if (m_standby_sz == 0)
-    {
-        return m_chain[REPL_CONFIG_SZ];
-    }
-
-    return m_chain[m_standby_sz - 1];
 }
 
 bool
-configuration :: has_prev(const chain_node& node) const
+configuration :: has_token(uint64_t token) const
 {
-    return prev(node) != chain_node();
-}
-
-const chain_node&
-configuration :: prev(const chain_node& node) const
-{
-    const chain_node* ret = m_chain + REPL_CONFIG_SZ;
-    const chain_node* cur = m_chain;
-    const chain_node* end = m_chain + m_standby_sz;
-
-    for (; cur < end; ++cur)
-    {
-        if (*cur == node)
-        {
-            return *ret;
-        }
-
-        ret = cur;
-    }
-
-    return m_chain[REPL_CONFIG_SZ];
-}
-
-bool
-configuration :: has_next(const chain_node& node) const
-{
-    return next(node) != chain_node();
-}
-
-const chain_node&
-configuration :: next(const chain_node& node) const
-{
-    const chain_node* ret = m_chain + REPL_CONFIG_SZ;
-    const chain_node* cur = m_chain + m_standby_sz - 1;
-    const chain_node* end = m_chain;
-
-    for (; cur >= end; --cur)
-    {
-        if (*cur == node)
-        {
-            return *ret;
-        }
-
-        ret = cur;
-    }
-
-    return m_chain[REPL_CONFIG_SZ];
-}
-
-bool
-configuration :: in_cluster(const chain_node& node) const
-{
-    return is_member(node) || is_standby(node);
+    return node_from_token(token) != NULL;
 }
 
 bool
 configuration :: is_member(const chain_node& node) const
 {
-    for (const chain_node* m = members_begin(); m != members_end(); ++m)
+    const chain_node* n = node_from_token(node.token);
+    return n && *n == node;
+}
+
+const chain_node*
+configuration :: node_from_token(uint64_t token) const
+{
+    for (size_t i = 0; i < m_members.size(); ++i)
     {
-        if (*m == node)
+        if (m_members[i].token == token)
+        {
+            return &m_members[i];
+        }
+    }
+
+    return NULL;
+}
+
+const chain_node*
+configuration :: head() const
+{
+    if (m_chain.empty())
+    {
+        return NULL;
+    }
+
+    const chain_node* n = node_from_token(m_chain[0]);
+    assert(n);
+    return n;
+}
+
+const chain_node*
+configuration :: command_tail() const
+{
+    assert(m_command_sz <= m_chain.size());
+
+    if (m_command_sz == 0)
+    {
+        return NULL;
+    }
+
+    const chain_node* n = node_from_token(m_chain[m_command_sz - 1]);
+    assert(n);
+    return n;
+}
+
+const chain_node*
+configuration :: config_tail() const
+{
+    if (m_chain.empty())
+    {
+        return NULL;
+    }
+
+    const chain_node* n = node_from_token(m_chain[m_chain.size() - 1]);
+    assert(n);
+    return n;
+}
+
+const chain_node*
+configuration :: prev(uint64_t token) const
+{
+    const uint64_t* p = NULL;
+    const uint64_t* cur = &m_chain.front();
+    const uint64_t* end = &m_chain.front() + m_chain.size();
+
+    for (; cur < end; ++cur)
+    {
+        if (*cur == token)
+        {
+            const chain_node* node = NULL;
+
+            if (p)
+            {
+                node = node_from_token(*p);
+                assert(node);
+            }
+
+            return node;
+        }
+
+        p = cur;
+    }
+
+    return NULL;
+}
+
+const chain_node*
+configuration :: next(uint64_t token) const
+{
+    const uint64_t* n = NULL;
+    const uint64_t* cur = &m_chain.front() + m_chain.size() - 1;
+    const uint64_t* end = &m_chain.front();
+
+    for (; cur >= end; --cur)
+    {
+        if (*cur == token)
+        {
+            const chain_node* node = NULL;
+
+            if (n)
+            {
+                node = node_from_token(*n);
+                assert(node);
+            }
+
+            return node;
+        }
+
+        n = cur;
+    }
+
+    return NULL;
+}
+
+bool
+configuration :: in_command_chain(uint64_t token) const
+{
+    assert(m_command_sz <= m_chain.size());
+
+    for (size_t i = 0; i < m_command_sz; ++i)
+    {
+        if (m_chain[i] == token)
         {
             return true;
         }
     }
 
     return false;
+}
+
+bool
+configuration :: in_config_chain(uint64_t token) const
+{
+    for (size_t i = 0; i < m_chain.size(); ++i)
+    {
+        if (m_chain[i] == token)
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+uint64_t
+configuration :: command_size() const
+{
+    return m_command_sz;
+}
+
+uint64_t
+configuration :: config_size() const
+{
+    return m_chain.size();
 }
 
 const chain_node*
 configuration :: members_begin() const
 {
-    return m_chain + 0;
+    return &m_members.front();
 }
 
 const chain_node*
 configuration :: members_end() const
 {
-    return m_chain + m_member_sz;
+    return &m_members.front() + m_members.size();
 }
 
-bool
-configuration :: is_standby(const chain_node& node) const
+const uint64_t*
+configuration :: chain_begin() const
 {
-    for (const chain_node* s = standbys_begin(); s != standbys_end(); ++s)
-    {
-        if (*s == node)
-        {
-            return true;
-        }
-    }
-
-    return false;
+    return &m_chain.front();
 }
 
-const chain_node*
-configuration :: standbys_begin() const
+const uint64_t*
+configuration :: chain_end() const
 {
-    return m_chain + m_member_sz;
-}
-
-const chain_node*
-configuration :: standbys_end() const
-{
-    return m_chain + m_standby_sz;
-}
-
-bool
-configuration :: is_spare(const chain_node& node) const
-{
-    for (const chain_node* s = spares_begin(); s != spares_end(); ++s)
-    {
-        if (*s == node)
-        {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-const chain_node*
-configuration :: spares_begin() const
-{
-    return m_spare + 0;
-}
-
-const chain_node*
-configuration :: spares_end() const
-{
-    return m_spare + m_spare_sz;
-}
-
-bool
-configuration :: may_add_spare() const
-{
-    return m_spare_sz < REPL_CONFIG_SZ;
-}
-
-void
-configuration :: add_spare(const chain_node& node)
-{
-    assert(may_add_spare());
-    assert(!in_cluster(node));
-    assert(!is_spare(node));
-    m_spare[m_spare_sz] = node;
-    ++m_spare_sz;
-    ++m_version;
-}
-
-bool
-configuration :: may_promote_spare() const
-{
-    return m_standby_sz < REPL_CONFIG_SZ && m_spare_sz > 0;
-}
-
-void
-configuration :: promote_spare(const chain_node& node)
-{
-    assert(may_promote_spare());
-    assert(!in_cluster(node));
-    assert(is_spare(node));
-
-    for (size_t i = 0; i < m_spare_sz; ++i)
-    {
-        if (m_spare[i] == node)
-        {
-            for (size_t j = i + 1; j < m_spare_sz; ++j)
-            {
-                m_spare[j - 1] = m_spare[j];
-            }
-
-            --m_spare_sz;
-            m_chain[m_standby_sz] = node;
-            ++m_standby_sz;
-        }
-    }
-
-    ++m_version;
-}
-
-bool
-configuration :: may_promote_standby() const
-{
-    return m_member_sz < m_standby_sz;
-}
-
-void
-configuration :: promote_standby()
-{
-    assert(may_promote_standby());
-    ++m_member_sz;
-    ++m_version;
-}
-
-void
-configuration :: remove(const chain_node& node)
-{
-    size_t idx = 0;
-
-    while (idx < m_standby_sz)
-    {
-        if (m_chain[idx] == node)
-        {
-            for (size_t i = idx; i + 1 < m_standby_sz; ++i)
-            {
-                m_chain[i] = m_chain[i + 1];
-            }
-
-            --m_standby_sz;
-#ifdef min
-#undef min
-#endif
-            m_member_sz = std::min(m_member_sz, m_standby_sz);
-        }
-        else
-        {
-            ++idx;
-        }
-    }
-
-    idx = 0;
-
-    while (idx < m_spare_sz)
-    {
-        if (m_spare[idx] == node)
-        {
-            for (size_t i = idx; i + 1 < m_spare_sz; ++i)
-            {
-                m_spare[i] = m_spare[i + 1];
-            }
-
-            --m_spare_sz;
-        }
-        else
-        {
-            ++idx;
-        }
-    }
+    return &m_chain.front() + m_chain.size();
 }
 
 void
 configuration :: bump_version()
 {
+    m_prev_token = m_this_token;
+    // XXX m_this_token = token
     ++m_version;
+}
+
+void
+configuration :: add_member(const chain_node& node)
+{
+    assert(node_from_token(node.token) == NULL);
+    m_members.push_back(node);
+    std::sort(m_members.begin(), m_members.end());
+}
+
+void
+configuration :: add_to_chain(uint64_t token)
+{
+    assert(!in_config_chain(token));
+    m_chain.push_back(token);
+}
+
+void
+configuration :: remove_from_chain(uint64_t token)
+{
+    assert(in_config_chain(token));
+
+    for (size_t i = 0; i < m_chain.size(); ++i)
+    {
+        if (m_chain[i] == token)
+        {
+            if (i < m_command_sz)
+            {
+                --m_command_sz;
+            }
+
+            for (size_t j = i; j + 1 < m_chain.size(); ++j)
+            {
+                m_chain[j] = m_chain[j + 1];
+            }
+
+            m_chain.pop_back();
+            return;
+        }
+    }
+}
+
+void
+configuration :: grow_command_chain()
+{
+    assert(m_command_sz < m_chain.size());
+    ++m_command_sz;
 }
 
 bool
 replicant :: operator == (const configuration& lhs, const configuration& rhs)
 {
-    if (lhs.m_version != rhs.m_version ||
-        lhs.m_member_sz != rhs.m_member_sz ||
-        lhs.m_standby_sz != rhs.m_standby_sz ||
-        lhs.m_spare_sz != rhs.m_spare_sz)
+    if (lhs.m_cluster != rhs.m_cluster ||
+        lhs.m_prev_token != rhs.m_prev_token ||
+        lhs.m_this_token != rhs.m_this_token ||
+        lhs.m_version != rhs.m_version ||
+        lhs.m_members.size() != rhs.m_members.size() ||
+        lhs.m_chain.size() != rhs.m_chain.size() ||
+        lhs.m_command_sz != rhs.m_command_sz)
     {
         return false;
     }
 
-    for (size_t i = 0; i < lhs.m_member_sz; ++i)
+    for (size_t i = 0; i < lhs.m_members.size(); ++i)
     {
-        if (lhs.m_chain[i] != rhs.m_chain[i])
+        if (lhs.m_members[i] != rhs.m_members[i])
         {
             return false;
         }
     }
 
-    for (size_t i = lhs.m_member_sz; i < lhs.m_standby_sz; ++i)
+    for (size_t i = 0; i < lhs.m_chain.size(); ++i)
     {
         if (lhs.m_chain[i] != rhs.m_chain[i])
-        {
-            return false;
-        }
-    }
-
-    for (size_t i = 0; i < lhs.m_spare_sz; ++i)
-    {
-        if (lhs.m_spare[i] != rhs.m_spare[i])
         {
             return false;
         }
@@ -577,53 +443,54 @@ replicant :: operator == (const configuration& lhs, const configuration& rhs)
 std::ostream&
 replicant :: operator << (std::ostream& lhs, const configuration& rhs)
 {
-    lhs << "configuration(version="
-        << rhs.version() << ", members=";
+    lhs << "configuration(cluster=" << rhs.m_cluster
+        << ", prev_token=" << rhs.m_prev_token
+        << ", this_token=" << rhs.m_this_token
+        << ", version=" << rhs.m_version
+        << ", command=[";
 
-    for (const chain_node* m = rhs.members_begin(); m < rhs.members_end(); ++m)
+    for (size_t i = 0; i < rhs.m_command_sz; ++i)
     {
-        lhs << *m << (m + 1 < rhs.members_end() ? "->" : "");
+        lhs << rhs.m_chain[i] << (i + 1 < rhs.m_command_sz ? ", " : "");
     }
 
-    lhs << ", standbys=";
+    lhs << "], config=[";
 
-    for (const chain_node* s = rhs.standbys_begin(); s != rhs.standbys_end(); ++s)
+    for (size_t i = 0; i < rhs.m_chain.size(); ++i)
     {
-        lhs << *s << (s + 1 < rhs.standbys_end() ? "->" : "");
+        lhs << rhs.m_chain[i] << (i + 1 < rhs.m_chain.size() ? ", " : "");
     }
 
-    lhs << ", spares=";
+    lhs << "], members=[";
 
-    for (const chain_node* s = rhs.spares_begin(); s != rhs.spares_end(); ++s)
+    for (size_t i = 0; i < rhs.m_members.size(); ++i)
     {
-        lhs << *s << (s + 1 < rhs.spares_end() ? "->" : "");
+        lhs << rhs.m_members[i] << (i + 1 < rhs.m_members.size() ? ", " : "");
     }
 
-    lhs << ")";
+    lhs << "])";
     return lhs;
 }
 
 e::buffer::packer
 replicant :: operator << (e::buffer::packer lhs, const configuration& rhs)
 {
-    lhs = lhs << rhs.m_version
-              << rhs.m_member_sz
-              << rhs.m_standby_sz
-              << rhs.m_spare_sz;
+    lhs = lhs << rhs.m_cluster
+              << rhs.m_prev_token
+              << rhs.m_this_token
+              << rhs.m_version
+              << uint64_t(rhs.m_members.size())
+              << rhs.m_command_sz
+              << uint64_t(rhs.m_chain.size());
 
-    for (const chain_node* m = rhs.members_begin(); m != rhs.members_end(); ++m)
+    for (uint64_t i = 0; i < rhs.m_members.size(); ++i)
     {
-        lhs = lhs << *m;
+        lhs = lhs << rhs.m_members[i];
     }
 
-    for (const chain_node* s = rhs.standbys_begin(); s != rhs.standbys_end(); ++s)
+    for (uint64_t i = 0; i < rhs.m_chain.size(); ++i)
     {
-        lhs = lhs << *s;
-    }
-
-    for (const chain_node* s = rhs.spares_begin(); s != rhs.spares_end(); ++s)
-    {
-        lhs = lhs << *s;
+        lhs = lhs << rhs.m_chain[i];
     }
 
     return lhs;
@@ -632,28 +499,31 @@ replicant :: operator << (e::buffer::packer lhs, const configuration& rhs)
 e::unpacker
 replicant :: operator >> (e::unpacker lhs, configuration& rhs)
 {
-    lhs = lhs >> rhs.m_version
-              >> rhs.m_member_sz
-              >> rhs.m_standby_sz
-              >> rhs.m_spare_sz;
+    uint64_t members_sz;
+    uint64_t chain_sz;
+    lhs = lhs >> rhs.m_cluster
+              >> rhs.m_prev_token
+              >> rhs.m_this_token
+              >> rhs.m_version
+              >> members_sz
+              >> rhs.m_command_sz
+              >> chain_sz;
+    rhs.m_members.resize(members_sz);
+    rhs.m_chain.resize(chain_sz);
 
-    for (size_t i = 0; i < rhs.m_member_sz; ++i)
+    for (uint64_t i = 0; i < rhs.m_members.size(); ++i)
     {
-        lhs = lhs >> rhs.m_chain[i];
+        lhs = lhs >> rhs.m_members[i];
     }
 
-    for (size_t i = rhs.m_member_sz; i < rhs.m_standby_sz; ++i)
+    for (uint64_t i = 0; i < rhs.m_chain.size(); ++i)
     {
         lhs = lhs >> rhs.m_chain[i];
-    }
-
-    for (size_t i = 0; i < rhs.m_spare_sz; ++i)
-    {
-        lhs = lhs >> rhs.m_spare[i];
     }
 
     return lhs;
 }
+
 
 char*
 replicant :: pack_config(const configuration& config, char* ptr)
@@ -668,24 +538,21 @@ replicant :: pack_config(const configuration& config, char* ptr)
 size_t
 replicant :: pack_size(const configuration& rhs)
 {
-    size_t sz = 0;
+    size_t sz = sizeof(uint64_t) // rhs.m_cluster
+              + sizeof(uint64_t) // rhs.m_prev_token
+              + sizeof(uint64_t) // rhs.m_this_token
+              + sizeof(uint64_t) // rhs.m_version
+              + sizeof(uint64_t) // rhs.m_members.size()
+              + sizeof(uint64_t) // rhs.m_command_sz
+              + sizeof(uint64_t); // rhs.m_chain.size()
 
-    for (const chain_node* m = rhs.members_begin(); m != rhs.members_end(); ++m)
+    for (size_t i = 0; i < rhs.m_members.size(); ++i)
     {
-        sz += pack_size(*m);
+        sz += pack_size(rhs.m_members[i]);
     }
 
-    for (const chain_node* s = rhs.standbys_begin(); s != rhs.standbys_end(); ++s)
-    {
-        sz += pack_size(*s);
-    }
-
-    for (const chain_node* s = rhs.spares_begin(); s != rhs.spares_end(); ++s)
-    {
-        sz += pack_size(*s);
-    }
-
-    return sizeof(uint64_t) + 3 * sizeof(uint8_t) + sz;
+    sz += sizeof(uint64_t) * rhs.m_chain.size();
+    return sz;
 }
 
 size_t

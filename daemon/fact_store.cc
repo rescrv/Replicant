@@ -316,6 +316,7 @@ fact_store :: open(const po6::pathname& path,
     return true;
 }
 
+#if 0
 bool
 fact_store :: close(const chain_node& us_to_save,
                     const configuration_manager& config_manager_to_save)
@@ -368,12 +369,7 @@ fact_store :: close(const chain_node& us_to_save,
 
     return true;
 }
-
-void
-fact_store :: remove_saved_state()
-{
-    delete_key("state", 5);
-}
+#endif
 
 bool
 fact_store :: is_proposed_configuration(uint64_t proposal_id, uint64_t proposal_time)

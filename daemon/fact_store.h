@@ -54,9 +54,10 @@ class fact_store
                   bool* saved,
                   chain_node* saved_us,
                   configuration_manager* saved_config_manager);
+#if 0
         bool close(const chain_node& us_to_save,
                    const configuration_manager& config_manager_to_save);
-        void remove_saved_state();
+#endif
 
     // Manage configurations
     public:

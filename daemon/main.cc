@@ -106,6 +106,8 @@ main(int argc, const char* argv[])
             case 'l':
                 try
                 {
+                    _listen = true;
+
                     if (strcmp(_listen_host, "auto") == 0)
                     {
                         break;
@@ -124,7 +126,6 @@ main(int argc, const char* argv[])
                     return EXIT_FAILURE;
                 }
 
-                _listen = true;
                 break;
             case 'L':
                 if (_listen_port >= (1 << 16))

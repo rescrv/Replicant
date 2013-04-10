@@ -50,17 +50,17 @@ class configuration_manager
     public:
         const configuration& stable() const;
         const configuration& latest() const;
-        bool in_any_cluster(const chain_node& n) const;
-        bool is_any_spare(const chain_node& n) const;
-        bool is_quorum_for_all(const configuration& config) const;
         void get_all_nodes(std::vector<chain_node>* nodes) const;
         void get_config_chain(std::vector<configuration>* config_chain) const;
-        void get_proposals(std::vector<proposal>* proposals) const;
         bool get_proposal(uint64_t proposal_id,
                           uint64_t proposal_time,
                           configuration* config) const;
+        void get_proposals(std::vector<proposal>* proposals) const;
         bool is_compatible(const configuration* configs,
                            size_t configs_sz) const;
+        bool contains_quorum_of_all(const configuration& config) const;
+        bool any(bool (configuration::*func)(const chain_node&) const, const chain_node& node) const;
+        bool any(bool (configuration::*func)(uint64_t) const, uint64_t token) const;
 
     public:
         void advance(const configuration& config);

@@ -136,8 +136,8 @@ class replicant_client
         // Send commands and receive responses
         int64_t send_to_chain_head(std::auto_ptr<e::buffer> msg,
                                    replicant_returncode* status);
-        int64_t send_to_preferred_chain_member(e::intrusive_ptr<command> cmd,
-                                               replicant_returncode* status);
+        int64_t send_to_preferred_chain_position(e::intrusive_ptr<command> cmd,
+                                                 replicant_returncode* status);
         void handle_disruption(const replicant::chain_node& node,
                                replicant_returncode* status);
         int64_t handle_command_response(const po6::net::location& from,

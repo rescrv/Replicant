@@ -31,8 +31,6 @@
 // Replicant
 #include "common/chain_node.h"
 
-#define REPL_CONFIG_SZ 255
-
 namespace replicant
 {
 
@@ -40,52 +38,59 @@ class configuration
 {
     public:
         configuration();
-        configuration(uint64_t version, const chain_node& head);
+        configuration(uint64_t cluster,
+                      uint64_t prev_token,
+                      uint64_t this_token,
+                      uint64_t version,
+                      const chain_node& head);
         ~configuration() throw ();
 
+    // metadata
     public:
-        uint64_t version() const;
-        uint64_t prev_token() const;
-        uint64_t this_token() const;
-        bool quorum_of(const configuration& other) const;
+        uint64_t cluster() const { return m_cluster; }
+        uint64_t version() const { return m_version; }
+        uint64_t prev_token() const { return m_prev_token; }
+        uint64_t this_token() const { return m_this_token; }
+
+    // invariants
+    public:
         bool validate() const;
-        const chain_node& get(uint64_t token) const;
+        bool quorum_of(const configuration& other) const;
         uint64_t fault_tolerance() const;
         uint64_t servers_needed_for(uint64_t f) const;
 
-    // Chain facts
+    // membership
     public:
-        const chain_node& head() const;
-        const chain_node& command_tail() const;
-        const chain_node& config_tail() const;
-        bool has_prev(const chain_node& node) const;
-        const chain_node& prev(const chain_node& node) const;
-        bool has_next(const chain_node& node) const;
-        const chain_node& next(const chain_node& node) const;
-
-    // Iterate over differnt types of nodes
-    public:
-        bool in_cluster(const chain_node& node) const;
+        bool has_token(uint64_t token) const;
         bool is_member(const chain_node& node) const;
+        const chain_node* node_from_token(uint64_t token) const;
+
+    // chaining
+    public:
+        const chain_node* head() const;
+        const chain_node* command_tail() const;
+        const chain_node* config_tail() const;
+        const chain_node* prev(uint64_t token) const;
+        const chain_node* next(uint64_t token) const;
+        bool in_command_chain(uint64_t token) const;
+        bool in_config_chain(uint64_t token) const;
+        uint64_t command_size() const;
+        uint64_t config_size() const;
+
+    // iterators
+    public:
         const chain_node* members_begin() const;
         const chain_node* members_end() const;
-        bool is_standby(const chain_node& node) const;
-        const chain_node* standbys_begin() const;
-        const chain_node* standbys_end() const;
-        bool is_spare(const chain_node& node) const;
-        const chain_node* spares_begin() const;
-        const chain_node* spares_end() const;
+        const uint64_t* chain_begin() const;
+        const uint64_t* chain_end() const;
 
-    // Modify the configuration
+    // modify the configuration
     public:
-        bool may_add_spare() const;
-        void add_spare(const chain_node& node);
-        bool may_promote_spare() const;
-        void promote_spare(const chain_node& node);
-        bool may_promote_standby() const;
-        void promote_standby();
-        void remove(const chain_node& node);
         void bump_version();
+        void add_member(const chain_node& node);
+        void add_to_chain(uint64_t token);
+        void remove_from_chain(uint64_t token);
+        void grow_command_chain();
 
     private:
         friend bool operator == (const configuration& lhs, const configuration& rhs);
@@ -95,16 +100,15 @@ class configuration
         friend size_t pack_size(const configuration& rhs);
 
     private:
+        uint64_t m_cluster;
+        uint64_t m_prev_token;
+        uint64_t m_this_token;
         uint64_t m_version;
-        chain_node m_chain[REPL_CONFIG_SZ + 1];
-        uint8_t m_member_sz;
-        uint8_t m_standby_sz;
-        chain_node m_spare[REPL_CONFIG_SZ];
-        uint8_t m_spare_sz;
+        std::vector<chain_node> m_members;
+        std::vector<uint64_t> m_chain;
+        uint64_t m_command_sz;
 };
 
-bool
-operator < (const configuration& lhs, const configuration& rhs);
 bool
 operator == (const configuration& lhs, const configuration& rhs);
 inline bool

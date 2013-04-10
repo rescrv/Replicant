@@ -51,7 +51,6 @@ noinst_HEADERS = \
 			daemon/daemon.h \
 			daemon/fact_store.h \
 			daemon/failure_detector.h \
-			daemon/failure_manager.h \
 			daemon/heal_next.h \
 			daemon/memstream.h \
 			daemon/object_manager.h \
@@ -89,7 +88,6 @@ replicant_daemon_SOURCES = \
 			daemon/daemon.cc \
 			daemon/fact_store.cc \
 			daemon/failure_detector.cc \
-			daemon/failure_manager.cc \
 			daemon/heal_next.cc \
 			daemon/main.cc \
 			daemon/object_manager.cc \
