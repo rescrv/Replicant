@@ -58,9 +58,9 @@ else
     AC_SUBST([LRT_CFLAGS], [""])
 fi
 
-PKG_CHECK_MODULES([PO6], [libpo6 >= 0.3])
-PKG_CHECK_MODULES([E], [libe >= 0.3])
-PKG_CHECK_MODULES([BUSYBEE], [busybee >= 0.2])
+PKG_CHECK_MODULES([PO6], [libpo6 >= 0.3.1])
+PKG_CHECK_MODULES([E], [libe >= 0.3.2])
+PKG_CHECK_MODULES([BUSYBEE], [busybee >= 0.3.0])
 
 # Checks for header files.
 AC_CHECK_HEADER([popt.h],,[AC_MSG_ERROR([
