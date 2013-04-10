@@ -57,6 +57,7 @@ noinst_HEADERS = \
 			daemon/settings.h \
 			daemon/replicant_state_machine.h \
 			daemon/replicant_state_machine_context.h \
+			daemon/request_response.h \
 			tools/common.h
 
 bin_PROGRAMS = replicant
