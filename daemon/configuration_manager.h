@@ -75,6 +75,7 @@ class configuration_manager
         configuration_manager& operator = (const configuration_manager&);
 
     private:
+        friend std::ostream& operator << (std::ostream& lhs, const configuration_manager& rhs);
         friend e::buffer::packer operator << (e::buffer::packer lhs, const configuration_manager& rhs);
         friend e::unpacker operator >> (e::unpacker lhs, configuration_manager& rhs);
         friend size_t pack_size(const configuration_manager& rhs);
@@ -93,6 +94,12 @@ struct configuration_manager::proposal
     uint64_t time;
     uint64_t version;
 };
+
+bool
+operator < (const configuration_manager::proposal& lhs, const configuration_manager::proposal& rhs);
+
+std::ostream&
+operator << (std::ostream& lhs, const configuration_manager& rhs);
 
 e::buffer::packer
 operator << (e::buffer::packer lhs, const configuration_manager& rhs);

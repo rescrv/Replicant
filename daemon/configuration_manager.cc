@@ -290,6 +290,31 @@ configuration_manager :: operator = (const configuration_manager& rhs)
     return *this;
 }
 
+bool
+replicant :: operator < (const configuration_manager::proposal& lhs,
+                         const configuration_manager::proposal& rhs)
+{
+    return lhs.version < rhs.version;
+}
+
+std::ostream&
+replicant :: operator << (std::ostream& lhs, const configuration_manager& rhs)
+{
+    for (std::list<configuration>::const_iterator conf = rhs.m_configs.begin();
+            conf != rhs.m_configs.end(); ++conf)
+    {
+        lhs << "    " << *conf << std::endl;
+    }
+
+    for (std::list<configuration_manager::proposal>::const_iterator prop = rhs.m_proposals.begin();
+            prop != rhs.m_proposals.end(); ++prop)
+    {
+        lhs << "    id=" << prop->id << " time=" << prop->time << " version=" << prop->version << std::endl;
+    }
+
+    return lhs;
+}
+
 e::buffer::packer
 replicant :: operator << (e::buffer::packer lhs, const configuration_manager& rhs)
 {

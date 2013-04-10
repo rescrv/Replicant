@@ -334,6 +334,11 @@ daemon :: run(bool daemonize,
     m_busybee.reset(new busybee_mta(&m_busybee_mapper, m_us.address, m_us.token, 0/*we don't use pause/unpause*/));
     m_busybee->set_timeout(1);
 
+    if (!restored)
+    {
+        m_fs.save(m_us);
+    }
+
     if (restored && m_us.address != restored_us.address)
     {
         LOG(ERROR) << "cannot change address of server from " << restored_us.address << " to " << m_us.address;
@@ -630,6 +635,7 @@ daemon :: process_config_propose(const replicant::connection& conn,
                   << " is rooted in a stable configuration (" << config_chain[0].version()
                   << ") that supersedes our own;"
                   << " treating it as an inform message";
+        m_fs.inform_configuration(config_chain[0]);
         m_config_manager.reset(config_chain[0]);
         post_reconfiguration_hooks();
         idx_stable = 0;

@@ -83,6 +83,7 @@ static subcommand subcommands[] = {
     subcommand("daemon",            "Start a new Replicant daemon"),
     subcommand("new-object",        "Create a new replicated object\n"),
     subcommand("del-object",        "Destroy an existing replicated object\n"),
+    subcommand("repair",            "Repair a Relicant daemon's data directory\n"),
     subcommand(NULL, NULL)
 };
 

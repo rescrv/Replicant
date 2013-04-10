@@ -54,10 +54,8 @@ class fact_store
                   bool* saved,
                   chain_node* saved_us,
                   configuration_manager* saved_config_manager);
-#if 0
-        bool close(const chain_node& us_to_save,
-                   const configuration_manager& config_manager_to_save);
-#endif
+        bool repair(const po6::pathname& path);
+        bool save(const chain_node& saved_us);
 
     // Manage configurations
     public:
@@ -110,6 +108,10 @@ class fact_store
         void store_key_value(const char* key, size_t key_sz,
                              const char* value, size_t value_sz);
         void delete_key(const char* key, size_t key_sz);
+
+    private:
+        bool only_key_is_replicant_key();
+        bool fsck(bool verbose, bool destructive, configuration_manager* config_manager);
 
     private:
         fact_store(const fact_store&);

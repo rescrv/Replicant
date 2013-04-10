@@ -30,7 +30,9 @@
 #endif
 
 // STL
+#include <map>
 #include <memory>
+#include <set>
 
 // Google Log
 #include <glog/logging.h>
@@ -49,9 +51,9 @@ using replicant::fact_store;
 
 ///////////////////////////////////// Utils ////////////////////////////////////
 
-#define KEY_SIZE_PROPOSAL (4 /*strlen("prop")*/ + 8 /*sizeof(uint64_t)*/ + 1 /*strlen(":")*/ + 8 /*sizeof(uint64_t)*/)
-#define KEY_SIZE_ACCEPTED_PROPOSAL (3 /*strlen("acc")*/ + 8 /*sizeof(uint64_t)*/ + 1 /*strlen(":")*/ + 8 /*sizeof(uint64_t)*/)
-#define KEY_SIZE_REJECTED_PROPOSAL (3 /*strlen("rej")*/ + 8 /*sizeof(uint64_t)*/ + 1 /*strlen(":")*/ + 8 /*sizeof(uint64_t)*/)
+#define KEY_SIZE_PROPOSAL (4 /*strlen("prop")*/ + 8 /*sizeof(uint64_t)*/ + 8 /*sizeof(uint64_t)*/)
+#define KEY_SIZE_ACCEPTED_PROPOSAL (3 /*strlen("acc")*/ + 8 /*sizeof(uint64_t)*/ + 8 /*sizeof(uint64_t)*/)
+#define KEY_SIZE_REJECTED_PROPOSAL (3 /*strlen("rej")*/ + 8 /*sizeof(uint64_t)*/ + 8 /*sizeof(uint64_t)*/)
 #define KEY_SIZE_INFORM_CONFIG (3 /*strlen("inf")*/ + 8 /*sizeof(uint64_t)*/)
 #define KEY_SIZE_CLIENT (6 /*strlen("client")*/ + 8 /*sizeof(uint64_t)*/)
 #define KEY_SIZE_SLOT (4 /*strlen("slot")*/ + 8 /*sizeof(uint64_t)*/)
@@ -64,8 +66,7 @@ pack_key_proposal(uint64_t proposal_id, uint64_t proposal_time, char* key)
 {
     memmove(key, "prop", 4);
     e::pack64be(proposal_id, key + 4);
-    key[12] = ':';
-    e::pack64be(proposal_time, key + 13);
+    e::pack64be(proposal_time, key + 12);
 }
 
 static void
@@ -73,8 +74,7 @@ pack_key_accepted_proposal(uint64_t proposal_id, uint64_t proposal_time, char* k
 {
     memmove(key, "acc", 3);
     e::pack64be(proposal_id, key + 3);
-    key[11] = ':';
-    e::pack64be(proposal_time, key + 12);
+    e::pack64be(proposal_time, key + 11);
 }
 
 static void
@@ -82,8 +82,7 @@ pack_key_rejected_proposal(uint64_t proposal_id, uint64_t proposal_time, char* k
 {
     memmove(key, "rej", 3);
     e::pack64be(proposal_id, key + 3);
-    key[11] = ':';
-    e::pack64be(proposal_time, key + 12);
+    e::pack64be(proposal_time, key + 11);
 }
 
 static void
@@ -149,9 +148,9 @@ fact_store :: ~fact_store() throw ()
 
 bool
 fact_store :: open(const po6::pathname& path,
-                   bool* saved,
-                   chain_node* saved_us,
-                   configuration_manager* saved_config_manager)
+                   bool* restored,
+                   chain_node* restored_us,
+                   configuration_manager* restored_config_manager)
 {
     leveldb::Options opts;
     opts.create_if_missing = true;
@@ -171,24 +170,21 @@ fact_store :: open(const po6::pathname& path,
     leveldb::WriteOptions wopts;
     wopts.sync = true;
 
-    leveldb::Slice rk("replicant", 9);
+    // read the "replicant" key and check the version
     std::string rbacking;
-    st = m_db->Get(ropts, rk, &rbacking);
+    st = m_db->Get(ropts, leveldb::Slice("replicant", 9), &rbacking);
     bool first_time = false;
 
     if (st.ok())
     {
         first_time = false;
 
-        if (rbacking != PACKAGE_VERSION &&
-            rbacking != "0.1.1" &&
-            rbacking != "0.1.0")
-
+        if (rbacking != PACKAGE_VERSION)
         {
             LOG(ERROR) << "could not restore from LevelDB because "
                        << "the existing data was created by "
                        << "replicant " << rbacking << " but "
-                       << "this is version " << PACKAGE_VERSION;
+                       << "this is version " << PACKAGE_VERSION << " which is not compatible";
             return false;
         }
     }
@@ -199,59 +195,21 @@ fact_store :: open(const po6::pathname& path,
         leveldb::Slice v(PACKAGE_VERSION, strlen(PACKAGE_VERSION));
         st = m_db->Put(wopts, k, v);
 
-        if (st.ok())
+        if (!st.ok())
         {
-            // fall through
-        }
-        else if (st.IsNotFound())
-        {
-            LOG(ERROR) << "could not restore from LevelDB because Put returned NotFound:  "
-                       << st.ToString();
+            LOG(ERROR) << "could not save \"replicant\" key into LevelDB: " << st.ToString();
             return false;
         }
-        else if (st.IsCorruption())
-        {
-            LOG(ERROR) << "could not restore from LevelDB because of corruption:  "
-                       << st.ToString();
-            return false;
-        }
-        else if (st.IsIOError())
-        {
-            LOG(ERROR) << "could not restore from LevelDB because of an IO error:  "
-                       << st.ToString();
-            return false;
-        }
-        else
-        {
-            LOG(ERROR) << "could not restore from LevelDB because it returned an "
-                       << "unknown error that we don't know how to handle:  "
-                       << st.ToString();
-            return false;
-        }
-    }
-    else if (st.IsCorruption())
-    {
-        LOG(ERROR) << "could not restore from LevelDB because of corruption:  "
-                   << st.ToString();
-        return false;
-    }
-    else if (st.IsIOError())
-    {
-        LOG(ERROR) << "could not restore from LevelDB because of an IO error:  "
-                   << st.ToString();
-        return false;
     }
     else
     {
-        LOG(ERROR) << "could not restore from LevelDB because it returned an "
-                   << "unknown error that we don't know how to handle:  "
-                   << st.ToString();
+        LOG(ERROR) << "could not read \"replicant\" key from LevelDB: " << st.ToString();
         return false;
     }
 
-    leveldb::Slice sk("state", 5);
+    // read the "state" key and parse it
     std::string sbacking;
-    st = m_db->Get(ropts, sk, &sbacking);
+    st = m_db->Get(ropts, leveldb::Slice("us", 2), &sbacking);
 
     if (st.ok())
     {
@@ -259,117 +217,179 @@ fact_store :: open(const po6::pathname& path,
         {
             LOG(ERROR) << "could not restore from LevelDB because a previous "
                        << "execution crashed and the database was tampered with; "
-                       << "you're on your own with this one";
+                       << "you'll need to manually erase this DB and create a new one";
+            return false;
+        }
+
+        e::unpacker up(sbacking.data(), sbacking.size());
+        up = up >> *restored_us;
+
+        if (up.error())
+        {
+            LOG(ERROR) << "could not restore from LevelDB because a previous "
+                       << "execution wrote an invalid node identity; "
+                       << "you'll need to manually erase this DB and create a new one";
+            return false;
+        }
+
+        *restored = true;
+    }
+    else if (st.IsNotFound())
+    {
+        if (!only_key_is_replicant_key())
+        {
+            LOG(ERROR) << "could not restore from LevelDB because a previous "
+                       << "execution didn't save a node identity, and did write "
+                       << "other data; "
+                       << "you'll need to manually erase this DB and create a new one";
+            return false;
+        }
+
+        *restored = false;
+    }
+
+    if (!fsck(false, false, restored_config_manager))
+    {
+        LOG(ERROR) << "found integrity errors while scanning LevelDB";
+        LOG(ERROR) << "because the fix to these errors may be destructive, we "
+                   << "require that you manually run \"replicant repair\" to continue";
+        LOG(ERROR) << "you're advised to make a backup of the data directory first";
+        return false;
+    }
+
+    return true;
+}
+
+bool
+fact_store :: repair(const po6::pathname& path)
+{
+    leveldb::Options opts;
+    opts.filter_policy = leveldb::NewBloomFilterPolicy(10);
+    std::string name(path.get());
+    leveldb::Status st = leveldb::DB::Open(opts, name, &m_db);
+
+    if (!st.ok())
+    {
+        std::cerr << "could not open LevelDB: " << st.ToString() << std::endl;
+        return false;
+    }
+
+    leveldb::ReadOptions ropts;
+    ropts.fill_cache = true;
+    ropts.verify_checksums = true;
+    leveldb::WriteOptions wopts;
+    wopts.sync = true;
+
+    // read the "replicant" key and check the version
+    std::string rbacking;
+    st = m_db->Get(ropts, leveldb::Slice("replicant", 9), &rbacking);
+    bool first_time = false;
+
+    if (st.ok())
+    {
+        first_time = false;
+
+        if (rbacking != PACKAGE_VERSION)
+        {
+            std::cerr << "could not restore from LevelDB because "
+                      << "the existing data was created by "
+                      << "replicant " << rbacking << " but "
+                      << "this is version " << PACKAGE_VERSION << " which is not compatible" << std::endl;
             return false;
         }
     }
     else if (st.IsNotFound())
     {
-        if (!first_time)
+        first_time = true;
+        leveldb::Slice k("replicant", 9);
+        leveldb::Slice v(PACKAGE_VERSION, strlen(PACKAGE_VERSION));
+        st = m_db->Put(wopts, k, v);
+
+        if (!st.ok())
         {
-            LOG(ERROR) << "could not restore from LevelDB because a previous "
-                       << "execution crashed; run the recovery program and try again";
+            std::cerr << "could not save \"replicant\" key into LevelDB: " << st.ToString() << std::endl;
             return false;
         }
-    }
-    else if (st.IsCorruption())
-    {
-        LOG(ERROR) << "could not restore from LevelDB because of corruption:  "
-                   << st.ToString();
-        return false;
-    }
-    else if (st.IsIOError())
-    {
-        LOG(ERROR) << "could not restore from LevelDB because of an IO error:  "
-                   << st.ToString();
-        return false;
     }
     else
     {
-        LOG(ERROR) << "could not restore from LevelDB because it returned an "
-                   << "unknown error that we don't know how to handle:  "
-                   << st.ToString();
+        std::cerr << "could not read \"replicant\" key from LevelDB: " << st.ToString() << std::endl;
         return false;
     }
 
-    if (first_time)
+    // read the "state" key and parse it
+    std::string sbacking;
+    st = m_db->Get(ropts, leveldb::Slice("us", 2), &sbacking);
+
+    if (st.ok())
     {
-        *saved = false;
-        return true;
+        if (first_time)
+        {
+            std::cerr << "could not restore from LevelDB because a previous "
+                      << "execution crashed and the database was tampered with; "
+                      << "you'll need to manually erase this DB and create a new one" << std::endl;
+            return false;
+        }
+
+        chain_node us;
+        e::unpacker up(sbacking.data(), sbacking.size());
+        up = up >> us;
+
+        if (up.error())
+        {
+            std::cerr << "could not restore from LevelDB because a previous "
+                      << "execution wrote an invalid node identity; "
+                      << "you'll need to manually erase this DB and create a new one" << std::endl;
+            return false;
+        }
+    }
+    else if (st.IsNotFound())
+    {
+        if (!only_key_is_replicant_key())
+        {
+            std::cerr << "could not restore from LevelDB because a previous "
+                      << "execution didn't save a node identity and wrote "
+                      << "other data; "
+                      << "you'll need to manually erase this DB and create a new one" << std::endl;
+            return false;
+        }
     }
 
-    *saved = true;
-    // XXX inefficient, lazy hack
-    std::auto_ptr<e::buffer> buf(e::buffer::create(sbacking.size()));
-    memmove(buf->data(), sbacking.data(), sbacking.size());
-    buf->resize(sbacking.size());
-    e::unpacker up = buf->unpack_from(0);
-    up = up >> *saved_us >> *saved_config_manager;
+    configuration_manager config_manager;
 
-    if (up.error())
+    if (!fsck(true, false, &config_manager))
     {
-        LOG(ERROR) << "could not restore from LevelDB because a previous "
-                   << "execution saved invalid state; run the recovery program and try again";
+        std::cerr << "If any of the above messages are fatal, we cannot repair "
+                  << "the database without possibly violating safety of the "
+                  << "system.  To restore this node, remove the data and start "
+                  << "fresh.  If a majority of nodes are in a bad state, file "
+                  << "a bug and mention this note.";
         return false;
     }
 
     return true;
 }
 
-#if 0
 bool
-fact_store :: close(const chain_node& us_to_save,
-                    const configuration_manager& config_manager_to_save)
+fact_store :: save(const chain_node& us)
 {
-    if (m_db)
+    leveldb::WriteOptions wopts;
+    wopts.sync = true;
+    size_t sz = pack_size(us);
+    std::auto_ptr<e::buffer> buf(e::buffer::create(sz));
+    buf->pack_at(0) << us;
+    leveldb::Slice k("us", 2);
+    leveldb::Slice v(reinterpret_cast<const char*>(buf->data()), buf->size());
+    leveldb::Status st = m_db->Put(wopts, k, v);
+
+    if (!st.ok())
     {
-        leveldb::WriteOptions wopts;
-        wopts.sync = true;
-        size_t sz = pack_size(us_to_save) + pack_size(config_manager_to_save);
-        std::auto_ptr<e::buffer> buf(e::buffer::create(sz));
-        buf->pack_at(0) << us_to_save << config_manager_to_save;
-        leveldb::Slice k("state", 5);
-        leveldb::Slice v(reinterpret_cast<const char*>(buf->data()), buf->size());
-        leveldb::Status st = m_db->Put(wopts, k, v);
-
-        if (st.ok())
-        {
-            // fall through
-        }
-        else if (st.IsNotFound())
-        {
-            LOG(ERROR) << "could not save state to LevelDB because Put returned NotFound:  "
-                       << st.ToString();
-            return false;
-        }
-        else if (st.IsCorruption())
-        {
-            LOG(ERROR) << "could not save state to LevelDB because of corruption:  "
-                       << st.ToString();
-            return false;
-        }
-        else if (st.IsIOError())
-        {
-            LOG(ERROR) << "could not save state to LevelDB because of an IO error:  "
-                       << st.ToString();
-            return false;
-        }
-        else
-        {
-            LOG(ERROR) << "could not save state to LevelDB because it returned an "
-                       << "unknown error that we don't know how to handle:  "
-                       << st.ToString();
-            return false;
-        }
-
-
-        delete m_db;
-        m_db = NULL;
+        LOG(ERROR) << "could not record node identity as " << us << ": " << st.ToString();
+        return false;
     }
 
     return true;
 }
-#endif
 
 bool
 fact_store :: is_proposed_configuration(uint64_t proposal_id, uint64_t proposal_time)
@@ -402,8 +422,22 @@ fact_store :: propose_configuration(uint64_t proposal_id, uint64_t proposal_time
     assert(!is_proposed_configuration(proposal_id, proposal_time));
     char key[KEY_SIZE_PROPOSAL];
     pack_key_proposal(proposal_id, proposal_time, key);
-    store_key_value(key, KEY_SIZE_PROPOSAL, "", 0);
-    // XXX store the configs
+    size_t sz = 0;
+
+    for (size_t i = 0; i < configs_sz; ++i)
+    {
+        sz += pack_size(configs[i]);
+    }
+
+    std::vector<char> value(sz);
+    char* ptr = &value.front();
+
+    for (size_t i = 0; i < configs_sz; ++i)
+    {
+        ptr = pack_config(configs[i], ptr);
+    }
+
+    store_key_value(key, KEY_SIZE_PROPOSAL, &value.front(), value.size());
 }
 
 void
@@ -903,4 +937,584 @@ fact_store :: delete_key(const char* key, size_t key_sz)
         LOG(ERROR) << "LevelDB returned an unknown error that we don't know how to handle";
         abort();
     }
+}
+
+bool
+fact_store :: only_key_is_replicant_key()
+{
+    leveldb::ReadOptions opts;
+    opts.fill_cache = false;
+    opts.verify_checksums = true;
+    opts.snapshot = NULL;
+    std::auto_ptr<leveldb::Iterator> it(m_db->NewIterator(opts));
+    it->SeekToFirst();
+    bool seen = false;
+
+    while (it->Valid())
+    {
+        if (it->key().compare(leveldb::Slice("replicant", 9)) != 0)
+        {
+            return false;
+        }
+
+        it->Next();
+        seen = true;
+    }
+
+    return seen;
+}
+
+namespace replicant
+{
+
+class prefix_iterator
+{
+    public:
+        prefix_iterator(const leveldb::Slice& prefix, leveldb::DB* db, size_t sz);
+        ~prefix_iterator() throw ();
+
+    public:
+        bool error() { return m_error; }
+        bool valid();
+        void next();
+        leveldb::Slice key();
+        leveldb::Slice val();
+
+    private:
+        prefix_iterator(const prefix_iterator&);
+        prefix_iterator& operator = (const prefix_iterator&);
+
+    private:
+        leveldb::Slice m_prefix;
+        std::auto_ptr<leveldb::Iterator> m_it;
+        size_t m_sz;
+        bool m_error;
+};
+
+prefix_iterator :: prefix_iterator(const leveldb::Slice& prefix, leveldb::DB* db, size_t sz)
+    : m_prefix(prefix)
+    , m_it()
+    , m_sz(sz)
+    , m_error(false)
+{
+    leveldb::ReadOptions opts;
+    opts.verify_checksums = true;
+    m_it.reset(db->NewIterator(opts));
+    m_it->Seek(prefix);
+}
+
+prefix_iterator :: ~prefix_iterator() throw ()
+{
+}
+
+bool
+prefix_iterator :: valid()
+{
+    if (m_error)
+    {
+        return false;
+    }
+
+    if (m_it->Valid())
+    {
+        if (m_it->key().starts_with(m_prefix) && m_it->key().size() != m_sz)
+        {
+            m_error = true;
+            return false;
+        }
+        else if (!m_it->key().starts_with(m_prefix))
+        {
+            m_it->SeekToLast();
+            return false;
+        }
+    }
+    else
+    {
+        return false;
+    }
+
+    return true;
+}
+
+void
+prefix_iterator :: next()
+{
+    m_it->Next();
+}
+
+leveldb::Slice
+prefix_iterator :: key()
+{
+    return m_it->key();
+}
+
+leveldb::Slice
+prefix_iterator :: val()
+{
+    return m_it->value();
+}
+
+}
+
+#define FSCK_LOG if (verbose) std::cerr
+
+bool
+fact_store :: fsck(bool verbose, bool destructive, configuration_manager* config_manager)
+{
+    // XXX Iterate everything checking for well-formed keys
+
+    std::map<uint64_t, configuration> accepted_configs;
+    std::map<uint64_t, configuration> proposed_configs;
+    std::set<configuration_manager::proposal> proposals;
+
+    // check proposals ////////////////////////////////////////////////////////
+    prefix_iterator props(leveldb::Slice("prop", 4), m_db, 20);
+
+    for (; props.valid(); props.next())
+    {
+        const char* ptr = props.key().data();
+        uint64_t proposal_id;
+        uint64_t proposal_time;
+        e::unpack64be(ptr + 4, &proposal_id);
+        e::unpack64be(ptr + 12, &proposal_time);
+        FSCK_LOG << "proposal: " << proposal_id << ":" << proposal_time << std::endl;
+
+        std::vector<configuration> configs;
+        e::unpacker up(props.val().data(), props.val().size());
+
+        while (!up.error() && !up.empty())
+        {
+            configuration tmp;
+            up = up >> tmp;
+
+            if (up.error() || !tmp.validate())
+            {
+                up = up.as_error();
+                continue;
+            }
+
+            FSCK_LOG << "          " << tmp << std::endl;
+            configs.push_back(tmp);
+        }
+
+        if (up.error() || configs.empty())
+        {
+            FSCK_LOG << "ERROR corrupt proposal: " << proposal_id << ":" << proposal_time << "\n";
+            FSCK_LOG << "                        this is fatal because it relates to cluster management" << std::endl;
+            return false;
+        }
+
+        char akey[KEY_SIZE_ACCEPTED_PROPOSAL];
+        pack_key_accepted_proposal(proposal_id, proposal_time, akey);
+        char rkey[KEY_SIZE_REJECTED_PROPOSAL];
+        pack_key_rejected_proposal(proposal_id, proposal_time, rkey);
+
+        if (check_key_exists(rkey, KEY_SIZE_REJECTED_PROPOSAL))
+        {
+            FSCK_LOG << "rejected proposal: " << proposal_id << ":" << proposal_time << std::endl;
+            continue;
+        }
+        else if (check_key_exists(akey, KEY_SIZE_ACCEPTED_PROPOSAL))
+        {
+            FSCK_LOG << "accepted proposal: " << proposal_id << ":" << proposal_time << std::endl;
+            std::map<uint64_t, configuration>::iterator it = accepted_configs.find(configs.back().version());
+
+            if (it == accepted_configs.end())
+            {
+                accepted_configs[configs.back().version()] = configs.back();
+            }
+            else if (it->second != configs.back())
+            {
+                FSCK_LOG << "FATAL conflicting accepted configurations:\n"
+                         << "        " << it->second << "\n"
+                         << "        " << configs.back() << std::endl;
+                return false;
+            }
+        }
+        else
+        {
+            FSCK_LOG << "pending proposal: " << proposal_id << ":" << proposal_time << std::endl;
+            proposals.insert(configuration_manager::proposal(proposal_id, proposal_time, configs.back().version()));
+
+            for (size_t i = 0; i < configs.size(); ++i)
+            {
+                std::map<uint64_t, configuration>::iterator it = proposed_configs.find(configs.back().version());
+
+                if (it == proposed_configs.end())
+                {
+                    proposed_configs[configs.back().version()] = configs.back();
+                }
+                else if (it->second != configs.back())
+                {
+                    FSCK_LOG << "FATAL conflicting proposed configurations:\n"
+                             << "        " << it->second << "\n"
+                             << "        " << configs.back() << std::endl;
+                    return false;
+                }
+            }
+        }
+    }
+
+    if (props.error())
+    {
+        FSCK_LOG << "FATAL scanning proposals encountered bad key" << std::endl;
+        return false;
+    }
+
+    // check informs //////////////////////////////////////////////////////////
+    prefix_iterator informs(leveldb::Slice("inf", 3), m_db, 11);
+
+    for (; informs.valid(); informs.next())
+    {
+        const char* ptr = informs.key().data();
+        uint64_t version;
+        e::unpack64be(ptr + 3, &version);
+        configuration tmp;
+        e::unpacker up(informs.val().data(), informs.val().size());
+        up = up >> tmp;
+
+        if (up.error() || tmp.version() != version || !tmp.validate())
+        {
+            FSCK_LOG << "FATAL informed proposal has mismatched version: " << version << " != " << tmp.version();
+            return false;
+        }
+
+        std::map<uint64_t, configuration>::iterator it = accepted_configs.find(version);
+
+        if (it == accepted_configs.end())
+        {
+            accepted_configs[version] = tmp;
+        }
+        else if (it->second != tmp)
+        {
+            FSCK_LOG << "FATAL conflicting accepted configurations:\n"
+                     << "        " << it->second << "\n"
+                     << "        " << tmp << std::endl;
+            return false;
+        }
+    }
+
+    if (informs.error())
+    {
+        FSCK_LOG << "FATAL scanning informs encountered bad key" << std::endl;
+        return false;
+    }
+
+    // construct the config_manager ///////////////////////////////////////////
+    if (!accepted_configs.empty())
+    {
+        std::map<uint64_t, configuration>::reverse_iterator rit = accepted_configs.rbegin();
+        assert(rit != accepted_configs.rend());
+        assert(rit->first == rit->second.version());
+        config_manager->reset(rit->second);
+
+        std::map<uint64_t, configuration>::iterator it = proposed_configs.find(rit->first);
+
+        if (it == proposed_configs.end())
+        {
+            // if there are proposed configs and they come after the accepted
+            // config
+            if (!proposed_configs.empty() && proposed_configs.rbegin()->first >= it->first)
+            {
+                FSCK_LOG << "FATAL discontinuity in proposed configurations" << std::endl;
+                return false;
+            }
+        }
+        else
+        {
+            uint64_t base = rit->first;
+            std::vector<configuration> proposed;
+
+            while (it != proposed_configs.end())
+            {
+                proposed.push_back(it->second);
+            }
+
+            for (size_t i = 0; i + 1 < proposed.size(); ++i)
+            {
+                if (proposed[i].version() != proposed[i + 1].version())
+                {
+                    FSCK_LOG << "FATAL discontinuity in proposed configurations" << std::endl;
+                    return false;
+                }
+            }
+
+            assert(config_manager->is_compatible(&proposed.front(), proposed.size()));
+
+            for (std::set<configuration_manager::proposal>::iterator pit = proposals.begin();
+                    pit != proposals.end(); ++pit)
+            {
+                if (pit->version > base)
+                {
+                    config_manager->merge(pit->id, pit->time, &proposed.front(), pit->version - base + 1);
+                }
+            }
+        }
+    }
+    else if (!proposed_configs.empty())
+    {
+        FSCK_LOG << "FATAL there exist proposed configurations, but no accepted configurations" << std::endl;
+        return false;
+    }
+
+    FSCK_LOG << "managed to extract configuration manager:\n" << *config_manager;
+
+    // check accected /////////////////////////////////////////////////////////
+    prefix_iterator accected(leveldb::Slice("rej", 3), m_db, 19);
+
+    for (; accected.valid(); accected.next())
+    {
+        const char* ptr = accected.key().data();
+        uint64_t proposal_id;
+        uint64_t proposal_time;
+        e::unpack64be(ptr + 3, &proposal_id);
+        e::unpack64be(ptr + 11, &proposal_time);
+        char pkey[KEY_SIZE_PROPOSAL];
+        pack_key_proposal(proposal_id, proposal_time, pkey);
+
+        if (!check_key_exists(pkey, KEY_SIZE_PROPOSAL))
+        {
+            FSCK_LOG << "FATAL accected proposal " << proposal_id << ":" << proposal_time
+                     << " does not exist" << std::endl;
+            return false;
+        }
+    }
+
+    if (accected.error())
+    {
+        FSCK_LOG << "FATAL scanning clients encountered bad key" << std::endl;
+        return false;
+    }
+
+    // check rejected /////////////////////////////////////////////////////////
+    prefix_iterator rejected(leveldb::Slice("rej", 3), m_db, 19);
+
+    for (; rejected.valid(); rejected.next())
+    {
+        const char* ptr = rejected.key().data();
+        uint64_t proposal_id;
+        uint64_t proposal_time;
+        e::unpack64be(ptr + 3, &proposal_id);
+        e::unpack64be(ptr + 11, &proposal_time);
+        char pkey[KEY_SIZE_PROPOSAL];
+        pack_key_proposal(proposal_id, proposal_time, pkey);
+
+        if (!check_key_exists(pkey, KEY_SIZE_PROPOSAL))
+        {
+            FSCK_LOG << "FATAL rejected proposal " << proposal_id << ":" << proposal_time
+                     << " does not exist" << std::endl;
+            return false;
+        }
+    }
+
+    if (rejected.error())
+    {
+        FSCK_LOG << "FATAL scanning clients encountered bad key" << std::endl;
+        return false;
+    }
+
+    // check clients //////////////////////////////////////////////////////////
+    prefix_iterator clients(leveldb::Slice("client", 6), m_db, 14);
+
+    for (; clients.valid(); clients.next())
+    {
+        const char* ptr = clients.key().data();
+        uint64_t client;
+        e::unpack64be(ptr + 4, &client);
+
+        if (clients.val().compare(leveldb::Slice("reg", 3)) != 0 &&
+            clients.val().compare(leveldb::Slice("die", 3)) != 0)
+        {
+            FSCK_LOG << "FATAL client " << client << " is neither registered nor dead" << std::endl;
+            return false;
+        }
+    }
+
+    if (clients.error())
+    {
+        FSCK_LOG << "FATAL scanning clients encountered bad key" << std::endl;
+        return false;
+    }
+
+    // check slots ////////////////////////////////////////////////////////////
+    prefix_iterator slots(leveldb::Slice("slot", 4), m_db, 12);
+    uint64_t prev_slot = 0;
+    bool slot_jumps = false;
+
+    for (; slots.valid(); slots.next())
+    {
+        const char* ptr = slots.key().data();
+        uint64_t slot;
+        e::unpack64be(ptr + 4, &slot);
+
+        if (!slot_jumps && prev_slot + 1 != slot)
+        {
+            FSCK_LOG << "ERROR discontinuity in slots:  jumps from " << prev_slot << " to " << slot << std::endl;
+            slot_jumps = true;
+        }
+
+        if (slot_jumps)
+        {
+            FSCK_LOG << "deleting key for slot " << slot << " to remedy the discontinuity" << std::endl;
+
+            if (destructive)
+            {
+                delete_key(slots.key().data(), slots.key().size());
+            }
+            else
+            {
+                return false;
+            }
+        }
+
+        prev_slot = slot;
+    }
+
+    if (slots.error())
+    {
+        FSCK_LOG << "FATAL scanning slots encountered bad key" << std::endl;
+        return false;
+    }
+
+    // check acks /////////////////////////////////////////////////////////////
+    prefix_iterator acks(leveldb::Slice("ack", 3), m_db, 11);
+
+    for (; acks.valid(); acks.next())
+    {
+        const char* ptr = acks.key().data();
+        uint64_t ack;
+        e::unpack64be(ptr + 3, &ack);
+        char skey[KEY_SIZE_SLOT];
+        pack_key_slot(ack, skey);
+
+        if (!check_key_exists(skey, KEY_SIZE_SLOT))
+        {
+            FSCK_LOG << "ERROR deleting key for ack " << ack << " because it has no corresponding slot" << std::endl;
+
+            if (destructive)
+            {
+                delete_key(acks.key().data(), acks.key().size());
+            }
+            else
+            {
+                return false;
+            }
+        }
+    }
+
+    if (acks.error())
+    {
+        FSCK_LOG << "FATAL scanning acks encountered bad key" << std::endl;
+        return false;
+    }
+
+    // check execs ////////////////////////////////////////////////////////////
+    prefix_iterator execs(leveldb::Slice("exec", 4), m_db, 12);
+
+    for (; execs.valid(); execs.next())
+    {
+        const char* ptr = execs.key().data();
+        uint64_t exec;
+        e::unpack64be(ptr + 4, &exec);
+        char akey[KEY_SIZE_ACK];
+        pack_key_ack(exec, akey);
+
+        if (!check_key_exists(akey, KEY_SIZE_ACK))
+        {
+            FSCK_LOG << "ERROR deleting key for exec " << exec << " because it has no corresponding ack" << std::endl;
+
+            if (destructive)
+            {
+                delete_key(execs.key().data(), execs.key().size());
+            }
+            else
+            {
+                return false;
+            }
+        }
+    }
+
+    if (execs.error())
+    {
+        FSCK_LOG << "FATAL scanning execs encountered bad key" << std::endl;
+        return false;
+    }
+
+    // check nonces ///////////////////////////////////////////////////////////
+    prefix_iterator nonces(leveldb::Slice("nonce", 5), m_db, 21);
+
+    for (; nonces.valid(); nonces.next())
+    {
+        const char* ptr = nonces.key().data();
+        uint64_t client;
+        uint64_t nonce;
+        e::unpack64be(ptr + 5, &client);
+        e::unpack64be(ptr + 13, &nonce);
+        ptr = nonces.val().data();
+
+        if (nonces.val().size() != sizeof(uint64_t))
+        {
+            FSCK_LOG << "FATAL (client=" << client << ", nonce=" << nonce << ") does not map to a valid slot" << std::endl;
+            return false;
+        }
+
+        uint64_t slot;
+        e::unpack64be(ptr, &slot);
+        char skey[KEY_SIZE_SLOT];
+        pack_key_slot(slot, skey);
+        std::string sbacking;
+
+        if (!retrieve_value(skey, KEY_SIZE_SLOT, &sbacking) ||
+            sbacking.size() < 3 * sizeof(uint64_t))
+        {
+            FSCK_LOG << "ERROR deleting key (client=" << client << ", nonce=" << nonce << ") because it has no valid slot" << std::endl;
+
+            if (destructive)
+            {
+                delete_key(skey, KEY_SIZE_SLOT);
+            }
+            else
+            {
+                return false;
+            }
+        }
+
+        uint64_t sclient;
+        uint64_t snonce;
+        ptr = sbacking.data();
+        e::unpack64be(ptr + 8, &sclient);
+        e::unpack64be(ptr + 16, &snonce);
+
+        if (client != sclient || nonce != snonce)
+        {
+            FSCK_LOG << "FATAL key (client=" << client << ", nonce=" << nonce << ") points at slot " << slot << " which does not reciprocate" << std::endl;
+            FSCK_LOG << "          (sclient=" << sclient << ", snonce=" << snonce << ")" << std::endl;
+            return false;
+        }
+
+        char ckey[KEY_SIZE_CLIENT];
+        pack_key_client(client, ckey);
+
+        if (!check_key_exists(ckey, KEY_SIZE_CLIENT))
+        {
+            FSCK_LOG << "ERROR deleting key (client=" << client << ", nonce=" << nonce << ") for unknown client" << std::endl;
+
+            if (destructive)
+            {
+                delete_key(ckey, KEY_SIZE_CLIENT);
+            }
+            else
+            {
+                return false;
+            }
+        }
+    }
+
+    if (nonces.error())
+    {
+        FSCK_LOG << "FATAL scanning nonces encountered bad key" << std::endl;
+        return false;
+    }
+
+    return true;
 }

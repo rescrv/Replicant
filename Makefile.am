@@ -68,6 +68,7 @@ noinst_PROGRAMS = \
 replicantexecdir = $(exec_prefix)/libexec/$(PACKAGE)-$(VERSION)
 replicantexec_PROGRAMS = \
 			replicant-daemon \
+			replicant-repair \
 			replicant-new-object \
 			replicant-del-object
 
@@ -109,6 +110,9 @@ libreplicant_la_LIBADD = $(E_LIBS) $(BUSYBEE_LIBS)
 
 replicant_block_SOURCES = tools/block.cc
 replicant_block_LDADD = libreplicant.la
+
+replicant_repair_SOURCES = tools/repair.cc common/chain_node.cc common/configuration.cc common/packing.cc daemon/configuration_manager.cc daemon/fact_store.cc
+replicant_repair_LDADD = $(E_LIBS) -lglog -lleveldb
 
 replicant_cli_SOURCES = tools/cli.cc
 replicant_cli_LDADD = libreplicant.la
