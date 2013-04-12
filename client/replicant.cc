@@ -431,21 +431,17 @@ replicant_client :: inner_loop(replicant_returncode* status)
     busybee_returncode rc = m_busybee->recv(&id, &msg);
     const chain_node* node = m_config->node_from_token(id);
 
-    if (!node)
-    {
-        m_busybee->drop(id);
-        return 0;
-    }
-
-    po6::net::location from = node->address;
-
     // And process it
     switch (rc)
     {
         case BUSYBEE_SUCCESS:
             break;
         case BUSYBEE_DISRUPTED:
-            handle_disruption(*node, status);
+            if (node)
+            {
+                handle_disruption(*node, status);
+            }
+
             return 0;
         case BUSYBEE_INTERRUPTED:
             REPLSETERROR(REPLICANT_INTERRUPTED, "signal received");
@@ -462,6 +458,13 @@ replicant_client :: inner_loop(replicant_returncode* status)
             return -1;
     }
 
+    if (!node)
+    {
+        m_busybee->drop(id);
+        return 0;
+    }
+
+    po6::net::location from = node->address;
     e::unpacker up = msg->unpack_from(BUSYBEE_HEADER_SIZE);
     replicant_network_msgtype mt;
     up = up >> mt;
