@@ -60,7 +60,10 @@
 #include "daemon/object_manager.h"
 #include "daemon/replicant_state_machine.h"
 #include "daemon/replicant_state_machine_context.h"
-#if defined __APPLE__
+#if defined __APPLE__ || defined __FreeBSD__
+#ifdef __FreeBSD__
+#include <sys/stat.h>
+#endif
 #include "memstream.h"
 #endif
 
