@@ -94,7 +94,7 @@ replicant_daemon_SOURCES = \
 			daemon/main.cc \
 			daemon/object_manager.cc \
 			daemon/settings.cc
-replicant_daemon_LDADD = $(E_LIBS) $(BUSYBEE_LIBS) -lglog -lleveldb -ldl -lpthread libreplicant-state-machine.la
+replicant_daemon_LDADD = $(E_LIBS) $(BUSYBEE_LIBS) -lglog -lhyperleveldb -ldl -lpthread libreplicant-state-machine.la
 
 libreplicant_la_CXXFLAGS = $(CXXFLAGS) $(AM_CXXFLAGS)
 libreplicant_la_SOURCES = \
@@ -113,7 +113,7 @@ replicant_block_SOURCES = tools/block.cc
 replicant_block_LDADD = libreplicant.la
 
 replicant_repair_SOURCES = tools/repair.cc common/chain_node.cc common/configuration.cc common/packing.cc daemon/configuration_manager.cc daemon/fact_store.cc
-replicant_repair_LDADD = $(E_LIBS) -lglog -lleveldb
+replicant_repair_LDADD = $(E_LIBS) -lglog -lhyperleveldb
 
 replicant_cli_SOURCES = tools/cli.cc
 replicant_cli_LDADD = libreplicant.la

@@ -32,7 +32,7 @@
 #include <po6/pathname.h>
 
 // LevelDB
-#include <leveldb/db.h>
+#include <hyperleveldb/db.h>
 
 // Replicant
 #include "common/configuration.h"

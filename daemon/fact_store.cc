@@ -38,8 +38,8 @@
 #include <glog/logging.h>
 
 // LevelDB
-#include <leveldb/filter_policy.h>
-#include <leveldb/iterator.h>
+#include <hyperleveldb/filter_policy.h>
+#include <hyperleveldb/iterator.h>
 
 // e
 #include <e/endian.h>
