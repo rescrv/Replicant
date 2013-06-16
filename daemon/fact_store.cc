@@ -30,6 +30,7 @@
 #endif
 
 // STL
+#include <algorithm>
 #include <map>
 #include <memory>
 #include <set>
@@ -363,7 +364,7 @@ fact_store :: repair(const po6::pathname& path)
                   << "the database without possibly violating safety of the "
                   << "system.  To restore this node, remove the data and start "
                   << "fresh.  If a majority of nodes are in a bad state, file "
-                  << "a bug and mention this note.";
+                  << "a bug and mention this note." << std::endl;
         return false;
     }
 
@@ -1061,13 +1062,247 @@ prefix_iterator :: val()
 bool
 fact_store :: fsck(bool verbose, bool destructive, configuration_manager* config_manager)
 {
-    // XXX Iterate everything checking for well-formed keys
+    if (!fsck_meta_state(verbose, destructive, config_manager))
+    {
+        return false;
+    }
 
-    std::map<uint64_t, configuration> accepted_configs;
-    std::map<uint64_t, configuration> proposed_configs;
-    std::set<configuration_manager::proposal> proposals;
+    if (!fsck_clients(verbose, destructive))
+    {
+        return false;
+    }
 
-    // check proposals ////////////////////////////////////////////////////////
+    if (!fsck_slots(verbose, destructive))
+    {
+        return false;
+    }
+
+    return true;
+}
+
+#define XCONCAT(x, y) x ## y
+#define CONCAT(x, y) XCONCAT(x, y)
+#define ADD_CONFIGURATION(CS, C, D) \
+    std::map<uint64_t, configuration>::iterator CONCAT(it, __LINE__) = (CS).find((C).version()); \
+    if (CONCAT(it, __LINE__) == (CS).end()) \
+    { \
+        (CS)[(C).version()] = (C); \
+    } \
+    else if (CONCAT(it, __LINE__)->second != (C)) \
+    { \
+        FSCK_LOG << "FATAL conflicting " D " configurations:\n" \
+                 << "        " << CONCAT(it, __LINE__)->second << "\n" \
+                 << "        " << (C) << std::endl; \
+        return false; \
+    }
+
+bool
+fact_store :: fsck_meta_state(bool verbose,
+                              bool destructive,
+                              configuration_manager* config_manager)
+{
+    typedef std::pair<uint64_t, uint64_t> uup;
+    std::vector<uup> accepted_proposals;
+    std::vector<uup> rejected_proposals;
+    std::vector<configuration_manager::proposal> proposals;
+    std::map<uint64_t, configuration> proposed;
+    std::map<uint64_t, configuration> accepted;
+
+    if (!scan_accepted_proposals(verbose, destructive, &accepted_proposals))
+    {
+        return false;
+    }
+
+    if (!scan_rejected_proposals(verbose, destructive, &rejected_proposals))
+    {
+        return false;
+    }
+
+    for (size_t i = 0; i < accepted_proposals.size(); ++i)
+    {
+        for (size_t j = 0; j < rejected_proposals.size(); ++j)
+        {
+            if (accepted_proposals[i] == rejected_proposals[j])
+            {
+                uint64_t proposal_id = accepted_proposals[i].first;
+                uint64_t proposal_time = accepted_proposals[i].second;
+                FSCK_LOG << "proposal " << proposal_id << ":" << proposal_time
+                         << " rejected and accepted simultaneously" << std::endl;
+                return false;
+            }
+        }
+    }
+
+    if (!scan_informed_configurations(verbose, destructive, &accepted))
+    {
+        return false;
+    }
+
+    if (!scan_proposals(verbose, destructive,
+                        accepted_proposals, rejected_proposals,
+                        &proposals, &proposed, &accepted))
+    {
+        return false;
+    }
+
+    if (accepted.empty())
+    {
+        FSCK_LOG << "FATAL no configurations found" << std::endl;
+        return false;
+    }
+
+    std::map<uint64_t, configuration>::reverse_iterator rit = accepted.rbegin();
+    config_manager->reset(rit->second);
+    std::vector<configuration> latest_proposal;
+    latest_proposal.push_back(rit->second);
+
+    if (!proposed.empty())
+    {
+        uint64_t latest_proposed_version = proposed.rbegin()->first;
+
+        for (uint64_t version = rit->first + 1;
+                version <= latest_proposed_version; ++version)
+        {
+            std::map<uint64_t, configuration>::iterator it = proposed.find(version);
+
+            if (it == proposed.end())
+            {
+                FSCK_LOG << "FATAL discontinuity in proposed configurations" << std::endl;
+                return false;
+            }
+
+            latest_proposal.push_back(it->second);
+        }
+    }
+
+    if (!config_manager->is_compatible(&latest_proposal.front(), latest_proposal.size()))
+    {
+        FSCK_LOG << "FATAL proposed configurations are not compatible" << std::endl;
+        return false;
+    }
+
+    for (size_t i = 0; i < proposals.size(); ++i)
+    {
+        if (proposals[i].version > rit->first)
+        {
+            size_t length = proposals[i].version - rit->first + 1;
+            config_manager->merge(proposals[i].id, proposals[i].time,
+                                  &latest_proposal.front(), length);
+        }
+    }
+
+    return true;
+}
+
+bool
+fact_store :: scan_accepted_proposals(bool verbose,
+                                      bool,
+                                      std::vector<std::pair<uint64_t, uint64_t> >* accepted_proposals)
+{
+    prefix_iterator accected(leveldb::Slice("acc", 3), m_db, 19);
+
+    for (; accected.valid(); accected.next())
+    {
+        const char* ptr = accected.key().data();
+        uint64_t proposal_id;
+        uint64_t proposal_time;
+        e::unpack64be(ptr + 3, &proposal_id);
+        e::unpack64be(ptr + 11, &proposal_time);
+        accepted_proposals->push_back(std::make_pair(proposal_id, proposal_time));
+    }
+
+    if (accected.error())
+    {
+        FSCK_LOG << "FATAL scanning accepted proposals encountered bad key" << std::endl;
+        return false;
+    }
+
+    std::sort(accepted_proposals->begin(), accepted_proposals->end());
+    return true;
+}
+
+bool
+fact_store :: scan_rejected_proposals(bool verbose,
+                                      bool,
+                                      std::vector<std::pair<uint64_t, uint64_t> >* rejected_proposals)
+{
+    prefix_iterator rejected(leveldb::Slice("rej", 3), m_db, 19);
+
+    for (; rejected.valid(); rejected.next())
+    {
+        const char* ptr = rejected.key().data();
+        uint64_t proposal_id;
+        uint64_t proposal_time;
+        e::unpack64be(ptr + 3, &proposal_id);
+        e::unpack64be(ptr + 11, &proposal_time);
+        rejected_proposals->push_back(std::make_pair(proposal_id, proposal_time));
+    }
+
+    if (rejected.error())
+    {
+        FSCK_LOG << "FATAL scanning rejected proposals encountered bad key" << std::endl;
+        return false;
+    }
+
+    std::sort(rejected_proposals->begin(), rejected_proposals->end());
+    return true;
+}
+
+bool
+fact_store :: scan_informed_configurations(bool verbose,
+                                           bool,
+                                           std::map<uint64_t, configuration>* configurations)
+{
+    prefix_iterator informs(leveldb::Slice("inf", 3), m_db, 11);
+
+    for (; informs.valid(); informs.next())
+    {
+        const char* ptr = informs.key().data();
+        uint64_t version;
+        e::unpack64be(ptr + 3, &version);
+        configuration tmp;
+        e::unpacker up(informs.val().data(), informs.val().size());
+        up = up >> tmp;
+
+        if (up.error())
+        {
+            FSCK_LOG << "FATAL encountered bad inform message: " << informs.val().ToString() << std::endl;
+            return false;
+        }
+
+        if (tmp.version() != version)
+        {
+            FSCK_LOG << "FATAL informed configuration has mismatched version: " << version << " != " << tmp.version() << std::endl;
+            return false;
+        }
+
+        if (!tmp.validate())
+        {
+            FSCK_LOG << "FATAL informed configuration does not validate: " << tmp << std::endl;
+            return false;
+        }
+
+        ADD_CONFIGURATION(*configurations, tmp, "informed");
+    }
+
+    if (informs.error())
+    {
+        FSCK_LOG << "FATAL scanning informs encountered bad key" << std::endl;
+        return false;
+    }
+
+    return true;
+}
+
+bool
+fact_store :: scan_proposals(bool verbose,
+                             bool,
+                             const std::vector<std::pair<uint64_t, uint64_t> >& accepted_proposals,
+                             const std::vector<std::pair<uint64_t, uint64_t> >& rejected_proposals,
+                             std::vector<configuration_manager::proposal>* proposals,
+                             std::map<uint64_t, configuration>* proposed,
+                             std::map<uint64_t, configuration>* accepted)
+{
     prefix_iterator props(leveldb::Slice("prop", 4), m_db, 20);
 
     for (; props.valid(); props.next())
@@ -1077,8 +1312,6 @@ fact_store :: fsck(bool verbose, bool destructive, configuration_manager* config
         uint64_t proposal_time;
         e::unpack64be(ptr + 4, &proposal_id);
         e::unpack64be(ptr + 12, &proposal_time);
-        FSCK_LOG << "proposal: " << proposal_id << ":" << proposal_time << std::endl;
-
         std::vector<configuration> configs;
         e::unpacker up(props.val().data(), props.val().size());
 
@@ -1093,65 +1326,37 @@ fact_store :: fsck(bool verbose, bool destructive, configuration_manager* config
                 continue;
             }
 
-            FSCK_LOG << "          " << tmp << std::endl;
             configs.push_back(tmp);
         }
 
         if (up.error() || configs.empty())
         {
-            FSCK_LOG << "ERROR corrupt proposal: " << proposal_id << ":" << proposal_time << "\n";
-            FSCK_LOG << "                        this is fatal because it relates to cluster management" << std::endl;
+            FSCK_LOG << "ERROR corrupt proposal: " << proposal_id << ":" << proposal_time << std::endl;
             return false;
         }
 
-        char akey[KEY_SIZE_ACCEPTED_PROPOSAL];
-        pack_key_accepted_proposal(proposal_id, proposal_time, akey);
-        char rkey[KEY_SIZE_REJECTED_PROPOSAL];
-        pack_key_rejected_proposal(proposal_id, proposal_time, rkey);
-
-        if (check_key_exists(rkey, KEY_SIZE_REJECTED_PROPOSAL))
+        if (std::binary_search(rejected_proposals.begin(),
+                               rejected_proposals.end(),
+                               std::make_pair(proposal_id, proposal_time)))
         {
-            FSCK_LOG << "rejected proposal: " << proposal_id << ":" << proposal_time << std::endl;
             continue;
         }
-        else if (check_key_exists(akey, KEY_SIZE_ACCEPTED_PROPOSAL))
+        else if (std::binary_search(accepted_proposals.begin(),
+                                    accepted_proposals.end(),
+                                    std::make_pair(proposal_id, proposal_time)))
         {
-            FSCK_LOG << "accepted proposal: " << proposal_id << ":" << proposal_time << std::endl;
-            std::map<uint64_t, configuration>::iterator it = accepted_configs.find(configs.back().version());
-
-            if (it == accepted_configs.end())
-            {
-                accepted_configs[configs.back().version()] = configs.back();
-            }
-            else if (it->second != configs.back())
-            {
-                FSCK_LOG << "FATAL conflicting accepted configurations:\n"
-                         << "        " << it->second << "\n"
-                         << "        " << configs.back() << std::endl;
-                return false;
-            }
+            ADD_CONFIGURATION(*accepted, configs.back(), "accepted");
         }
         else
         {
-            FSCK_LOG << "pending proposal: " << proposal_id << ":" << proposal_time << std::endl;
-            proposals.insert(configuration_manager::proposal(proposal_id, proposal_time, configs.back().version()));
+            proposals->push_back(configuration_manager::proposal(proposal_id, proposal_time, configs.back().version()));
 
             for (size_t i = 0; i < configs.size(); ++i)
             {
-                std::map<uint64_t, configuration>::iterator it = proposed_configs.find(configs.back().version());
-
-                if (it == proposed_configs.end())
-                {
-                    proposed_configs[configs.back().version()] = configs.back();
-                }
-                else if (it->second != configs.back())
-                {
-                    FSCK_LOG << "FATAL conflicting proposed configurations:\n"
-                             << "        " << it->second << "\n"
-                             << "        " << configs.back() << std::endl;
-                    return false;
-                }
+                ADD_CONFIGURATION(*proposed, configs[i], "proposed");
             }
+
+            ADD_CONFIGURATION(*accepted, configs.back(), "accepted");
         }
     }
 
@@ -1161,159 +1366,13 @@ fact_store :: fsck(bool verbose, bool destructive, configuration_manager* config
         return false;
     }
 
-    // check informs //////////////////////////////////////////////////////////
-    prefix_iterator informs(leveldb::Slice("inf", 3), m_db, 11);
+    return true;
+}
 
-    for (; informs.valid(); informs.next())
-    {
-        const char* ptr = informs.key().data();
-        uint64_t version;
-        e::unpack64be(ptr + 3, &version);
-        configuration tmp;
-        e::unpacker up(informs.val().data(), informs.val().size());
-        up = up >> tmp;
-
-        if (up.error() || tmp.version() != version || !tmp.validate())
-        {
-            FSCK_LOG << "FATAL informed proposal has mismatched version: " << version << " != " << tmp.version();
-            return false;
-        }
-
-        std::map<uint64_t, configuration>::iterator it = accepted_configs.find(version);
-
-        if (it == accepted_configs.end())
-        {
-            accepted_configs[version] = tmp;
-        }
-        else if (it->second != tmp)
-        {
-            FSCK_LOG << "FATAL conflicting accepted configurations:\n"
-                     << "        " << it->second << "\n"
-                     << "        " << tmp << std::endl;
-            return false;
-        }
-    }
-
-    if (informs.error())
-    {
-        FSCK_LOG << "FATAL scanning informs encountered bad key" << std::endl;
-        return false;
-    }
-
-    // construct the config_manager ///////////////////////////////////////////
-    if (!accepted_configs.empty())
-    {
-        std::map<uint64_t, configuration>::reverse_iterator rit = accepted_configs.rbegin();
-        assert(rit != accepted_configs.rend());
-        assert(rit->first == rit->second.version());
-        config_manager->reset(rit->second);
-
-        std::map<uint64_t, configuration>::iterator it = proposed_configs.find(rit->first);
-
-        if (it == proposed_configs.end())
-        {
-            // if there are proposed configs and they come after the accepted
-            // config
-            if (!proposed_configs.empty() && proposed_configs.rbegin()->first >= it->first)
-            {
-                FSCK_LOG << "FATAL discontinuity in proposed configurations" << std::endl;
-                return false;
-            }
-        }
-        else
-        {
-            uint64_t base = rit->first;
-            std::vector<configuration> proposed;
-
-            while (it != proposed_configs.end())
-            {
-                proposed.push_back(it->second);
-            }
-
-            for (size_t i = 0; i + 1 < proposed.size(); ++i)
-            {
-                if (proposed[i].version() != proposed[i + 1].version())
-                {
-                    FSCK_LOG << "FATAL discontinuity in proposed configurations" << std::endl;
-                    return false;
-                }
-            }
-
-            assert(config_manager->is_compatible(&proposed.front(), proposed.size()));
-
-            for (std::set<configuration_manager::proposal>::iterator pit = proposals.begin();
-                    pit != proposals.end(); ++pit)
-            {
-                if (pit->version > base)
-                {
-                    config_manager->merge(pit->id, pit->time, &proposed.front(), pit->version - base + 1);
-                }
-            }
-        }
-    }
-    else if (!proposed_configs.empty())
-    {
-        FSCK_LOG << "FATAL there exist proposed configurations, but no accepted configurations" << std::endl;
-        return false;
-    }
-
-    FSCK_LOG << "managed to extract configuration manager:\n" << *config_manager;
-
-    // check accected /////////////////////////////////////////////////////////
-    prefix_iterator accected(leveldb::Slice("rej", 3), m_db, 19);
-
-    for (; accected.valid(); accected.next())
-    {
-        const char* ptr = accected.key().data();
-        uint64_t proposal_id;
-        uint64_t proposal_time;
-        e::unpack64be(ptr + 3, &proposal_id);
-        e::unpack64be(ptr + 11, &proposal_time);
-        char pkey[KEY_SIZE_PROPOSAL];
-        pack_key_proposal(proposal_id, proposal_time, pkey);
-
-        if (!check_key_exists(pkey, KEY_SIZE_PROPOSAL))
-        {
-            FSCK_LOG << "FATAL accected proposal " << proposal_id << ":" << proposal_time
-                     << " does not exist" << std::endl;
-            return false;
-        }
-    }
-
-    if (accected.error())
-    {
-        FSCK_LOG << "FATAL scanning clients encountered bad key" << std::endl;
-        return false;
-    }
-
-    // check rejected /////////////////////////////////////////////////////////
-    prefix_iterator rejected(leveldb::Slice("rej", 3), m_db, 19);
-
-    for (; rejected.valid(); rejected.next())
-    {
-        const char* ptr = rejected.key().data();
-        uint64_t proposal_id;
-        uint64_t proposal_time;
-        e::unpack64be(ptr + 3, &proposal_id);
-        e::unpack64be(ptr + 11, &proposal_time);
-        char pkey[KEY_SIZE_PROPOSAL];
-        pack_key_proposal(proposal_id, proposal_time, pkey);
-
-        if (!check_key_exists(pkey, KEY_SIZE_PROPOSAL))
-        {
-            FSCK_LOG << "FATAL rejected proposal " << proposal_id << ":" << proposal_time
-                     << " does not exist" << std::endl;
-            return false;
-        }
-    }
-
-    if (rejected.error())
-    {
-        FSCK_LOG << "FATAL scanning clients encountered bad key" << std::endl;
-        return false;
-    }
-
-    // check clients //////////////////////////////////////////////////////////
+bool
+fact_store :: fsck_clients(bool verbose,
+                           bool)
+{
     prefix_iterator clients(leveldb::Slice("client", 6), m_db, 14);
 
     for (; clients.valid(); clients.next())
@@ -1336,6 +1395,13 @@ fact_store :: fsck(bool verbose, bool destructive, configuration_manager* config
         return false;
     }
 
+    return true;
+}
+
+bool
+fact_store :: fsck_slots(bool verbose,
+                         bool destructive)
+{
     // check slots ////////////////////////////////////////////////////////////
     prefix_iterator slots(leveldb::Slice("slot", 4), m_db, 12);
     uint64_t prev_slot = 0;
