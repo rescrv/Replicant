@@ -50,6 +50,98 @@
 
 using replicant::fact_store;
 
+namespace
+{
+
+class prefix_iterator
+{
+    public:
+        prefix_iterator(const leveldb::Slice& prefix, leveldb::DB* db, size_t sz);
+        ~prefix_iterator() throw ();
+
+    public:
+        bool error() { return m_error; }
+        bool valid();
+        void next();
+        leveldb::Slice key();
+        leveldb::Slice val();
+
+    private:
+        prefix_iterator(const prefix_iterator&);
+        prefix_iterator& operator = (const prefix_iterator&);
+
+    private:
+        leveldb::Slice m_prefix;
+        std::auto_ptr<leveldb::Iterator> m_it;
+        size_t m_sz;
+        bool m_error;
+};
+
+prefix_iterator :: prefix_iterator(const leveldb::Slice& prefix, leveldb::DB* db, size_t sz)
+    : m_prefix(prefix)
+    , m_it()
+    , m_sz(sz)
+    , m_error(false)
+{
+    leveldb::ReadOptions opts;
+    opts.verify_checksums = true;
+    m_it.reset(db->NewIterator(opts));
+    m_it->Seek(prefix);
+}
+
+prefix_iterator :: ~prefix_iterator() throw ()
+{
+}
+
+bool
+prefix_iterator :: valid()
+{
+    if (m_error)
+    {
+        return false;
+    }
+
+    if (m_it->Valid())
+    {
+        if (m_it->key().starts_with(m_prefix) && m_it->key().size() != m_sz)
+        {
+            m_error = true;
+            return false;
+        }
+        else if (!m_it->key().starts_with(m_prefix))
+        {
+            m_it->SeekToLast();
+            return false;
+        }
+    }
+    else
+    {
+        return false;
+    }
+
+    return true;
+}
+
+void
+prefix_iterator :: next()
+{
+    m_it->Next();
+}
+
+leveldb::Slice
+prefix_iterator :: key()
+{
+    return m_it->key();
+}
+
+leveldb::Slice
+prefix_iterator :: val()
+{
+    return m_it->value();
+}
+
+} // namespace
+
 ///////////////////////////////////// Utils ////////////////////////////////////
 
 #define KEY_SIZE_PROPOSAL (4 /*strlen("prop")*/ + 8 /*sizeof(uint64_t)*/ + 8 /*sizeof(uint64_t)*/)
@@ -793,6 +885,31 @@ fact_store :: clear_unacked_slots()
     uint64_t acked = next_slot_to_ack();
     uint64_t issued = next_slot_to_issue();
 
+    prefix_iterator nonces(leveldb::Slice("nonce", 5), m_db, 21);
+
+    for (; nonces.valid(); nonces.next())
+    {
+        const char* ptr = nonces.key().data();
+        uint64_t client;
+        uint64_t nonce;
+        e::unpack64be(ptr + 5, &client);
+        e::unpack64be(ptr + 13, &nonce);
+        ptr = nonces.val().data();
+
+        if (nonces.val().size() != sizeof(uint64_t))
+        {
+            continue;
+        }
+
+        uint64_t slot;
+        e::unpack64be(ptr, &slot);
+
+        if (slot > acked)
+        {
+            delete_key(nonces.key().data(), nonces.key().size());
+        }
+    }
+
     while (issued > acked)
     {
         --issued;
@@ -965,98 +1082,6 @@ fact_store :: only_key_is_replicant_key()
     return seen;
 }
 
-namespace replicant
-{
-
-class prefix_iterator
-{
-    public:
-        prefix_iterator(const leveldb::Slice& prefix, leveldb::DB* db, size_t sz);
-        ~prefix_iterator() throw ();
-
-    public:
-        bool error() { return m_error; }
-        bool valid();
-        void next();
-        leveldb::Slice key();
-        leveldb::Slice val();
-
-    private:
-        prefix_iterator(const prefix_iterator&);
-        prefix_iterator& operator = (const prefix_iterator&);
-
-    private:
-        leveldb::Slice m_prefix;
-        std::auto_ptr<leveldb::Iterator> m_it;
-        size_t m_sz;
-        bool m_error;
-};
-
-prefix_iterator :: prefix_iterator(const leveldb::Slice& prefix, leveldb::DB* db, size_t sz)
-    : m_prefix(prefix)
-    , m_it()
-    , m_sz(sz)
-    , m_error(false)
-{
-    leveldb::ReadOptions opts;
-    opts.verify_checksums = true;
-    m_it.reset(db->NewIterator(opts));
-    m_it->Seek(prefix);
-}
-
-prefix_iterator :: ~prefix_iterator() throw ()
-{
-}
-
-bool
-prefix_iterator :: valid()
-{
-    if (m_error)
-    {
-        return false;
-    }
-
-    if (m_it->Valid())
-    {
-        if (m_it->key().starts_with(m_prefix) && m_it->key().size() != m_sz)
-        {
-            m_error = true;
-            return false;
-        }
-        else if (!m_it->key().starts_with(m_prefix))
-        {
-            m_it->SeekToLast();
-            return false;
-        }
-    }
-    else
-    {
-        return false;
-    }
-
-    return true;
-}
-
-void
-prefix_iterator :: next()
-{
-    m_it->Next();
-}
-
-leveldb::Slice
-prefix_iterator :: key()
-{
-    return m_it->key();
-}
-
-leveldb::Slice
-prefix_iterator :: val()
-{
-    return m_it->value();
-}
-
-}
-
 #define FSCK_LOG if (verbose) std::cerr
 
 bool
@@ -1147,8 +1172,7 @@ fact_store :: fsck_meta_state(bool verbose,
 
     if (accepted.empty())
     {
-        FSCK_LOG << "FATAL no configurations found" << std::endl;
-        return false;
+        return true;
     }
 
     std::map<uint64_t, configuration>::reverse_iterator rit = accepted.rbegin();
