@@ -42,7 +42,7 @@ AC_PROG_CXX
 AC_PROG_CC
 AC_LANG(C++)
 
-ANAL_WARNINGS_CXX
+ANAL_WARNINGS
 
 # Checks for libraries.
 AC_CHECK_LIB([popt], [poptGetContext], [], [AC_MSG_ERROR([
