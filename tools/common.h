@@ -25,46 +25,45 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
-// Popt
-#include <popt.h>
+// e
+#include <e/popt.h>
 
-// C++
-#include <iostream>
-
-static const char* _connect_host = "127.0.0.1";
-static unsigned long _connect_port = 1982;
-
-extern "C"
+class connect_opts
 {
+    public:
+        connect_opts()
+            : m_ap(), m_host("127.0.0.1"), m_port(1982)
+        {
+            m_ap.arg().name('h', "host")
+                      .description("connect to an IP address or hostname (default: 127.0.0.1)")
+                      .metavar("addr").as_string(&m_host);
+            m_ap.arg().name('p', "port")
+                      .description("connect to an alternative port (default: 1982)")
+                      .metavar("port").as_long(&m_port);
+        }
+        ~connect_opts() throw () {}
 
-static struct poptOption connect_popts[] = {
-    {"host", 'h', POPT_ARG_STRING, &_connect_host, 'h',
-     "connect to an IP address or hostname (default: 127.0.0.1)",
-     "addr"},
-    {"port", 'p', POPT_ARG_LONG, &_connect_port, 'p',
-     "connect to an alternative port (default: 1982)",
-     "port"},
-    POPT_TABLEEND
+    public:
+        const e::argparser& parser() { return m_ap; }
+        const char* host() { return m_host; }
+        uint16_t port() { return m_port; }
+        bool validate()
+        {
+            if (m_port <= 0 || m_port >= (1 << 16))
+            {
+                std::cerr << "port number to connect to is out of range" << std::endl;
+                return false;
+            }
+
+            return true;
+        }
+
+    private:
+        connect_opts(const connect_opts&);
+        connect_opts& operator = (const connect_opts&);
+
+    private:
+        e::argparser m_ap;
+        const char* m_host;
+        long m_port;
 };
-
-} // extern "C"
-
-#define CONNECT_TABLE {NULL, 0, POPT_ARG_INCLUDE_TABLE, connect_popts, 0, "Connect to a cluster:", NULL},
-
-static bool
-check_host()
-{
-    return true;
-}
-
-static bool
-check_port()
-{
-    if (_connect_port >= (1 << 16))
-    {
-        std::cerr << "port number to connect to is out of range" << std::endl;
-        return false;
-    }
-
-    return true;
-}

@@ -25,9 +25,6 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
-// Popt
-#include <popt.h>
-
 // Google Log
 #include <glog/logging.h>
 
@@ -36,7 +33,7 @@
 #include <po6/net/hostname.h>
 
 // e
-#include <e/guard.h>
+#include <e/popt.h>
 
 // BusyBee
 #include <busybee_utils.h>
@@ -44,130 +41,106 @@
 // Replicant
 #include "daemon/daemon.h"
 
-static bool _daemonize = true;
-static const char* _data = ".";
-static const char* _listen_host = "auto";
-static unsigned long _listen_port = 1982;
-static po6::net::ipaddr _listen_ip;
-static bool _listen = false;
-static const char* _connect_host = "127.0.0.1";
-static unsigned long _connect_port = 1982;
-static bool _connect = false;
-
-extern "C"
-{
-
-static struct poptOption popts[] = {
-    POPT_AUTOHELP
-    {"daemon", 'd', POPT_ARG_NONE, NULL, 'd',
-     "run replicant in the background", 0},
-    {"foreground", 'f', POPT_ARG_NONE, NULL, 'f',
-     "run replicant in the foreground", 0},
-    {"data", 'D', POPT_ARG_STRING, &_data, 'D',
-     "store persistent state in this directory (default: .)",
-     "dir"},
-    {"listen", 'l', POPT_ARG_STRING, &_listen_host, 'l',
-     "listen on a specific IP address (default: auto)",
-     "IP"},
-    {"listen-port", 'p', POPT_ARG_LONG, &_listen_port, 'L',
-     "listen on an alternative port (default: 1982)",
-     "port"},
-    {"connect", 'c', POPT_ARG_STRING, &_connect_host, 'c',
-     "join an existing replicant cluster through IP address or hostname",
-     "addr"},
-    {"connect-port", 'P', POPT_ARG_LONG, &_connect_port, 'C',
-     "connect to an alternative port (default: 1982)",
-     "port"},
-    POPT_TABLEEND
-};
-
-} // extern "C"
-
+#include <cstdio>
 int
 main(int argc, const char* argv[])
 {
-    poptContext poptcon;
-    poptcon = poptGetContext(NULL, argc, argv, popts, POPT_CONTEXT_POSIXMEHARDER);
-    e::guard g = e::makeguard(poptFreeContext, poptcon); g.use_variable();
-    int rc;
-    po6::net::location listen;
+    bool daemonize = true;
+    const char* data = ".";
+    bool listen;
+    const char* listen_host = "auto";
+    long listen_port = 1982;
+    bool connect;
+    const char* connect_host = "127.0.0.1";
+    long connect_port = 1982;
+    e::argparser ap;
+    ap.autohelp();
+    ap.arg().name('d', "daemon")
+            .description("run replicant in the background")
+            .set_true(&daemonize);
+    ap.arg().name('f', "foreground")
+            .description("run replicant in the foreground")
+            .set_false(&daemonize);
+    ap.arg().name('D', "data")
+            .description("store persistent state in this directory (default: .)")
+            .metavar("dir").as_string(&data);
+    ap.arg().name('l', "listen")
+            .description("listen on a specific IP address (default: auto)")
+            .metavar("IP").as_string(&listen_host).set_true(&listen);
+    ap.arg().name('p', "listen-port")
+            .description("listen on an alternative port (default: 1982)")
+            .metavar("port").as_long(&listen_port).set_true(&listen);
+    ap.arg().name('c', "connect")
+            .description("join an existing replicant cluster through IP address or hostname")
+            .metavar("addr").as_string(&connect_host).set_true(&connect);
+    ap.arg().name('P', "connect-port")
+            .description("connect to an alternative port (default: 1982)")
+            .metavar("port").as_long(&connect_port).set_true(&connect);
 
-    while ((rc = poptGetNextOpt(poptcon)) != -1)
+    if (!ap.parse(argc, argv))
     {
-        switch (rc)
+        return EXIT_FAILURE;
+    }
+
+    if (ap.args_sz() != 0)
+    {
+        std::cerr << "command takes no positional arguments\n" << std::endl;
+        ap.usage();
+        return EXIT_FAILURE;
+    }
+
+    if (listen_port >= (1 << 16))
+    {
+        std::cerr << "listen-port is out of range" << std::endl;
+        return EXIT_FAILURE;
+    }
+
+    if (connect_port >= (1 << 16))
+    {
+        std::cerr << "connect-port is out of range" << std::endl;
+        return EXIT_FAILURE;
+    }
+
+    po6::net::ipaddr listen_ip;
+    po6::net::location bind_to;
+
+    if (strcmp(listen_host, "auto") == 0)
+    {
+        if (!busybee_discover(&listen_ip))
         {
-            case 'd':
-                _daemonize = true;
-                break;
-            case 'f':
-                _daemonize = false;
-                break;
-            case 'D':
-                break;
-            case 'l':
-                try
-                {
-                    _listen = true;
-
-                    if (strcmp(_listen_host, "auto") == 0)
-                    {
-                        break;
-                    }
-
-                    _listen_ip = po6::net::ipaddr(_listen_host);
-                    break;
-                }
-                catch (po6::error& e)
-                {
-                }
-                catch (std::invalid_argument& e)
-                {
-                }
-
-                listen = po6::net::hostname(_listen_host, 0).lookup(AF_UNSPEC, IPPROTO_TCP);
-
-                if (listen == po6::net::location())
-                {
-                    std::cerr << "cannot interpret listen address as hostname or IP address" << std::endl;
-                    return EXIT_FAILURE;
-                }
-
-                _listen_ip = listen.address;
-                break;
-            case 'L':
-                if (_listen_port >= (1 << 16))
-                {
-                    std::cerr << "port number to listen on is out of range" << std::endl;
-                    return EXIT_FAILURE;
-                }
-
-                _listen = true;
-                break;
-            case 'c':
-                _connect = true;
-                break;
-            case 'C':
-                if (_connect_port >= (1 << 16))
-                {
-                    std::cerr << "port number to connect to is out of range" << std::endl;
-                    return EXIT_FAILURE;
-                }
-
-                _connect = true;
-                break;
-            case POPT_ERROR_NOARG:
-            case POPT_ERROR_BADOPT:
-            case POPT_ERROR_BADNUMBER:
-            case POPT_ERROR_OVERFLOW:
-                std::cerr << poptStrerror(rc) << " " << poptBadOption(poptcon, 0) << std::endl;
-                return EXIT_FAILURE;
-            case POPT_ERROR_OPTSTOODEEP:
-            case POPT_ERROR_BADQUOTE:
-            case POPT_ERROR_ERRNO:
-            default:
-                std::cerr << "logic error in argument parsing" << std::endl;
-                return EXIT_FAILURE;
+            std::cerr << "cannot automatically discover local address; specify one manually" << std::endl;
+            return EXIT_FAILURE;
         }
+
+        bind_to = po6::net::location(listen_ip, listen_port);
+    }
+    else
+    {
+        try
+        {
+            listen_ip = po6::net::ipaddr(listen_host);
+            bind_to = po6::net::location(listen_ip, listen_port);
+        }
+        catch (po6::error& e)
+        {
+            // fallthrough
+        }
+        catch (std::invalid_argument& e)
+        {
+            // fallthrough
+        }
+
+        if (bind_to == po6::net::location())
+        {
+            bind_to = po6::net::hostname(listen_host, 0).lookup(AF_UNSPEC, IPPROTO_TCP);
+            bind_to.port = listen_port;
+        }
+    }
+
+    if (bind_to == po6::net::location())
+    {
+        std::cerr << "cannot interpret listen address as hostname or IP address" << std::endl;
+        return EXIT_FAILURE;
     }
 
     google::InitGoogleLogging(argv[0]);
@@ -176,26 +149,10 @@ main(int argc, const char* argv[])
     try
     {
         replicant::daemon d;
-
-        if (strcmp(_listen_host, "auto") == 0)
-        {
-            if (!busybee_discover(&_listen_ip))
-            {
-                std::cerr << "cannot automatically discover local address; specify one manually" << std::endl;
-                return EXIT_FAILURE;
-            }
-        }
-
-        po6::pathname data(_data);
-        po6::net::location bind_to(_listen_ip, _listen_port);
-        po6::net::hostname existing;
-
-        if (_connect)
-        {
-            existing = po6::net::hostname(_connect_host, _connect_port);
-        }
-
-        return d.run(_daemonize, data, _listen, bind_to, _connect, existing);
+        return d.run(daemonize,
+                     po6::pathname(data),
+                     listen, bind_to,
+                     connect, po6::net::hostname(connect_host, connect_port));
     }
     catch (po6::error& e)
     {

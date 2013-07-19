@@ -25,83 +25,41 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
-// C
-#include <cstdlib>
-
-// po6
-#include <po6/error.h>
-
-// e
-#include <e/guard.h>
-
 // Replicant
 #include "client/replicant.h"
 #include "tools/common.h"
 
-static struct poptOption popts[] = {
-    POPT_AUTOHELP
-    CONNECT_TABLE
-    POPT_TABLEEND
-};
-
 int
 main(int argc, const char* argv[])
 {
-    poptContext poptcon;
-    poptcon = poptGetContext(NULL, argc, argv, popts, POPT_CONTEXT_POSIXMEHARDER);
-    e::guard g = e::makeguard(poptFreeContext, poptcon); g.use_variable();
-    poptSetOtherOptionHelp(poptcon, "[OPTIONS] <object-id> <library>");
-    int rc;
+    connect_opts conn;
+    e::argparser ap;
+    ap.autohelp();
+    ap.option_string("[OPTIONS] <object-id> <library-path>");
+    ap.add("Connect to a cluster:", conn.parser());
 
-    while ((rc = poptGetNextOpt(poptcon)) != -1)
+    if (!ap.parse(argc, argv))
     {
-        switch (rc)
-        {
-            case 'h':
-                if (!check_host())
-                {
-                    return EXIT_FAILURE;
-                }
-                break;
-            case 'p':
-                if (!check_port())
-                {
-                    return EXIT_FAILURE;
-                }
-                break;
-            case POPT_ERROR_NOARG:
-            case POPT_ERROR_BADOPT:
-            case POPT_ERROR_BADNUMBER:
-            case POPT_ERROR_OVERFLOW:
-                std::cerr << poptStrerror(rc) << " " << poptBadOption(poptcon, 0) << std::endl;
-                return EXIT_FAILURE;
-            case POPT_ERROR_OPTSTOODEEP:
-            case POPT_ERROR_BADQUOTE:
-            case POPT_ERROR_ERRNO:
-            default:
-                std::cerr << "logic error in argument parsing" << std::endl;
-                return EXIT_FAILURE;
-        }
+        return EXIT_FAILURE;
     }
 
-    const char** args = poptGetArgs(poptcon);
-    size_t num_args = 0;
-
-    while (args && args[num_args])
+    if (!conn.validate())
     {
-        ++num_args;
+        std::cerr << "invalid host:port specification\n" << std::endl;
+        ap.usage();
+        return EXIT_FAILURE;
     }
 
-    if (num_args != 2)
+    if (ap.args_sz() != 2)
     {
         std::cerr << "please specify the library and object\n" << std::endl;
-        poptPrintUsage(poptcon, stderr, 0);
+        ap.usage();
         return EXIT_FAILURE;
     }
 
     try
     {
-        replicant_client r(_connect_host, _connect_port);
+        replicant_client r(conn.host(), conn.port());
         replicant_returncode re = REPLICANT_GARBAGE;
         replicant_returncode le = REPLICANT_GARBAGE;
         int64_t rid = 0;
@@ -109,7 +67,7 @@ main(int argc, const char* argv[])
         const char* errmsg;
         size_t errmsg_sz;
 
-        rid = r.new_object(args[0], args[1], &re, &errmsg, &errmsg_sz);
+        rid = r.new_object(ap.args()[0], ap.args()[1], &re, &errmsg, &errmsg_sz);
 
         if (rid < 0)
         {
