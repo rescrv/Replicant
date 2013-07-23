@@ -25,8 +25,11 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ACLOCAL_AMFLAGS = -I m4 ${ACLOCAL_FLAGS}
-AM_CXXFLAGS = $(WANAL_CXXFLAGS) $(PO6_CFLAGS) $(E_CFLAGS) $(BUSYBEE_CFLAGS) $(LRT_CFLAGS)
-AM_LDFLAGS = $(PO6_LDFLAGS) $(E_LDFLAGS) $(BUSYBEE_LDFLAGS)
+
+AM_CPPFLAGS = $(PO6_CFLAGS) $(E_CFLAGS) $(BUSYBEE_CFLAGS)
+AM_CFLAGS = $(WANAL_CFLAGS)
+AM_CXXFLAGS = $(PO6_CFLAGS) $(E_CFLAGS) $(BUSYBEE_CFLAGS) $(WANAL_CXXFLAGS)
+AM_MAKEFLAGS = --no-print-directory
 
 lib_LTLIBRARIES = libreplicant.la libreplicant-state-machine.la
 
@@ -51,12 +54,13 @@ noinst_HEADERS = \
 			daemon/daemon.h \
 			daemon/fact_store.h \
 			daemon/failure_detector.h \
-			daemon/failure_manager.h \
 			daemon/heal_next.h \
+			daemon/memstream.h \
 			daemon/object_manager.h \
 			daemon/settings.h \
 			daemon/replicant_state_machine.h \
 			daemon/replicant_state_machine_context.h \
+			daemon/request_response.h \
 			tools/common.h
 
 bin_PROGRAMS = replicant
@@ -68,13 +72,12 @@ noinst_PROGRAMS = \
 replicantexecdir = $(exec_prefix)/libexec/$(PACKAGE)-$(VERSION)
 replicantexec_PROGRAMS = \
 			replicant-daemon \
+			replicant-repair \
 			replicant-new-object \
 			replicant-del-object
 
 replicant_SOURCES = replicant.cc
-			
-replicant_CPPFLAGS = \
-			-DREPLICANT_EXEC_DIR="\"$(replicantexecdir)\""
+replicant_CPPFLAGS = -DREPLICANT_EXEC_DIR="\"$(replicantexecdir)\""
 
 libreplicant_state_machine_la_SOURCES = daemon/replicant_state_machine_context.cc
 replicant_daemon_SOURCES = \
@@ -90,7 +93,6 @@ replicant_daemon_SOURCES = \
 			daemon/daemon.cc \
 			daemon/fact_store.cc \
 			daemon/failure_detector.cc \
-			daemon/failure_manager.cc \
 			daemon/heal_next.cc \
 			daemon/main.cc \
 			daemon/object_manager.cc \
@@ -112,6 +114,9 @@ libreplicant_la_LIBADD = $(E_LIBS) $(BUSYBEE_LIBS)
 
 replicant_block_SOURCES = tools/block.cc
 replicant_block_LDADD = libreplicant.la
+
+replicant_repair_SOURCES = tools/repair.cc common/chain_node.cc common/configuration.cc common/packing.cc daemon/configuration_manager.cc daemon/fact_store.cc
+replicant_repair_LDADD = $(E_LIBS) -lglog -lhyperleveldb
 
 replicant_cli_SOURCES = tools/cli.cc
 replicant_cli_LDADD = libreplicant.la

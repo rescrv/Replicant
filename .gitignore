@@ -31,4 +31,5 @@ replicant-daemon
 replicant-del-object
 replicant-new-object
 replicant.pc
+replicant-repair
 stamp-h1

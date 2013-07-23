@@ -185,7 +185,7 @@ replicant_client :: new_object(const char* obj,
     pa = pa.copy(e::slice(&lib[0], lib.size()));
     // Create the command object
     e::intrusive_ptr<command> cmd = new command(status, nonce, msg, errmsg, errmsg_sz);
-    return send_to_preferred_chain_member(cmd, status);
+    return send_to_preferred_chain_position(cmd, status);
 }
 
 int64_t
@@ -211,7 +211,7 @@ replicant_client :: del_object(const char* obj,
         << REPLNET_COMMAND_SUBMIT << uint64_t(OBJECT_OBJ_DEL) << m_token << nonce << object;
     // Create the command object
     e::intrusive_ptr<command> cmd = new command(status, nonce, msg, errmsg, errmsg_sz);
-    return send_to_preferred_chain_member(cmd, status);
+    return send_to_preferred_chain_position(cmd, status);
 }
 
 int64_t
@@ -242,7 +242,7 @@ replicant_client :: send(const char* obj,
     pa = pa.copy(e::slice(data, data_sz));
     // Create the command object
     e::intrusive_ptr<command> cmd = new command(status, nonce, msg, output, output_sz);
-    return send_to_preferred_chain_member(cmd, status);
+    return send_to_preferred_chain_position(cmd, status);
 }
 
 int64_t
@@ -274,7 +274,7 @@ replicant_client :: wait(const char* obj,
     msg->pack_at(BUSYBEE_HEADER_SIZE)
         << REPLNET_CONDITION_WAIT << nonce << object << condition << state;
     e::intrusive_ptr<command> cmd = new command(status, nonce, msg, NULL, 0);
-    return send_to_preferred_chain_member(cmd, status);
+    return send_to_preferred_chain_position(cmd, status);
 }
 
 replicant_returncode
@@ -296,7 +296,7 @@ replicant_client :: disconnect()
     std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
     msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_CLIENT_DISCONNECT << nonce;
     e::intrusive_ptr<command> cmd = new command(&rc, nonce, msg, NULL, NULL);
-    send_to_preferred_chain_member(cmd, &rc);
+    send_to_preferred_chain_position(cmd, &rc);
 
     while (m_commands.find(nonce) != m_commands.end())
     {
@@ -413,7 +413,7 @@ replicant_client :: inner_loop(replicant_returncode* status)
     // Resend all those that need it
     while (!m_resend.empty())
     {
-        ret = send_to_preferred_chain_member(m_resend.begin()->second, status);
+        ret = send_to_preferred_chain_position(m_resend.begin()->second, status);
 
         // As this is a retransmission, we only care about errors (< 0)
         // not the success half (>=0).
@@ -429,8 +429,7 @@ replicant_client :: inner_loop(replicant_returncode* status)
     uint64_t id;
     std::auto_ptr<e::buffer> msg;
     busybee_returncode rc = m_busybee->recv(&id, &msg);
-    chain_node node = m_config->get(id);
-    po6::net::location from = node.address;
+    const chain_node* node = m_config->node_from_token(id);
 
     // And process it
     switch (rc)
@@ -438,7 +437,11 @@ replicant_client :: inner_loop(replicant_returncode* status)
         case BUSYBEE_SUCCESS:
             break;
         case BUSYBEE_DISRUPTED:
-            handle_disruption(node, status);
+            if (node)
+            {
+                handle_disruption(*node, status);
+            }
+
             return 0;
         case BUSYBEE_INTERRUPTED:
             REPLSETERROR(REPLICANT_INTERRUPTED, "signal received");
@@ -455,6 +458,13 @@ replicant_client :: inner_loop(replicant_returncode* status)
             return -1;
     }
 
+    if (!node)
+    {
+        m_busybee->drop(id);
+        return 0;
+    }
+
+    po6::net::location from = node->address;
     e::unpacker up = msg->unpack_from(BUSYBEE_HEADER_SIZE);
     replicant_network_msgtype mt;
     up = up >> mt;
@@ -486,7 +496,8 @@ replicant_client :: inner_loop(replicant_returncode* status)
             break;
         REPL_UNEXPECTED(NOP);
         REPL_UNEXPECTED(BOOTSTRAP);
-        REPL_UNEXPECTED(JOIN);
+        REPL_UNEXPECTED(SERVER_REGISTER);
+        REPL_UNEXPECTED(SERVER_REGISTER_FAILED);
         REPL_UNEXPECTED(CONFIG_PROPOSE);
         REPL_UNEXPECTED(CONFIG_ACCEPT);
         REPL_UNEXPECTED(CONFIG_REJECT);
@@ -629,16 +640,16 @@ replicant_client :: wait_for_token_registration(replicant_returncode* status)
                 return -1;
         }
 
-        po6::net::location from = m_config->head().address;
+        const chain_node* node = m_config->node_from_token(token);
 
-        if (token != m_config->head().token)
+        if (!node)
         {
-            REPLSETERROR(REPLICANT_MISBEHAVING_SERVER, "a node that is not the head replied to \"REGISTER\"");
-            m_last_error_host = from;
+            REPLSETERROR(REPLICANT_NEED_BOOTSTRAP, "server we were introduced to is not a cluster member");
             reset_to_disconnected();
             return -1;
         }
 
+        po6::net::location from = node->address;
         e::unpacker up = msg->unpack_from(BUSYBEE_HEADER_SIZE);
         replicant_network_msgtype mt;
         up = up >> mt;
@@ -657,8 +668,9 @@ replicant_client :: wait_for_token_registration(replicant_returncode* status)
                 break;
             REPL_UNEXPECTED_DISCONNECT(NOP);
             REPL_UNEXPECTED_DISCONNECT(BOOTSTRAP);
-            REPL_UNEXPECTED_DISCONNECT(JOIN);
             REPL_UNEXPECTED_DISCONNECT(INFORM);
+            REPL_UNEXPECTED_DISCONNECT(SERVER_REGISTER);
+            REPL_UNEXPECTED_DISCONNECT(SERVER_REGISTER_FAILED);
             REPL_UNEXPECTED_DISCONNECT(CONFIG_PROPOSE);
             REPL_UNEXPECTED_DISCONNECT(CONFIG_ACCEPT);
             REPL_UNEXPECTED_DISCONNECT(CONFIG_REJECT);
@@ -737,11 +749,10 @@ replicant_client :: handle_inform(const po6::net::location& from,
 
         for (command_map::iterator it = m_commands.begin(); it != m_commands.end(); )
         {
-            chain_node n = m_config->get(it->first);
-            e::intrusive_ptr<command> c = it->second;
+            const chain_node* n = m_config->node_from_token(it->first);
 
             // If this op wasn't sent to a removed host, then skip it
-            if (m_config->in_cluster(n))
+            if (n && m_config->in_command_chain(n->token))
             {
                 ++it;
                 continue;
@@ -760,15 +771,24 @@ int64_t
 replicant_client :: send_to_chain_head(std::auto_ptr<e::buffer> msg,
                                        replicant_returncode* status)
 {
-    m_busybee_mapper->set(m_config->head());
-    busybee_returncode rc = m_busybee->send(m_config->head().token, msg);
+    const chain_node* head = m_config->head();
+
+    if (!head)
+    {
+        REPLSETERROR(REPLICANT_NEED_BOOTSTRAP, "found ourselves bootstrapped with a headless configuration");
+        reset_to_disconnected();
+        return -1;
+    }
+
+    m_busybee_mapper->set(*head);
+    busybee_returncode rc = m_busybee->send(head->token, msg);
 
     switch (rc)
     {
         case BUSYBEE_SUCCESS:
             return 0;
         case BUSYBEE_DISRUPTED:
-            handle_disruption(m_config->head(), status);
+            handle_disruption(*head, status);
             REPLSETERROR(REPLICANT_BACKOFF, "backoff before retrying");
             return -1;
         BUSYBEE_ERROR(INTERNAL_ERROR, SHUTDOWN);
@@ -784,19 +804,19 @@ replicant_client :: send_to_chain_head(std::auto_ptr<e::buffer> msg,
 }
 
 int64_t
-replicant_client :: send_to_preferred_chain_member(e::intrusive_ptr<command> cmd,
-                                                   replicant_returncode* status)
+replicant_client :: send_to_preferred_chain_position(e::intrusive_ptr<command> cmd,
+                                                     replicant_returncode* status)
 {
     bool sent = false;
     const chain_node* sent_to = NULL;
 
-    for (const chain_node* n = m_config->members_begin();
-            !sent && n != m_config->members_end(); ++n)
+    for (const uint64_t* n = m_config->chain_begin();
+            !sent && n!= m_config->chain_end(); ++n)
     {
-        sent_to = n;
+        sent_to = m_config->node_from_token(*n);
         std::auto_ptr<e::buffer> msg(cmd->request()->copy());
-        m_busybee_mapper->set(*n);
-        busybee_returncode rc = m_busybee->send(n->token, msg);
+        m_busybee_mapper->set(*sent_to);
+        busybee_returncode rc = m_busybee->send(sent_to->token, msg);
 
         switch (rc)
         {
@@ -804,7 +824,7 @@ replicant_client :: send_to_preferred_chain_member(e::intrusive_ptr<command> cmd
                 sent = true;
                 break;
             case BUSYBEE_DISRUPTED:
-                handle_disruption(*n, status);
+                handle_disruption(*sent_to, status);
                 REPLSETERROR(REPLICANT_BACKOFF, "backoff before retrying");
                 continue;
             BUSYBEE_ERROR_CONTINUE(INTERNAL_ERROR, SHUTDOWN);

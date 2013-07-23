@@ -28,7 +28,7 @@
 # Process this file with autoconf to produce a configure script.
 
 AC_PREREQ([2.67])
-AC_INIT([replicant], [0.1.dev], [escriva@cs.cornell.edu])
+AC_INIT([replicant], [0.2.dev], [escriva@cs.cornell.edu])
 AM_INIT_AUTOMAKE([foreign subdir-objects dist-bzip2])
 AM_SILENT_RULES([yes])
 LT_PREREQ([2.2])
@@ -42,7 +42,7 @@ AC_PROG_CXX
 AC_PROG_CC
 AC_LANG(C++)
 
-ANAL_WARNINGS_CXX
+ANAL_WARNINGS
 
 # Checks for libraries.
 AC_CHECK_LIB([popt], [poptGetContext], [], [AC_MSG_ERROR([
@@ -58,9 +58,9 @@ else
     AC_SUBST([LRT_CFLAGS], [""])
 fi
 
-PKG_CHECK_MODULES([PO6], [libpo6 >= 0.3])
-PKG_CHECK_MODULES([E], [libe >= 0.3])
-PKG_CHECK_MODULES([BUSYBEE], [busybee >= 0.2])
+PKG_CHECK_MODULES([PO6], [libpo6 >= 0.3.1])
+PKG_CHECK_MODULES([E], [libe >= 0.3.2])
+PKG_CHECK_MODULES([BUSYBEE], [busybee >= 0.3.0])
 
 # Checks for header files.
 AC_CHECK_HEADER([popt.h],,[AC_MSG_ERROR([
@@ -73,11 +73,11 @@ AC_CHECK_HEADER([lmdb.h],,[AC_MSG_ERROR([
 Replicant relies upon the Lightning MDB library.
 Please install Lightning MDB to continue.
 ---------------------------------------])])
-#AC_CHECK_HEADER([leveldb/db.h],,[AC_MSG_ERROR([
-#---------------------------------------
-#Replicant relies upon the LevelDB library.
+#AC_CHECK_HEADER([hyperleveldb/db.h],,[AC_MSG_ERROR([
+#-----------------------------------------------
+#Replicant relies upon the HyperLevelDB library.
 #Please install LevelDB to continue.
-#---------------------------------------])])
+#-----------------------------------------------])])
 AC_CHECK_HEADER([glog/logging.h],,[AC_MSG_ERROR([
 ---------------------------------------
 Replicant relies upon the glog library.

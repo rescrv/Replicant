@@ -40,7 +40,8 @@ replicant :: operator << (std::ostream& lhs, replicant_network_msgtype rhs)
         stringify(REPLNET_NOP);
         stringify(REPLNET_BOOTSTRAP);
         stringify(REPLNET_INFORM);
-        stringify(REPLNET_JOIN);
+        stringify(REPLNET_SERVER_REGISTER);
+        stringify(REPLNET_SERVER_REGISTER_FAILED);
         stringify(REPLNET_CONFIG_PROPOSE);
         stringify(REPLNET_CONFIG_ACCEPT);
         stringify(REPLNET_CONFIG_REJECT);

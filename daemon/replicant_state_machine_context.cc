@@ -114,6 +114,3 @@ replicant_state_machine_condition_broadcast(struct replicant_state_machine_conte
 }
 
 } // extern "C"
-
-#if 0
-#endif

@@ -42,6 +42,7 @@ class chain_node
 {
     public:
         chain_node();
+        chain_node(uint64_t token, const po6::net::location& address);
         ~chain_node() throw ();
 
     public:

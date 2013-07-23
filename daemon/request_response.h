@@ -1,4 +1,4 @@
-// Copyright (c) 2012, Robert Escriva
+// Copyright (c) 2013, Robert Escriva
 // All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
@@ -25,44 +25,59 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
-#ifndef replicant_daemon_failure_manager_h_
-#define replicant_daemon_failure_manager_h_
+#ifndef replicant_request_response_h_
+#define replicant_request_response_h_
 
-// C
-#include <stdint.h>
+// Google Log
+#include <glog/logging.h>
 
-// STL
-#include <map>
-#include <tr1/memory>
-#include <vector>
-
-// Replicant
-#include "common/chain_node.h"
-#include "common/configuration.h"
-#include "daemon/failure_detector.h"
+// BusyBee
+#include <busybee_single.h>
 
 namespace replicant
 {
 
-class failure_manager
+template<typename hostname>
+bool
+request_response(hostname hn,
+                 int timeout,
+                 std::auto_ptr<e::buffer> request,
+                 const char* errmsg,
+                 std::auto_ptr<e::buffer>* response)
 {
-    public:
-        failure_manager();
-        ~failure_manager() throw ();
+    busybee_single bbs(hn);
+    bbs.set_timeout(timeout);
 
-    public:
-        void force_trust(uint64_t until);
-        void heartbeat(uint64_t token, uint64_t now);
-        void get_suspicions(uint64_t now, const configuration& config, std::map<uint64_t, double>* suspicions);
+    switch (bbs.send(request))
+    {
+#define BUSYBEE_CASES \
+        case BUSYBEE_SUCCESS: \
+            break; \
+        case BUSYBEE_TIMEOUT: \
+            LOG(ERROR) << "timeout while " << errmsg << hn; \
+            return false; \
+        case BUSYBEE_SHUTDOWN: \
+        case BUSYBEE_POLLFAILED: \
+        case BUSYBEE_DISRUPTED: \
+        case BUSYBEE_ADDFDFAIL: \
+        case BUSYBEE_EXTERNAL: \
+        case BUSYBEE_INTERRUPTED: \
+            PLOG(ERROR) << "communication failure while " << errmsg << hn; \
+            return false; \
+        default: \
+            abort();
+        BUSYBEE_CASES
+    }
 
-    public:
-        void reset(const std::vector<chain_node>& nodes);
+    switch (bbs.recv(response))
+    {
+        BUSYBEE_CASES
+#undef BUSYBEE_CASES
+    }
 
-    private:
-        typedef std::map<uint64_t, std::tr1::shared_ptr<failure_detector> > failure_detector_map_t;
-        failure_detector_map_t m_fds;
-};
+    return true;
+}
 
 } // namespace replicant
 
-#endif // replicant_daemon_failure_manager_h_
+#endif // replicant_request_response_h_

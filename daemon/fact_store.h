@@ -54,9 +54,8 @@ class fact_store
                   bool* saved,
                   chain_node* saved_us,
                   configuration_manager* saved_config_manager);
-        bool close(const chain_node& us_to_save,
-                   const configuration_manager& config_manager_to_save);
-        void remove_saved_state();
+        bool repair(const po6::pathname& path);
+        bool save(const chain_node& saved_us);
 
     // Manage configurations
     public:
@@ -109,6 +108,35 @@ class fact_store
         void store_key_value(const char* key, size_t key_sz,
                              const char* value, size_t value_sz);
         void delete_key(const char* key, size_t key_sz);
+        bool only_key_is_replicant_key();
+
+    private:
+        bool fsck(bool verbose,
+                  bool destructive,
+                  configuration_manager* config_manager);
+        bool fsck_meta_state(bool verbose,
+                             bool destructive,
+                             configuration_manager* config_manager);
+        bool scan_accepted_proposals(bool verbose,
+                                     bool destructive,
+                                     std::vector<std::pair<uint64_t, uint64_t> >* accepted_proposals);
+        bool scan_rejected_proposals(bool verbose,
+                                     bool destructive,
+                                     std::vector<std::pair<uint64_t, uint64_t> >* rejected_proposals);
+        bool scan_informed_configurations(bool verbose,
+                                          bool destructive,
+                                          std::map<uint64_t, configuration>* configurations);
+        bool scan_proposals(bool verbose,
+                            bool destructive,
+                            const std::vector<std::pair<uint64_t, uint64_t> >& accepted_proposals,
+                            const std::vector<std::pair<uint64_t, uint64_t> >& rejected_proposals,
+                            std::vector<configuration_manager::proposal>* proposals,
+                            std::map<uint64_t, configuration>* proposed,
+                            std::map<uint64_t, configuration>* accepted);
+        bool fsck_clients(bool verbose,
+                          bool destructive);
+        bool fsck_slots(bool verbose,
+                        bool destructive);
 
     private:
         fact_store(const fact_store&);

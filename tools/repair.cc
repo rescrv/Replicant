@@ -1,4 +1,4 @@
-// Copyright (c) 2012, Robert Escriva
+// Copyright (c) 2013, Robert Escriva
 // All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
@@ -25,67 +25,68 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
+// Popt
+#include <popt.h>
+
+// e
+#include <e/guard.h>
+
 // Replicant
-#include "common/chain_node.h"
-#include "packing.h"
+#include "daemon/fact_store.h"
 
-using replicant::chain_node;
+static const char* _data = ".";
 
-chain_node :: chain_node()
-    : token()
-    , address()
+extern "C"
 {
-}
 
-chain_node :: chain_node(uint64_t t, const po6::net::location& a)
-    : token(t)
-    , address(a)
-{
-}
+static struct poptOption popts[] = {
+    POPT_AUTOHELP
+    {"data", 'D', POPT_ARG_STRING, &_data, 'D',
+     "store persistent state in this directory (default: .)",
+     "dir"},
+    POPT_TABLEEND
+};
 
-chain_node :: ~chain_node() throw ()
-{
-}
+} // extern "C"
 
-bool
-replicant :: operator < (const chain_node& lhs, const chain_node& rhs)
+int
+main(int argc, const char* argv[])
 {
-    if (lhs.token == rhs.token)
+    poptContext poptcon;
+    poptcon = poptGetContext(NULL, argc, argv, popts, POPT_CONTEXT_POSIXMEHARDER);
+    e::guard g = e::makeguard(poptFreeContext, poptcon); g.use_variable();
+    int rc;
+
+    while ((rc = poptGetNextOpt(poptcon)) != -1)
     {
-        return lhs.address < rhs.address;
+        switch (rc)
+        {
+            case 'D':
+                break;
+            case POPT_ERROR_NOARG:
+            case POPT_ERROR_BADOPT:
+            case POPT_ERROR_BADNUMBER:
+            case POPT_ERROR_OVERFLOW:
+                std::cerr << poptStrerror(rc) << " " << poptBadOption(poptcon, 0) << std::endl;
+                return EXIT_FAILURE;
+            case POPT_ERROR_OPTSTOODEEP:
+            case POPT_ERROR_BADQUOTE:
+            case POPT_ERROR_ERRNO:
+            default:
+                std::cerr << "logic error in argument parsing" << std::endl;
+                return EXIT_FAILURE;
+        }
     }
 
-    return lhs.token < rhs.token;
-}
-
-bool
-replicant :: operator == (const chain_node& lhs, const chain_node& rhs)
-{
-    return lhs.token == rhs.token &&
-           lhs.address == rhs.address;
-}
-
-std::ostream&
-replicant :: operator << (std::ostream& lhs, const chain_node& rhs)
-{
-    return lhs << "chain_node(bind_to=" << rhs.address
-               << ", token=" << rhs.token << ")";
-}
-
-e::buffer::packer
-replicant :: operator << (e::buffer::packer lhs, const chain_node& rhs)
-{
-    return lhs << rhs.token << rhs.address;
-}
-
-e::unpacker
-replicant :: operator >> (e::unpacker lhs, chain_node& rhs)
-{
-    return lhs >> rhs.token >> rhs.address;
-}
-
-size_t
-replicant :: pack_size(const chain_node& rhs)
-{
-    return sizeof(uint64_t) + pack_size(rhs.address);
+    try
+    {
+        po6::pathname data(_data);
+        replicant::fact_store fs;
+        return fs.repair(data) ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+    catch (po6::error& e)
+    {
+        std::cerr << "system error:  " << e.what() << std::endl;
+        return EXIT_FAILURE;
+    }
 }

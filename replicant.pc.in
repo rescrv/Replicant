@@ -3,10 +3,10 @@ exec_prefix=@exec_prefix@
 libdir=@libdir@
 includedir=@includedir@
 
-Name: busybee
-Description: High performance messaging layer
+Name: replicant
+Description: Replicated State Machine Library
 Version: @VERSION@
 
-Requires: libpo6 >= 0.2.3 libe >= 0.2.7 
+Requires: libpo6 >= 0.3.1 libe >= 0.3.2  busybee >= 0.3.0
 Libs: -L${libdir} -lreplicant
 Cflags: -I${includedir}
