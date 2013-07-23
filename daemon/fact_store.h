@@ -31,6 +31,9 @@
 // po6
 #include <po6/pathname.h>
 
+// STL
+#include <map>
+
 // Lightning MDB
 #include <lmdb.h>
 
@@ -102,12 +105,10 @@ class fact_store
         void clear_unacked_slots();
 
     private:
-        bool check_key_exists(const char* key, size_t key_sz);
-        bool retrieve_value(const char* key, size_t key_sz,
-                            MDB_val *backing);
-        void store_key_value(const char* key, size_t key_sz,
-                             const char* value, size_t value_sz);
-        void delete_key(const char* key, size_t key_sz);
+        bool check_key_exists(MDB_val *key);
+        bool retrieve_value(MDB_val *key, MDB_val *value);
+        void store_key_value(MDB_val *key, MDB_val *value);
+        void delete_key(MDB_val *key);
         bool only_key_is_replicant_key();
 
     private:
@@ -137,6 +138,11 @@ class fact_store
                           bool destructive);
         bool fsck_slots(bool verbose,
                         bool destructive);
+        bool do_open(const po6::pathname& path,
+                  bool* saved,
+                  chain_node* saved_us,
+                  configuration_manager* saved_config_manager,
+				  bool isOpen);
 
     private:
         fact_store(const fact_store&);
