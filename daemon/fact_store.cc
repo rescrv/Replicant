@@ -1021,6 +1021,7 @@ fact_store :: clear_unacked_slots()
 bool
 fact_store :: check_key_exists(MDB_val *key)
 {
+	MDB_val val;
 	int rc;
 
 	rc = mdb_txn_renew(m_rtxn);
@@ -1028,7 +1029,7 @@ fact_store :: check_key_exists(MDB_val *key)
 	{
 		abort();
 	}
-	rc = mdb_get(m_rtxn, m_dbi, key, NULL);
+	rc = mdb_get(m_rtxn, m_dbi, key, &val);
 	mdb_txn_reset(m_rtxn);
 	if (rc == MDB_SUCCESS)
     {
