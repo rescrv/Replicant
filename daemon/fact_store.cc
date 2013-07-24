@@ -83,6 +83,7 @@ prefix_iterator :: prefix_iterator(const MDB_val *prefix, MDB_env *m_db, MDB_dbi
     , m_it()
     , m_sz(sz)
     , m_error(false)
+	, m_valid(false)
 {
 	int rc;
 	rc = mdb_txn_begin(m_db, NULL, MDB_RDONLY, &m_rtxn);
@@ -100,6 +101,8 @@ prefix_iterator :: prefix_iterator(const MDB_val *prefix, MDB_env *m_db, MDB_dbi
 	rc = mdb_cursor_get(m_it, &m_key, &m_val, MDB_SET_RANGE);
 	if (rc == MDB_SUCCESS)
 		m_valid = true;
+	else
+		mdb_txn_reset(m_rtxn);
 }
 
 prefix_iterator :: ~prefix_iterator() throw ()
@@ -120,11 +123,13 @@ prefix_iterator :: valid()
 		if (memcmp(m_prefix.mv_data, m_key.mv_data, m_prefix.mv_size))
 		{
 			m_valid = false;
+			mdb_txn_reset(m_rtxn);
 			return false;
 		}
 		if (m_key.mv_size != m_sz)
         {
             m_error = true;
+			mdb_txn_reset(m_rtxn);
             return false;
         }
     }
@@ -141,8 +146,10 @@ prefix_iterator :: next()
 {
 	int rc;
 	rc = mdb_cursor_get(m_it, &m_key, &m_val, MDB_NEXT);
-	if (rc == MDB_NOTFOUND)
+	if (rc == MDB_NOTFOUND) {
+		mdb_txn_reset(m_rtxn);
 		m_valid = false;
+	}
 }
 
 MDB_val *
@@ -329,7 +336,7 @@ fact_store :: do_open(const po6::pathname& path,
         {
             LOG(ERROR) << "could not restore from LMDB because "
                        << "the existing data was created by "
-                       << "replicant " << data.mv_data << " but "
+                       << "replicant " << (char *)data.mv_data << " but "
                        << "this is version " << PACKAGE_VERSION << " which is not compatible";
             goto leave;
         }
@@ -339,6 +346,12 @@ fact_store :: do_open(const po6::pathname& path,
         first_time = true;
         MVS(data, PACKAGE_VERSION);
         rc = mdb_put(txn, m_dbi, &key, &data, 0);
+		if (rc == MDB_SUCCESS)
+		{
+			rc = mdb_txn_commit(txn);
+			if (rc == MDB_SUCCESS)
+				rc = mdb_txn_begin(m_db, NULL, 0, &txn);
+		}
 
         if (rc)
         {
