@@ -53,7 +53,7 @@ namespace
 class prefix_iterator
 {
     public:
-        prefix_iterator(const MDB_val *prefix, MDB_env *m_db, MDB_dbi dbi, size_t sz);
+        prefix_iterator(const MDB_val *prefix, MDB_txn *rtxn, MDB_dbi dbi, size_t sz);
         ~prefix_iterator() throw ();
 
     public:
@@ -78,19 +78,15 @@ class prefix_iterator
 		bool m_valid;
 };
 
-prefix_iterator :: prefix_iterator(const MDB_val *prefix, MDB_env *m_db, MDB_dbi dbi, size_t sz)
+prefix_iterator :: prefix_iterator(const MDB_val *prefix, MDB_txn *rtxn, MDB_dbi dbi, size_t sz)
     : m_prefix()
+	, m_rtxn(rtxn)
     , m_it()
     , m_sz(sz)
     , m_error(false)
 	, m_valid(false)
 {
 	int rc;
-	rc = mdb_txn_begin(m_db, NULL, MDB_RDONLY, &m_rtxn);
-	if (rc)
-	{
-		abort();
-	}
 	rc = mdb_cursor_open(m_rtxn, dbi, &m_it);
 	if (rc)
 	{
@@ -101,13 +97,11 @@ prefix_iterator :: prefix_iterator(const MDB_val *prefix, MDB_env *m_db, MDB_dbi
 	rc = mdb_cursor_get(m_it, &m_key, &m_val, MDB_SET_RANGE);
 	if (rc == MDB_SUCCESS)
 		m_valid = true;
-	else
-		mdb_txn_reset(m_rtxn);
 }
 
 prefix_iterator :: ~prefix_iterator() throw ()
 {
-	mdb_txn_abort(m_rtxn);
+	mdb_cursor_close(m_it);
 }
 
 bool
@@ -123,13 +117,11 @@ prefix_iterator :: valid()
 		if (memcmp(m_prefix.mv_data, m_key.mv_data, m_prefix.mv_size))
 		{
 			m_valid = false;
-			mdb_txn_reset(m_rtxn);
 			return false;
 		}
 		if (m_key.mv_size != m_sz)
         {
             m_error = true;
-			mdb_txn_reset(m_rtxn);
             return false;
         }
     }
@@ -147,7 +139,6 @@ prefix_iterator :: next()
 	int rc;
 	rc = mdb_cursor_get(m_it, &m_key, &m_val, MDB_NEXT);
 	if (rc == MDB_NOTFOUND) {
-		mdb_txn_reset(m_rtxn);
 		m_valid = false;
 	}
 }
@@ -979,7 +970,8 @@ fact_store :: clear_unacked_slots()
 	MDB_val pref;
 
 	MVS(pref, "nonce");
-    prefix_iterator nonces(&pref, m_db, m_dbi, 21);
+	mdb_txn_renew(m_rtxn);
+    prefix_iterator nonces(&pref, m_rtxn, m_dbi, 21);
 
     for (; nonces.valid(); nonces.next())
     {
@@ -1003,6 +995,7 @@ fact_store :: clear_unacked_slots()
             delete_key(nonces.key());
         }
     }
+	mdb_txn_reset(m_rtxn);
 
     while (issued > acked)
     {
@@ -1022,15 +1015,17 @@ bool
 fact_store :: check_key_exists(MDB_val *key)
 {
 	MDB_val val;
+	bool do_reset = true;
 	int rc;
 
 	rc = mdb_txn_renew(m_rtxn);
 	if (rc)
 	{
-		abort();
+		do_reset = false;
 	}
 	rc = mdb_get(m_rtxn, m_dbi, key, &val);
-	mdb_txn_reset(m_rtxn);
+	if (do_reset)
+		mdb_txn_reset(m_rtxn);
 	if (rc == MDB_SUCCESS)
     {
         return true;
@@ -1050,11 +1045,12 @@ bool
 fact_store :: retrieve_value(MDB_val *key, MDB_val *value)
 {
 	int rc;
+	bool do_reset = true;
 
 	rc = mdb_txn_renew(m_rtxn);
 	if (rc)
 	{
-		abort();
+		do_reset = false;
 	}
 	rc = mdb_get(m_rtxn, m_dbi, key, value);
     if (rc == MDB_SUCCESS)
@@ -1063,7 +1059,8 @@ fact_store :: retrieve_value(MDB_val *key, MDB_val *value)
     }
     else if (rc == MDB_NOTFOUND)
     {
-		mdb_txn_reset(m_rtxn);
+		if (do_reset)
+			mdb_txn_reset(m_rtxn);
         return false;
     }
     else
@@ -1307,7 +1304,8 @@ fact_store :: scan_accepted_proposals(bool verbose,
 {
 	MDB_val pref;
 	MVS(pref, "acc");
-    prefix_iterator accected(&pref, m_db, m_dbi, 19);
+	mdb_txn_renew(m_rtxn);
+    prefix_iterator accected(&pref, m_rtxn, m_dbi, 19);
 
     for (; accected.valid(); accected.next())
     {
@@ -1318,6 +1316,7 @@ fact_store :: scan_accepted_proposals(bool verbose,
         e::unpack64be(ptr + 11, &proposal_time);
         accepted_proposals->push_back(std::make_pair(proposal_id, proposal_time));
     }
+	mdb_txn_reset(m_rtxn);
 
     if (accected.error())
     {
@@ -1336,7 +1335,8 @@ fact_store :: scan_rejected_proposals(bool verbose,
 {
 	MDB_val pref;
 	MVS(pref, "rej");
-    prefix_iterator rejected(&pref, m_db, m_dbi, 19);
+	mdb_txn_renew(m_rtxn);
+    prefix_iterator rejected(&pref, m_rtxn, m_dbi, 19);
 
     for (; rejected.valid(); rejected.next())
     {
@@ -1347,6 +1347,7 @@ fact_store :: scan_rejected_proposals(bool verbose,
         e::unpack64be(ptr + 11, &proposal_time);
         rejected_proposals->push_back(std::make_pair(proposal_id, proposal_time));
     }
+	mdb_txn_reset(m_rtxn);
 
     if (rejected.error())
     {
@@ -1364,8 +1365,10 @@ fact_store :: scan_informed_configurations(bool verbose,
                                            std::map<uint64_t, configuration>* configurations)
 {
 	MDB_val pref;
+	bool ret = false;
 	MVS(pref, "inf");
-    prefix_iterator informs(&pref, m_db, m_dbi, 11);
+	mdb_txn_renew(m_rtxn);
+    prefix_iterator informs(&pref, m_rtxn, m_dbi, 11);
 
     for (; informs.valid(); informs.next())
     {
@@ -1379,19 +1382,19 @@ fact_store :: scan_informed_configurations(bool verbose,
         if (up.error())
         {
             FSCK_LOG << "FATAL encountered bad inform message: " << (const char *)informs.val()->mv_data << std::endl;
-            return false;
+            goto fail;
         }
 
         if (tmp.version() != version)
         {
             FSCK_LOG << "FATAL informed configuration has mismatched version: " << version << " != " << tmp.version() << std::endl;
-            return false;
+            goto fail;
         }
 
         if (!tmp.validate())
         {
             FSCK_LOG << "FATAL informed configuration does not validate: " << tmp << std::endl;
-            return false;
+            goto fail;
         }
 
         ADD_CONFIGURATION(*configurations, tmp, "informed");
@@ -1400,10 +1403,13 @@ fact_store :: scan_informed_configurations(bool verbose,
     if (informs.error())
     {
         FSCK_LOG << "FATAL scanning informs encountered bad key" << std::endl;
-        return false;
+        goto fail;
     }
 
-    return true;
+	ret = true;
+fail:
+	mdb_txn_reset(m_rtxn);
+    return ret;
 }
 
 bool
@@ -1416,8 +1422,10 @@ fact_store :: scan_proposals(bool verbose,
                              std::map<uint64_t, configuration>* accepted)
 {
 	MDB_val pref;
+	bool ret = false;
 	MVS(pref, "prop");
-    prefix_iterator props(&pref, m_db, m_dbi, 20);
+	mdb_txn_renew(m_rtxn);
+    prefix_iterator props(&pref, m_rtxn, m_dbi, 20);
 
     for (; props.valid(); props.next())
     {
@@ -1446,7 +1454,7 @@ fact_store :: scan_proposals(bool verbose,
         if (up.error() || configs.empty())
         {
             FSCK_LOG << "ERROR corrupt proposal: " << proposal_id << ":" << proposal_time << std::endl;
-            return false;
+            goto fail;
         }
 
         if (std::binary_search(rejected_proposals.begin(),
@@ -1477,10 +1485,13 @@ fact_store :: scan_proposals(bool verbose,
     if (props.error())
     {
         FSCK_LOG << "FATAL scanning proposals encountered bad key" << std::endl;
-        return false;
+        goto fail;
     }
+	ret = true;
 
-    return true;
+fail:
+	mdb_txn_reset(m_rtxn);
+    return ret;
 }
 
 bool
@@ -1488,8 +1499,10 @@ fact_store :: fsck_clients(bool verbose,
                            bool)
 {
 	MDB_val pref;
+	bool ret = false;
 	MVS(pref, "client");
-    prefix_iterator clients(&pref, m_db, m_dbi, 14);
+	mdb_txn_renew(m_rtxn);
+    prefix_iterator clients(&pref, m_rtxn, m_dbi, 14);
 
     for (; clients.valid(); clients.next())
     {
@@ -1501,17 +1514,19 @@ fact_store :: fsck_clients(bool verbose,
 		    memcmp(clients.val()->mv_data, "die", 3))
         {
             FSCK_LOG << "FATAL client " << client << " is neither registered nor dead" << std::endl;
-            return false;
+            goto fail;
         }
     }
 
     if (clients.error())
     {
         FSCK_LOG << "FATAL scanning clients encountered bad key" << std::endl;
-        return false;
+        goto fail;
     }
-
-    return true;
+	ret = true;
+fail:
+	mdb_txn_reset(m_rtxn);
+    return ret;
 }
 
 bool
@@ -1521,9 +1536,11 @@ fact_store :: fsck_slots(bool verbose,
     // check slots ////////////////////////////////////////////////////////////
 	MDB_val pref;
 	MVS(pref, "slots");
-    prefix_iterator slots(&pref, m_db, m_dbi, 12);
+	mdb_txn_renew(m_rtxn);
+    prefix_iterator slots(&pref, m_rtxn, m_dbi, 12);
     uint64_t prev_slot = 0;
     bool slot_jumps = false;
+	bool ret = false;
 
     for (; slots.valid(); slots.next())
     {
@@ -1547,7 +1564,7 @@ fact_store :: fsck_slots(bool verbose,
             }
             else
             {
-                return false;
+                goto fail;
             }
         }
 
@@ -1557,12 +1574,13 @@ fact_store :: fsck_slots(bool verbose,
     if (slots.error())
     {
         FSCK_LOG << "FATAL scanning slots encountered bad key" << std::endl;
-        return false;
+        goto fail;
     }
 
     // check acks /////////////////////////////////////////////////////////////
 	MVS(pref, "ack");
-    prefix_iterator acks(&pref, m_db, m_dbi, 11);
+	{
+    prefix_iterator acks(&pref, m_rtxn, m_dbi, 11);
 
     for (; acks.valid(); acks.next())
     {
@@ -1583,7 +1601,7 @@ fact_store :: fsck_slots(bool verbose,
             }
             else
             {
-                return false;
+                goto fail;
             }
         }
     }
@@ -1591,12 +1609,14 @@ fact_store :: fsck_slots(bool verbose,
     if (acks.error())
     {
         FSCK_LOG << "FATAL scanning acks encountered bad key" << std::endl;
-        return false;
+        goto fail;
     }
+	}
 
     // check execs ////////////////////////////////////////////////////////////
 	MVS(pref, "exec");
-    prefix_iterator execs(&pref, m_db, m_dbi, 12);
+	{
+    prefix_iterator execs(&pref, m_rtxn, m_dbi, 12);
 
     for (; execs.valid(); execs.next())
     {
@@ -1617,7 +1637,7 @@ fact_store :: fsck_slots(bool verbose,
             }
             else
             {
-                return false;
+                goto fail;
             }
         }
     }
@@ -1625,12 +1645,14 @@ fact_store :: fsck_slots(bool verbose,
     if (execs.error())
     {
         FSCK_LOG << "FATAL scanning execs encountered bad key" << std::endl;
-        return false;
+        goto fail;
     }
+	}
 
     // check nonces ///////////////////////////////////////////////////////////
 	MVS(pref, "nonce");
-    prefix_iterator nonces(&pref, m_db, m_dbi, 21);
+	{
+    prefix_iterator nonces(&pref, m_rtxn, m_dbi, 21);
 
     for (; nonces.valid(); nonces.next())
     {
@@ -1644,7 +1666,7 @@ fact_store :: fsck_slots(bool verbose,
         if (nonces.val()->mv_size != sizeof(uint64_t))
         {
             FSCK_LOG << "FATAL (client=" << client << ", nonce=" << nonce << ") does not map to a valid slot" << std::endl;
-            return false;
+            goto fail;
         }
 
         uint64_t slot;
@@ -1665,7 +1687,7 @@ fact_store :: fsck_slots(bool verbose,
             }
             else
             {
-                return false;
+                goto fail;
             }
         }
 
@@ -1679,7 +1701,7 @@ fact_store :: fsck_slots(bool verbose,
         {
             FSCK_LOG << "FATAL key (client=" << client << ", nonce=" << nonce << ") points at slot " << slot << " which does not reciprocate" << std::endl;
             FSCK_LOG << "          (sclient=" << sclient << ", snonce=" << snonce << ")" << std::endl;
-            return false;
+            goto fail;
         }
 
         char ckey[KEY_SIZE_CLIENT];
@@ -1696,7 +1718,7 @@ fact_store :: fsck_slots(bool verbose,
             }
             else
             {
-                return false;
+                goto fail;
             }
         }
     }
@@ -1704,8 +1726,13 @@ fact_store :: fsck_slots(bool verbose,
     if (nonces.error())
     {
         FSCK_LOG << "FATAL scanning nonces encountered bad key" << std::endl;
-        return false;
+        goto fail;
     }
+	}
+	ret = true;
 
-    return true;
+fail:
+	mdb_txn_reset(m_rtxn);
+
+    return ret;
 }
