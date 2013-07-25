@@ -41,10 +41,16 @@
 // Replicant
 #include "daemon/daemon.h"
 
-#include <cstdio>
 int
 main(int argc, const char* argv[])
 {
+    const char* wrap_name = getenv("REPLICANT_WRAP");
+
+    if (wrap_name)
+    {
+        argv[0] = wrap_name;
+    }
+
     bool daemonize = true;
     const char* data = ".";
     bool listen;
@@ -53,13 +59,18 @@ main(int argc, const char* argv[])
     bool connect;
     const char* connect_host = "127.0.0.1";
     long connect_port = 1982;
+    bool init = false;
+    const char* init_obj = NULL;
+    const char* init_lib = NULL;
+    const char* init_str = NULL;
+
     e::argparser ap;
     ap.autohelp();
     ap.arg().name('d', "daemon")
-            .description("run replicant in the background")
+            .description("run in the background")
             .set_true(&daemonize);
     ap.arg().name('f', "foreground")
-            .description("run replicant in the foreground")
+            .description("run in the foreground")
             .set_false(&daemonize);
     ap.arg().name('D', "data")
             .description("store persistent state in this directory (default: .)")
@@ -71,11 +82,20 @@ main(int argc, const char* argv[])
             .description("listen on an alternative port (default: 1982)")
             .metavar("port").as_long(&listen_port).set_true(&listen);
     ap.arg().name('c', "connect")
-            .description("join an existing replicant cluster through IP address or hostname")
+            .description("join an existing cluster through IP address or hostname")
             .metavar("addr").as_string(&connect_host).set_true(&connect);
     ap.arg().name('P', "connect-port")
             .description("connect to an alternative port (default: 1982)")
             .metavar("port").as_long(&connect_port).set_true(&connect);
+    ap.arg().long_name("object")
+            .description("initialize a new cluster with this object")
+            .metavar("object").as_string(&init_obj).set_true(&init).hidden();
+    ap.arg().long_name("library")
+            .description("initialize a new cluster with this library for the object")
+            .metavar("library").as_string(&init_lib).set_true(&init).hidden();
+    ap.arg().long_name("init-string")
+            .description("initialize a new cluster by calling \"init\" on the object")
+            .metavar("library").as_string(&init_str).hidden();
 
     if (!ap.parse(argc, argv))
     {
@@ -143,6 +163,12 @@ main(int argc, const char* argv[])
         return EXIT_FAILURE;
     }
 
+    if (init && (init_obj == NULL || init_lib == NULL))
+    {
+        std::cerr << "object and library must be either omitted or presented as a pair" << std::endl;
+        return EXIT_FAILURE;
+    }
+
     google::InitGoogleLogging(argv[0]);
     google::InstallFailureSignalHandler();
 
@@ -152,7 +178,8 @@ main(int argc, const char* argv[])
         return d.run(daemonize,
                      po6::pathname(data),
                      listen, bind_to,
-                     connect, po6::net::hostname(connect_host, connect_port));
+                     connect, po6::net::hostname(connect_host, connect_port),
+                     init_obj, init_lib, init_str);
     }
     catch (po6::error& e)
     {

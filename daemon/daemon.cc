@@ -137,7 +137,10 @@ daemon :: run(bool daemonize,
               bool set_bind_to,
               po6::net::location bind_to,
               bool set_existing,
-              po6::net::hostname existing)
+              po6::net::hostname existing,
+              const char* init_obj,
+              const char* init_lib,
+              const char* init_str)
 {
     if (!install_signal_handler(SIGHUP))
     {
@@ -210,6 +213,7 @@ daemon :: run(bool daemonize,
     }
 
     m_us.address = bind_to;
+    bool init = false;
 
     // case 1:  start a new cluster
     if (!restored && !set_existing)
@@ -229,6 +233,7 @@ daemon :: run(bool daemonize,
         m_config_manager.reset(initial);
         m_fs.inform_configuration(initial);
         LOG(INFO) << "started new cluster from command-line arguments: " << initial;
+        init = init_obj && init_lib;
     }
     // case 2: joining a new cluster
     else if (!restored && set_existing)
@@ -371,6 +376,60 @@ daemon :: run(bool daemonize,
             !IS_SPECIAL_OBJECT(object))
         {
             m_object_manager.enqueue(slot, object, client, nonce, dat, &backing);
+        }
+    }
+
+    if (init)
+    {
+        assert(init_obj);
+        assert(init_lib);
+        assert(m_fs.next_slot_to_issue() == 1);
+        assert(m_fs.next_slot_to_ack() == 1);
+        std::vector<char> lib(sizeof(uint64_t));
+
+        // Encode the object name
+        assert(strlen(init_obj) <= sizeof(uint64_t));
+        memset(&lib[0], 0, sizeof(lib.size()));
+        memmove(&lib[0], init_obj, strlen(init_obj));
+        uint64_t obj = 0;
+        e::unpack64be(&lib[0], &obj);
+
+        // Read the library
+        char buf[4096];
+        po6::io::fd fd(open(init_lib, O_RDONLY));
+
+        if (fd.get() < 0)
+        {
+            PLOG(ERROR) << "could not open library";
+            return EXIT_FAILURE;
+        }
+
+        ssize_t amt = 0;
+
+        while ((amt = fd.xread(buf, 4096)) > 0)
+        {
+            size_t tmp = lib.size();
+            lib.resize(tmp + amt);
+            memmove(&lib[tmp], buf, amt);
+        }
+
+        if (amt < 0)
+        {
+            PLOG(ERROR) << "could not read library";
+            return EXIT_FAILURE;
+        }
+
+        e::slice lib_slice(&lib[0], lib.size());
+        issue_command(1, OBJECT_OBJ_NEW, 0, 0, lib_slice);
+        LOG(INFO) << "initializing " << init_obj << " with " << init_lib;
+
+        if (init_str)
+        {
+            std::vector<char> init_buf(5 + strlen(init_str) + 1);
+            memmove(&init_buf[0], "init\x00", 5);
+            memmove(&init_buf[5], init_str, strlen(init_str) + 1);
+            e::slice init_slice(&init_buf[0], init_buf.size());
+            issue_command(2, obj, 0, 0, init_slice);
         }
     }
 
@@ -1234,7 +1293,6 @@ daemon :: periodic_maintain_cluster(uint64_t now)
             if (!suspicions[i].in_chain &&
                 suspicions[i].suspicion <= threshold)
             {
-                LOG(INFO) << "THIS CASE";
                 configuration new_config(m_config_manager.latest());
                 new_config.add_to_chain(suspicions[i].token);
                 new_config.bump_version();
@@ -1404,7 +1462,6 @@ daemon :: process_command_submit(const replicant::connection& conn,
         size_t sz = BUSYBEE_HEADER_SIZE + pack_size(REPLNET_CLIENT_UNKNOWN);
         msg.reset(e::buffer::create(sz));
         msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_CLIENT_UNKNOWN;
-        LOG(INFO) << "SENT " << send_no_disruption(client, msg);
         return;
     }
 
@@ -1415,7 +1472,6 @@ daemon :: process_command_submit(const replicant::connection& conn,
         size_t sz = BUSYBEE_HEADER_SIZE + pack_size(REPLNET_CLIENT_UNKNOWN);
         msg.reset(e::buffer::create(sz));
         msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_CLIENT_UNKNOWN;
-        LOG(INFO) << "SENT " << send_no_disruption(client, msg);
         return;
     }
 

@@ -70,7 +70,10 @@ class daemon
                 bool set_bind_to,
                 po6::net::location bind_to,
                 bool set_existing,
-                po6::net::hostname existing);
+                po6::net::hostname existing,
+                const char* init_obj,
+                const char* init_lib,
+                const char* init_str);
 
     // Configure the chain membership via (re)configuration
     private:
