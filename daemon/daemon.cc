@@ -1581,7 +1581,11 @@ daemon :: issue_command(uint64_t slot,
     }
 
 #ifdef REPL_LOG_COMMANDS
-    LOG(INFO) << "ISSUE " << slot << " " << data.hex();
+    LOG(INFO) << "ISSUE slot=" << slot
+              << " object=" << object
+              << " client=" << client
+              << " nonce=" << nonce
+              << " data=" << data.hex();
 #endif
 
     m_fs.issue_slot(slot, object, client, nonce, data);
@@ -1648,7 +1652,11 @@ daemon :: acknowledge_command(uint64_t slot)
     }
 
 #ifdef REPL_LOG_COMMANDS
-    LOG(INFO) << "ACK " << slot;
+    LOG(INFO) << "ACK slot=" << slot
+              << " object=" << object
+              << " client=" << client
+              << " nonce=" << nonce
+              << " data=" << data.hex();
 #endif
 
     m_fs.ack_slot(slot);
@@ -1749,7 +1757,8 @@ daemon :: process_heal_req(const replicant::connection& conn,
     std::auto_ptr<e::buffer> resp(e::buffer::create(sz));
     resp->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_HEAL_RESP << version << to_ack;
     send(conn, resp);
-    LOG(INFO) << "resetting healing process with " << conn.token;
+    LOG(INFO) << "resetting healing process with our predecessor " << conn.token
+              << ": version=" << version << " to_ack=" << to_ack;
 }
 
 void
@@ -1815,6 +1824,7 @@ daemon :: process_heal_done(const replicant::connection& conn,
     {
         msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_HEAL_DONE;
         send(conn, msg);
+        LOG(INFO) << "the connection with the prev node is 100% healed";
     }
 }
 
