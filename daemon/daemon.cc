@@ -863,8 +863,7 @@ daemon :: process_config_accept(const replicant::connection& conn,
 
     if (!m_config_manager.get_proposal(proposal_id, proposal_time, &new_config))
     {
-        LOG(ERROR) << "could not get proposal " << proposal_id << ":" << proposal_time
-                   << " from local state despite knowing that it was proposed (file a bug)";
+        // This proposal was made obsolete by an "INFORM" message
         return;
     }
 
@@ -937,8 +936,7 @@ daemon :: process_config_reject(const replicant::connection& conn,
 
     if (!m_config_manager.get_proposal(proposal_id, proposal_time, &new_config))
     {
-        LOG(ERROR) << "could not get proposal from local state despite "
-                   << "knowing that it was proposed (file a bug)";
+        // This proposal was made obsolete by an "INFORM" message
         return;
     }
 
