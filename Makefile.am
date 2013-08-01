@@ -175,6 +175,7 @@ replicant_repair_LDADD = $(E_LIBS) $(HYPERLEVELDB_LIBS) -lglog
 
 if ENABLE_EXAMPLES
 replicantexec_LTLIBRARIES += libreplicant-example-condition.la
+replicantexec_LTLIBRARIES += libreplicant-example-counter.la
 replicantexec_LTLIBRARIES += libreplicant-example-echo.la
 replicantexec_LTLIBRARIES += libreplicant-example-log.la
 replicantexec_LTLIBRARIES += libreplicant-example-nop.la
@@ -182,6 +183,9 @@ endif
 
 libreplicant_example_condition_la_SOURCES = examples/condition.c
 libreplicant_example_condition_la_CPPFLAGS = -I$(abs_top_srcdir)/daemon/ $(AM_CPPFLAGS) $(CPPFLAGS)
+
+libreplicant_example_counter_la_SOURCES = examples/counter.c
+libreplicant_example_counter_la_CPPFLAGS = -I$(abs_top_srcdir)/daemon/ $(AM_CPPFLAGS) $(CPPFLAGS)
 
 libreplicant_example_echo_la_SOURCES = examples/echo.c
 libreplicant_example_echo_la_CPPFLAGS = -I$(abs_top_srcdir)/daemon/ $(AM_CPPFLAGS) $(CPPFLAGS)
