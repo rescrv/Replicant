@@ -117,7 +117,7 @@ daemon :: daemon()
     , m_fs()
 {
     m_object_manager.set_callback(this, &daemon::record_execution, &daemon::send_notify);
-    trip_periodic(0, &daemon::periodic_describe_cluster);
+    trip_periodic(0, &daemon::periodic_describe_slots);
     trip_periodic(0, &daemon::periodic_exchange);
 }
 
@@ -715,13 +715,6 @@ daemon :: process_config_propose(const replicant::connection& conn,
     size_t configs_sz = config_chain.size() - idx_stable;
     m_fs.propose_configuration(proposal_id, proposal_time, configs, configs_sz);
 
-    // Can we just accept the proposal because it takes a NOP state transition?
-    if (configs_sz == 1 && configs[0] == m_config_manager.stable())
-    {
-        LOG(INFO) << "proposal " << proposal_id << ":" << proposal_time << " adopted by fiat";
-        return accept_proposal(sender, proposal_id, proposal_time);
-    }
-
     // Make sure that we could propose it
     if (!m_config_manager.is_compatible(configs, configs_sz))
     {
@@ -870,8 +863,8 @@ daemon :: process_config_accept(const replicant::connection& conn,
 
     if (!m_config_manager.get_proposal(proposal_id, proposal_time, &new_config))
     {
-        LOG(ERROR) << "could not get proposal from local state despite "
-                   << "knowing that it was proposed (file a bug)";
+        LOG(ERROR) << "could not get proposal " << proposal_id << ":" << proposal_time
+                   << " from local state despite knowing that it was proposed (file a bug)";
         return;
     }
 
@@ -936,7 +929,7 @@ daemon :: process_config_reject(const replicant::connection& conn,
 
     if (m_fs.is_rejected_configuration(proposal_id, proposal_time))
     {
-        // This is a duplicate accept, so we can drop it
+        // This is a duplicate reject, so we can drop it
         return;
     }
 
@@ -1050,7 +1043,6 @@ void
 daemon :: post_reconfiguration_hooks()
 {
     trip_periodic(0, &daemon::periodic_maintain_cluster);
-    trip_periodic(0, &daemon::periodic_describe_cluster);
 
     const configuration& config(m_config_manager.stable());
     LOG(INFO) << "deploying configuration " << config;
@@ -1151,13 +1143,8 @@ daemon :: post_reconfiguration_hooks()
             ++it;
         }
     }
-}
 
-void
-daemon :: periodic_describe_cluster(uint64_t now)
-{
-    trip_periodic(now + m_s.REPORT_INTERVAL, &daemon::periodic_describe_cluster);
-    LOG(INFO) << "we are " << m_us;
+    // Log to let people know
     LOG(INFO) << "the latest stable configuration is " << m_config_manager.stable();
     LOG(INFO) << "the latest proposed configuration is " << m_config_manager.latest();
     uint64_t f_d = m_s.FAULT_TOLERANCE;
@@ -1718,6 +1705,15 @@ daemon :: record_execution(uint64_t slot, uint64_t client, uint64_t nonce, repli
 }
 
 void
+daemon :: periodic_describe_slots(uint64_t now)
+{
+    trip_periodic(now + m_s.REPORT_INTERVAL, &daemon::periodic_describe_slots);
+    LOG(INFO) << "we are " << m_us << " and here's some info:"
+              << " issued <=" << m_fs.next_slot_to_issue()
+              << " | acked <=" << m_fs.next_slot_to_ack();
+}
+
+void
 daemon :: process_heal_req(const replicant::connection& conn,
                            std::auto_ptr<e::buffer>,
                            e::unpacker up)
@@ -1753,6 +1749,7 @@ daemon :: process_heal_req(const replicant::connection& conn,
     std::auto_ptr<e::buffer> resp(e::buffer::create(sz));
     resp->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_HEAL_RESP << version << to_ack;
     send(conn, resp);
+    LOG(INFO) << "resetting healing process with " << conn.token;
 }
 
 void
@@ -1798,7 +1795,7 @@ daemon :: process_heal_resp(const replicant::connection& conn,
     m_heal_next.acknowledged = to_ack;
     m_heal_next.proposed = to_ack;
 
-    LOG(INFO) << "initiating state transfer starting at slot " << to_ack;
+    LOG(INFO) << "initiating state transfer to " << conn.token << " starting at slot " << to_ack;
     transfer_more_state();
 }
 
@@ -1851,6 +1848,11 @@ daemon :: transfer_more_state()
         pa.copy(data);
         const chain_node* next = m_config_manager.stable().next(m_us.token);
         assert(next);
+
+        if (slot % 10000 == 0)
+        {
+            LOG(INFO) << "transferred through slot " << slot;
+        }
 
         if (send(*next, msg))
         {

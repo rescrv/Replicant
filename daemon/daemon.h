@@ -111,7 +111,6 @@ class daemon
         // about this configuration w.r.t. previously issued ones and this call
         // will assert that
         void propose_config(const configuration& config);
-        void periodic_describe_cluster(uint64_t now);
         void periodic_maintain_cluster(uint64_t now);
 
     // Client-related functions
@@ -139,6 +138,7 @@ class daemon
                            const e::slice& data);
         void acknowledge_command(uint64_t slot);
         void record_execution(uint64_t slot, uint64_t client, uint64_t nonce, replicant::response_returncode rc, const e::slice& data);
+        void periodic_describe_slots(uint64_t now);
 
     // Error-case chain functions
     private:

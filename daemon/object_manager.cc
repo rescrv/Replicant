@@ -387,7 +387,7 @@ object_manager :: enqueue(uint64_t slot, uint64_t obj_id,
         ctx.conditions = cw;
         ctx.response = NULL;
         ctx.response_sz = 0;
-        obj->rsm = obj->sym->ctor(&ctx);
+        obj->rsm = obj->sym->ctor(&ctx); // XXX if NULL, consider object failed
         fclose(ctx.output);
         ctx.output = NULL;
         log_messages(obj_id, obj, slot, "the constructor");

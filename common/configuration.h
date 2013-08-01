@@ -109,6 +109,10 @@ class configuration
         uint64_t m_command_sz;
 };
 
+// < compares version only
+bool
+operator < (const configuration& lhs, const configuration& rhs);
+
 bool
 operator == (const configuration& lhs, const configuration& rhs);
 inline bool

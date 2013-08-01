@@ -147,7 +147,8 @@ noinst_PROGRAMS += replicant-block
 noinst_PROGRAMS += replicant-cli
 replicantexec_PROGRAMS += replicant-new-object
 replicantexec_PROGRAMS += replicant-del-object
-replicantexec_PROGRAMS += replicant-repair
+replicantexec_PROGRAMS += replicant-debug-dump
+replicantexec_PROGRAMS += replicant-integrity-check
 
 noinst_HEADERS += tools/common.h
 
@@ -166,8 +167,11 @@ replicant_new_object_LDADD = libreplicant.la
 replicant_del_object_SOURCES = tools/del-object.cc
 replicant_del_object_LDADD = libreplicant.la
 
-replicant_repair_SOURCES = tools/repair.cc common/chain_node.cc common/configuration.cc common/packing.cc daemon/configuration_manager.cc daemon/fact_store.cc
-replicant_repair_LDADD = $(E_LIBS) $(HYPERLEVELDB_LIBS) -lglog
+replicant_integrity_check_SOURCES = tools/integrity-check.cc common/chain_node.cc common/configuration.cc common/packing.cc common/response_returncode.cc daemon/configuration_manager.cc daemon/fact_store.cc
+replicant_integrity_check_LDADD = $(E_LIBS) $(HYPERLEVELDB_LIBS) -lglog
+
+replicant_debug_dump_SOURCES = tools/debug-dump.cc common/chain_node.cc common/configuration.cc common/packing.cc common/response_returncode.cc daemon/configuration_manager.cc daemon/fact_store.cc
+replicant_debug_dump_LDADD = $(E_LIBS) $(HYPERLEVELDB_LIBS) -lglog
 
 ################################################################################
 ################################### Examples ###################################

@@ -408,6 +408,12 @@ configuration :: grow_command_chain()
 }
 
 bool
+replicant :: operator < (const configuration& lhs, const configuration& rhs)
+{
+    return lhs.version() < rhs.version();
+}
+
+bool
 replicant :: operator == (const configuration& lhs, const configuration& rhs)
 {
     if (lhs.m_cluster != rhs.m_cluster ||
@@ -449,9 +455,9 @@ replicant :: operator << (std::ostream& lhs, const configuration& rhs)
         << ", version=" << rhs.m_version
         << ", command=[";
 
-    for (size_t i = 0; i < rhs.m_command_sz; ++i)
+    for (size_t i = 0; i < std::min(rhs.m_command_sz, rhs.m_chain.size()); ++i)
     {
-        lhs << rhs.m_chain[i] << (i + 1 < rhs.m_command_sz ? ", " : "");
+        lhs << rhs.m_chain[i] << (i + 1 < std::min(rhs.m_command_sz, rhs.m_chain.size()) ? ", " : "");
     }
 
     lhs << "], config=[";

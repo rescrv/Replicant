@@ -25,68 +25,43 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
-// Popt
-#include <popt.h>
-
 // e
-#include <e/guard.h>
+#include <e/popt.h>
 
 // Replicant
 #include "daemon/fact_store.h"
 
-static const char* _data = ".";
-
-extern "C"
-{
-
-static struct poptOption popts[] = {
-    POPT_AUTOHELP
-    {"data", 'D', POPT_ARG_STRING, &_data, 'D',
-     "store persistent state in this directory (default: .)",
-     "dir"},
-    POPT_TABLEEND
-};
-
-} // extern "C"
-
 int
 main(int argc, const char* argv[])
 {
-    poptContext poptcon;
-    poptcon = poptGetContext(NULL, argc, argv, popts, POPT_CONTEXT_POSIXMEHARDER);
-    e::guard g = e::makeguard(poptFreeContext, poptcon); g.use_variable();
-    int rc;
+    const char* _data = ".";
+    e::argparser ap;
+    ap.autohelp();
+    ap.arg().name('D', "data")
+            .description("store persistent state in this directory (default: .)")
+            .as_string(&_data).metavar("dir");
 
-    while ((rc = poptGetNextOpt(poptcon)) != -1)
+    if (!ap.parse(argc, argv))
     {
-        switch (rc)
-        {
-            case 'D':
-                break;
-            case POPT_ERROR_NOARG:
-            case POPT_ERROR_BADOPT:
-            case POPT_ERROR_BADNUMBER:
-            case POPT_ERROR_OVERFLOW:
-                std::cerr << poptStrerror(rc) << " " << poptBadOption(poptcon, 0) << std::endl;
-                return EXIT_FAILURE;
-            case POPT_ERROR_OPTSTOODEEP:
-            case POPT_ERROR_BADQUOTE:
-            case POPT_ERROR_ERRNO:
-            default:
-                std::cerr << "logic error in argument parsing" << std::endl;
-                return EXIT_FAILURE;
-        }
+        return EXIT_FAILURE;
+    }
+
+    if (ap.args_sz() != 0)
+    {
+        std::cerr << "command takes no arguments" << std::endl;
+        ap.usage();
+        return EXIT_FAILURE;
     }
 
     try
     {
         po6::pathname data(_data);
         replicant::fact_store fs;
-        return fs.repair(data) ? EXIT_SUCCESS : EXIT_FAILURE;
+        return fs.debug_dump(data) ? EXIT_SUCCESS : EXIT_FAILURE;
     }
-    catch (po6::error& e)
+    catch (std::exception& e)
     {
-        std::cerr << "system error:  " << e.what() << std::endl;
+        std::cerr << "error:  " << e.what() << std::endl;
         return EXIT_FAILURE;
     }
 }

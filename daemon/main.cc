@@ -53,10 +53,10 @@ main(int argc, const char* argv[])
 
     bool daemonize = true;
     const char* data = ".";
-    bool listen;
+    bool listen = false;
     const char* listen_host = "auto";
     long listen_port = 1982;
-    bool connect;
+    bool connect = false;
     const char* connect_host = "127.0.0.1";
     long connect_port = 1982;
     bool init = false;
@@ -181,9 +181,9 @@ main(int argc, const char* argv[])
                      connect, po6::net::hostname(connect_host, connect_port),
                      init_obj, init_lib, init_str);
     }
-    catch (po6::error& e)
+    catch (std::exception& e)
     {
-        std::cerr << "system error:  " << e.what() << std::endl;
+        std::cerr << "error:  " << e.what() << std::endl;
         return EXIT_FAILURE;
     }
 }

@@ -25,6 +25,9 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
+// e
+#include <e/strescape.h>
+
 // Replicant
 #include "client/replicant.h"
 #include "tools/common.h"
@@ -39,7 +42,7 @@ main(int argc, const char* argv[])
     obj.arg().name('o', "object")
              .description("manipulate a specific object (default: \"echo\")")
              .metavar("object").as_string(&object);
-    obj.arg().name('c', "function")
+    obj.arg().name('f', "function")
              .description("call a specific function (default: \"echo\")")
              .metavar("function").as_string(&function);
     e::argparser ap;
@@ -114,7 +117,7 @@ main(int argc, const char* argv[])
             }
 
             std::string out(output, output_sz);
-            std::cout << out << std::endl;
+            std::cout << e::strescape(out) << std::endl;
             replicant_destroy_output(output, output_sz);
         }
 

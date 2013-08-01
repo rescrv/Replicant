@@ -57,7 +57,6 @@ class fact_store
                   bool* saved,
                   chain_node* saved_us,
                   configuration_manager* saved_config_manager);
-        bool repair(const po6::pathname& path);
         bool save(const chain_node& saved_us);
 
     // Manage configurations
@@ -104,42 +103,58 @@ class fact_store
                        const e::slice& data);
         void clear_unacked_slots();
 
+    // entry points for command-line tools
+    public:
+        bool debug_dump(const po6::pathname& path);
+        bool integrity_check(const po6::pathname& path, bool destructive);
+
+    private:
+        class slot;
+        class exec;
+        class slot_mapping;
+
+    // setup the database
+    private:
+        leveldb::Status open_db(const po6::pathname& path, bool create);
+        bool initialize(std::ostream& ostr, bool* restored, chain_node* us);
+
+    // integrity checks
+    private:
+        bool integrity_check(int tries_remaining, bool output, bool destructive,
+                             configuration_manager* config_manager);
+
+    // shortcuts for LevelDB opts
     private:
         bool check_key_exists(const char* key, size_t key_sz);
-        bool retrieve_value(const char* key, size_t key_sz,
-                            std::string* backing);
         void store_key_value(const char* key, size_t key_sz,
                              const char* value, size_t value_sz);
+        bool retrieve_value(const char* key, size_t key_sz,
+                            std::string* backing);
         void delete_key(const char* key, size_t key_sz);
         bool only_key_is_replicant_key();
 
+    // read data from leveldb in bulk
     private:
-        bool fsck(bool verbose,
-                  bool destructive,
-                  configuration_manager* config_manager);
-        bool fsck_meta_state(bool verbose,
-                             bool destructive,
-                             configuration_manager* config_manager);
-        bool scan_accepted_proposals(bool verbose,
-                                     bool destructive,
-                                     std::vector<std::pair<uint64_t, uint64_t> >* accepted_proposals);
-        bool scan_rejected_proposals(bool verbose,
-                                     bool destructive,
-                                     std::vector<std::pair<uint64_t, uint64_t> >* rejected_proposals);
-        bool scan_informed_configurations(bool verbose,
-                                          bool destructive,
-                                          std::map<uint64_t, configuration>* configurations);
-        bool scan_proposals(bool verbose,
-                            bool destructive,
-                            const std::vector<std::pair<uint64_t, uint64_t> >& accepted_proposals,
-                            const std::vector<std::pair<uint64_t, uint64_t> >& rejected_proposals,
-                            std::vector<configuration_manager::proposal>* proposals,
-                            std::map<uint64_t, configuration>* proposed,
-                            std::map<uint64_t, configuration>* accepted);
-        bool fsck_clients(bool verbose,
-                          bool destructive);
-        bool fsck_slots(bool verbose,
-                        bool destructive);
+        bool scan_all(std::vector<std::pair<uint64_t, uint64_t> >* proposals,
+                      std::vector<std::vector<configuration> >* proposed_configs,
+                      std::vector<std::pair<uint64_t, uint64_t> >* accepted_proposals,
+                      std::vector<std::pair<uint64_t, uint64_t> >* rejected_proposals,
+                      std::vector<std::pair<uint64_t, configuration> >* informed_configs,
+                      std::vector<std::pair<uint64_t, const char*> >* clients,
+                      std::vector<slot>* slots_issued,
+                      std::vector<uint64_t>* slots_acked,
+                      std::vector<exec>* slots_execd,
+                      std::vector<slot_mapping>* slot_mappings);
+        leveldb::Status scan_proposals(std::vector<std::pair<uint64_t, uint64_t> >* proposals,
+                                       std::vector<std::vector<configuration> >* proposed_configs);
+        leveldb::Status scan_accepted_proposals(std::vector<std::pair<uint64_t, uint64_t> >* accepted_proposals);
+        leveldb::Status scan_rejected_proposals(std::vector<std::pair<uint64_t, uint64_t> >* rejected_proposals);
+        leveldb::Status scan_informed_configurations(std::vector<std::pair<uint64_t, configuration> >* informed_configs);
+        leveldb::Status scan_clients(std::vector<std::pair<uint64_t, const char*> >* clients);
+        leveldb::Status scan_issue_slots(std::vector<slot>* slots_issued);
+        leveldb::Status scan_ack_slots(std::vector<uint64_t>* slots_acked);
+        leveldb::Status scan_exec_slots(std::vector<exec>* slots_execd);
+        leveldb::Status scan_slot_mappings(std::vector<slot_mapping>* slot_mappings);
 
     private:
         fact_store(const fact_store&);
