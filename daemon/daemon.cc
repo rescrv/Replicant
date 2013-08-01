@@ -1532,7 +1532,9 @@ daemon :: process_command_issue(const replicant::connection& conn,
         return;
     }
 
-    if (m_fs.is_issued_slot(slot))
+    const chain_node* tail = m_config_manager.stable().command_tail();
+
+    if (m_fs.is_issued_slot(slot) && (!tail || *tail != m_us))
     {
         // just drop it, we're waiting for an ACK ourselves
         return;
