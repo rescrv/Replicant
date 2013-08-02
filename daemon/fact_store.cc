@@ -880,32 +880,24 @@ fact_store :: clear_unacked_slots()
     uint64_t next_to_ack = next_slot_to_ack();
     uint64_t next_to_issue = next_slot_to_issue();
 
-    prefix_iterator itern(leveldb::Slice(NONCE_PREFIX), m_db);
-
-    for (; itern.valid(); itern.next())
-    {
-        if (itern.key().size() != NONCE_KEY_SIZE ||
-            itern.val().size() != NONCE_VAL_SIZE)
-        {
-            continue;
-        }
-
-        uint64_t client;
-        uint64_t nonce;
-        uint64_t number;
-        unpack_nonce_key(itern.key().data(), &client, &nonce);
-        unpack_nonce_val(itern.val().data(), &number);
-
-        if (number >= next_to_ack)
-        {
-            delete_key(itern.key().data(), itern.key().size());
-        }
-    }
-
     while (next_to_issue >= next_to_ack)
     {
         char key[SLOT_KEY_SIZE];
         pack_slot_key(next_to_issue, key);
+        std::string backing;
+        uint64_t object;
+        uint64_t client;
+        uint64_t nonce;
+        e::slice data;
+
+        if (retrieve_value(key, SLOT_KEY_SIZE, &backing) &&
+            unpack_slot_val(leveldb::Slice(backing), &object, &client, &nonce, &data))
+        {
+            char keyn[NONCE_KEY_SIZE];
+            pack_nonce_key(client, nonce, keyn);
+            delete_key(keyn, NONCE_KEY_SIZE);
+        }
+
         delete_key(key, SLOT_KEY_SIZE);
         --next_to_issue;
     }

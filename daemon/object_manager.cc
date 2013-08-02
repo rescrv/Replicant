@@ -116,6 +116,7 @@ class object_manager::object
         std::auto_ptr<po6::threads::thread> thread;
         po6::threads::mutex mtx;
         po6::threads::cond commands_avail;
+        po6::threads::cond command_consumed;
         std::list<command> commands;
         uint64_t slot;
         void* lib;
@@ -140,6 +141,7 @@ object_manager :: object :: object()
     : thread()
     , mtx()
     , commands_avail(&mtx)
+    , command_consumed(&mtx)
     , commands()
     , slot(0)
     , lib(NULL)
@@ -456,6 +458,25 @@ object_manager :: enqueue(uint64_t slot, uint64_t obj_id,
 }
 
 void
+object_manager :: throttle(uint64_t obj_id, size_t sz)
+{
+    object_map_t::iterator it = m_objects.find(obj_id);
+
+    if (it == m_objects.end())
+    {
+        return;
+    }
+
+    e::intrusive_ptr<object> obj = it->second;
+    po6::threads::mutex::hold hold(&obj->mtx);
+
+    while (obj->commands.size() > sz)
+    {
+        obj->command_consumed.wait();
+    }
+}
+
+void
 object_manager :: wait(uint64_t obj_id, uint64_t client, uint64_t nonce, uint64_t cond, uint64_t state)
 {
     if (!IS_SPECIAL_OBJECT(obj_id))
@@ -628,6 +649,8 @@ object_manager :: worker_thread(uint64_t obj_id, e::intrusive_ptr<object> obj)
             {
                 commands.splice(commands.begin(), obj->commands);
             }
+
+            obj->command_consumed.signal();
         }
 
         while (!commands.empty())

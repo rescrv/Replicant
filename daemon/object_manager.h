@@ -61,6 +61,7 @@ class object_manager
         void enqueue(uint64_t slot, uint64_t object,
                      uint64_t client, uint64_t nonce,
                      const e::slice& data, std::string* backing);
+        void throttle(uint64_t object, size_t sz);
         void wait(uint64_t object, uint64_t client, uint64_t nonce, uint64_t cond, uint64_t state);
 
     private:

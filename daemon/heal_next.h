@@ -52,6 +52,7 @@ class heal_next
 
     public:
         state_t state;
+        uint64_t token;
         uint64_t acknowledged;
         uint64_t proposed;
 };

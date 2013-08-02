@@ -53,8 +53,10 @@ replicant :: operator << (std::ostream& lhs, replicant_network_msgtype rhs)
         stringify(REPLNET_COMMAND_ACK);
         stringify(REPLNET_COMMAND_RESPONSE);
         stringify(REPLNET_HEAL_REQ);
+        stringify(REPLNET_HEAL_RETRY);
         stringify(REPLNET_HEAL_RESP);
         stringify(REPLNET_HEAL_DONE);
+        stringify(REPLNET_STABLE);
         stringify(REPLNET_CONDITION_WAIT);
         stringify(REPLNET_CONDITION_NOTIFY);
         stringify(REPLNET_PING);

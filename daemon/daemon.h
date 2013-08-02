@@ -145,14 +145,21 @@ class daemon
         void process_heal_req(const replicant::connection& conn,
                               std::auto_ptr<e::buffer> msg,
                               e::unpacker up);
+        void process_heal_retry(const replicant::connection& conn,
+                                std::auto_ptr<e::buffer> msg,
+                                e::unpacker up);
         void process_heal_resp(const replicant::connection& conn,
                                std::auto_ptr<e::buffer> msg,
                                e::unpacker up);
         void process_heal_done(const replicant::connection& conn,
                                std::auto_ptr<e::buffer> msg,
                                e::unpacker up);
+        void process_stable(const replicant::connection& conn,
+                            std::auto_ptr<e::buffer> msg,
+                            e::unpacker up);
         void transfer_more_state();
         void periodic_heal_next(uint64_t now);
+        void reset_healing();
 
     // Notify/wait-style conditions
     private:
@@ -210,7 +217,9 @@ class daemon
         failure_detector_map_t m_failure_detectors;
         std::vector<periodic> m_periodic;
         std::map<uint64_t, uint64_t> m_temporary_servers;
+        uint64_t m_heal_token;
         heal_next m_heal_next;
+        uint64_t m_stable_version;
         std::set<uint64_t> m_disrupted_backoff;
         bool m_disrupted_retry_scheduled;
         replicant::fact_store m_fs;
