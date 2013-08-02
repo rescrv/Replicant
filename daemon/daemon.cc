@@ -1405,7 +1405,6 @@ daemon :: process_client_register(const replicant::connection& conn,
         return;
     }
 
-    LOG(INFO) << "registering client " << client;
     uint64_t slot = m_fs.next_slot_to_issue();
     issue_command(slot, OBJECT_CLI_REG, client, 0, e::slice("", 0));
 }
@@ -1438,7 +1437,6 @@ daemon :: process_client_disconnect(const replicant::connection& conn,
     std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
     msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_CLIENT_DISCONNECT;
     uint64_t slot = m_fs.next_slot_to_issue();
-    LOG(INFO) << "disconnecting client " << conn.token;
     issue_command(slot, OBJECT_CLI_DIE, conn.token, nonce, e::slice("", 0));
 }
 
@@ -1697,12 +1695,16 @@ daemon :: acknowledge_command(uint64_t slot)
 
     if (object == OBJECT_CLI_REG || object == OBJECT_CLI_DIE)
     {
+        replicant::response_returncode rc = RESPONSE_SUCCESS;
+
         if (object == OBJECT_CLI_REG)
         {
+            LOG(INFO) << "registering client " << client;
             m_fs.reg_client(client);
         }
         else
         {
+            LOG(INFO) << "disconnecting client " << client;
             m_fs.die_client(client);
         }
 
@@ -1710,7 +1712,7 @@ daemon :: acknowledge_command(uint64_t slot)
                   + pack_size(REPLNET_COMMAND_RESPONSE)
                   + sizeof(uint64_t) + pack_size(replicant::RESPONSE_SUCCESS);
         std::auto_ptr<e::buffer> response(e::buffer::create(sz));
-        response->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_COMMAND_RESPONSE << nonce << replicant::RESPONSE_SUCCESS;
+        response->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_COMMAND_RESPONSE << nonce << rc;
         send_no_disruption(client, response);
     }
     else
