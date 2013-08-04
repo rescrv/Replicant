@@ -37,30 +37,30 @@ replicant :: operator << (std::ostream& lhs, replicant_network_msgtype rhs)
 {
     switch (rhs)
     {
-        stringify(REPLNET_NOP);
-        stringify(REPLNET_BOOTSTRAP);
-        stringify(REPLNET_INFORM);
-        stringify(REPLNET_SERVER_REGISTER);
-        stringify(REPLNET_SERVER_REGISTER_FAILED);
-        stringify(REPLNET_CONFIG_PROPOSE);
-        stringify(REPLNET_CONFIG_ACCEPT);
-        stringify(REPLNET_CONFIG_REJECT);
-        stringify(REPLNET_CLIENT_REGISTER);
-        stringify(REPLNET_CLIENT_DISCONNECT);
-        stringify(REPLNET_CLIENT_UNKNOWN);
-        stringify(REPLNET_COMMAND_SUBMIT);
-        stringify(REPLNET_COMMAND_ISSUE);
-        stringify(REPLNET_COMMAND_ACK);
-        stringify(REPLNET_COMMAND_RESPONSE);
-        stringify(REPLNET_HEAL_REQ);
-        stringify(REPLNET_HEAL_RETRY);
-        stringify(REPLNET_HEAL_RESP);
-        stringify(REPLNET_HEAL_DONE);
-        stringify(REPLNET_STABLE);
-        stringify(REPLNET_CONDITION_WAIT);
-        stringify(REPLNET_CONDITION_NOTIFY);
-        stringify(REPLNET_PING);
-        stringify(REPLNET_PONG);
+        STRINGIFY(REPLNET_NOP);
+        STRINGIFY(REPLNET_BOOTSTRAP);
+        STRINGIFY(REPLNET_INFORM);
+        STRINGIFY(REPLNET_SERVER_REGISTER);
+        STRINGIFY(REPLNET_SERVER_REGISTER_FAILED);
+        STRINGIFY(REPLNET_CONFIG_PROPOSE);
+        STRINGIFY(REPLNET_CONFIG_ACCEPT);
+        STRINGIFY(REPLNET_CONFIG_REJECT);
+        STRINGIFY(REPLNET_CLIENT_REGISTER);
+        STRINGIFY(REPLNET_CLIENT_DISCONNECT);
+        STRINGIFY(REPLNET_CLIENT_UNKNOWN);
+        STRINGIFY(REPLNET_COMMAND_SUBMIT);
+        STRINGIFY(REPLNET_COMMAND_ISSUE);
+        STRINGIFY(REPLNET_COMMAND_ACK);
+        STRINGIFY(REPLNET_COMMAND_RESPONSE);
+        STRINGIFY(REPLNET_HEAL_REQ);
+        STRINGIFY(REPLNET_HEAL_RETRY);
+        STRINGIFY(REPLNET_HEAL_RESP);
+        STRINGIFY(REPLNET_HEAL_DONE);
+        STRINGIFY(REPLNET_STABLE);
+        STRINGIFY(REPLNET_CONDITION_WAIT);
+        STRINGIFY(REPLNET_CONDITION_NOTIFY);
+        STRINGIFY(REPLNET_PING);
+        STRINGIFY(REPLNET_PONG);
         default:
             lhs << "unknown msgtype";
     }

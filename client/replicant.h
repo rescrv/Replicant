@@ -38,6 +38,7 @@
 
 // e
 #include <e/buffer.h>
+#include <e/error.h>
 #include <e/intrusive_ptr.h>
 
 // replicant_returncode occupies [4864, 5120)
@@ -84,11 +85,7 @@ class replicant_client
         ~replicant_client() throw ();
 
     public:
-        const char* last_error_desc() const { return m_last_error_desc; }
-        const char* last_error_file() const { return m_last_error_file; }
-        uint64_t last_error_line() const { return m_last_error_line; }
-
-    public:
+        e::error last_error() { return m_last_error; }
         int64_t new_object(const char* object,
                            const char* path,
                            replicant_returncode* status,
@@ -129,7 +126,7 @@ class replicant_client
         int64_t perform_bootstrap(replicant_returncode* status);
         int64_t send_token_registration(replicant_returncode* status);
         int64_t wait_for_token_registration(replicant_returncode* status);
-        int64_t handle_inform(const po6::net::location& from,
+        int64_t handle_inform(const replicant::chain_node& node,
                               std::auto_ptr<e::buffer> msg,
                               e::unpacker up,
                               replicant_returncode* status);
@@ -140,7 +137,7 @@ class replicant_client
                                                  replicant_returncode* status);
         void handle_disruption(const replicant::chain_node& node,
                                replicant_returncode* status);
-        int64_t handle_command_response(const po6::net::location& from,
+        int64_t handle_command_response(const replicant::chain_node& node,
                                         std::auto_ptr<e::buffer> msg,
                                         e::unpacker up,
                                         replicant_returncode* status);
@@ -163,10 +160,7 @@ class replicant_client
         command_map m_commands;
         command_map m_complete;
         command_map m_resend;
-        const char* m_last_error_desc;
-        const char* m_last_error_file;
-        uint64_t m_last_error_line;
-        po6::net::location m_last_error_host;
+        e::error m_last_error;
 };
 
 std::ostream&

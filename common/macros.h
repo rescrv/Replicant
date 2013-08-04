@@ -28,9 +28,9 @@
 #ifndef replicant_macros_h_
 #define replicant_macros_h_
 
-#define str(x) #x
-#define xstr(x) str(x)
-#define stringify(x) case (x): lhs << xstr(x); break
+#define _XSTR(x) #x
+#define XSTR(x) _XSTR(x)
+#define STRINGIFY(x) case (x): lhs << XSTR(x); break
 
 #define _CONCAT(x, y) x ## y
 #define CONCAT(x, y) _CONCAT(x, y)

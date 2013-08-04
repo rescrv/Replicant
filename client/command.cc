@@ -48,9 +48,7 @@ replicant_client :: command :: command(replicant_returncode* st,
     , m_output(output)
     , m_output_sz(output_sz)
     , m_sent_to()
-    , m_last_error_desc()
-    , m_last_error_file()
-    , m_last_error_line()
+    , m_error()
 {
     *st = REPLICANT_GARBAGE;
 }
@@ -97,4 +95,10 @@ replicant_client :: command :: succeed(std::auto_ptr<e::buffer> backing,
     }
 
     *m_status = status;
+}
+
+void
+replicant_client :: command :: set_error(const e::error& err)
+{
+    m_error = err;
 }

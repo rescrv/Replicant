@@ -89,7 +89,7 @@ main(int argc, const char* argv[])
 
             if (rid < 0)
             {
-                std::cerr << "could not send request: " << r.last_error_desc()
+                std::cerr << "could not send request: " << r.last_error().msg()
                           << " (" << re << ")" << std::endl;
                 return EXIT_FAILURE;
             }
@@ -98,7 +98,7 @@ main(int argc, const char* argv[])
 
             if (lid < 0)
             {
-                std::cerr << "could not loop: " << r.last_error_desc()
+                std::cerr << "could not loop: " << r.last_error().msg()
                           << " (" << le << ")" << std::endl;
                 return EXIT_FAILURE;
             }
@@ -111,7 +111,7 @@ main(int argc, const char* argv[])
 
             if (re != REPLICANT_SUCCESS)
             {
-                std::cerr << "could not process request: " << r.last_error_desc()
+                std::cerr << "could not process request: " << r.last_error().msg()
                           << " (" << re << ")" << std::endl;
                 return EXIT_FAILURE;
             }
@@ -125,7 +125,7 @@ main(int argc, const char* argv[])
 
         if (e != REPLICANT_SUCCESS)
         {
-            std::cerr << "error disconnecting from cluster: " << r.last_error_desc()
+            std::cerr << "error disconnecting from cluster: " << r.last_error().msg()
                           << " (" << e << ")" << std::endl;
             return EXIT_FAILURE;
         }

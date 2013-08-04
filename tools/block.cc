@@ -78,7 +78,7 @@ main(int argc, const char* argv[])
 
             if (wid < 0)
             {
-                std::cerr << "could not initiate wait: " << r.last_error_desc()
+                std::cerr << "could not initiate wait: " << r.last_error().msg()
                           << " (" << re << ")" << std::endl;
                 return EXIT_FAILURE;
             }
@@ -88,7 +88,7 @@ main(int argc, const char* argv[])
 
             if (lid < 0)
             {
-                std::cerr << "could not loop: " << r.last_error_desc()
+                std::cerr << "could not loop: " << r.last_error().msg()
                           << " (" << le << ")" << std::endl;
                 return EXIT_FAILURE;
             }
@@ -101,7 +101,7 @@ main(int argc, const char* argv[])
 
             if (re != REPLICANT_SUCCESS)
             {
-                std::cerr << "could not process request: " << r.last_error_desc()
+                std::cerr << "could not process request: " << r.last_error().msg()
                           << " (" << re << ")" << std::endl;
                 return EXIT_FAILURE;
             }
