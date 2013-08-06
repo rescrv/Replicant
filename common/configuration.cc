@@ -455,9 +455,9 @@ replicant :: operator << (std::ostream& lhs, const configuration& rhs)
         << ", version=" << rhs.m_version
         << ", command=[";
 
-    for (size_t i = 0; i < std::min(rhs.m_command_sz, rhs.m_chain.size()); ++i)
+    for (size_t i = 0; i < std::min((size_t)rhs.m_command_sz, rhs.m_chain.size()); ++i)
     {
-        lhs << rhs.m_chain[i] << (i + 1 < std::min(rhs.m_command_sz, rhs.m_chain.size()) ? ", " : "");
+        lhs << rhs.m_chain[i] << (i + 1 < std::min((size_t)rhs.m_command_sz, rhs.m_chain.size()) ? ", " : "");
     }
 
     lhs << "], config=[";
