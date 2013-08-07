@@ -33,7 +33,7 @@ AM_CXXFLAGS  = $(PO6_CFLAGS) $(E_CFLAGS) $(BUSYBEE_CFLAGS) $(HYPERLEVELDB_CFLAGS
 AM_MAKEFLAGS = --no-print-directory
 
 pkgconfigdir = $(libdir)/pkgconfig
-replicantexecdir = $(libexec)/$(PACKAGE)-$(VERSION)
+replicantexecdir = $(libexecdir)/$(PACKAGE)-$(VERSION)
 
 EXTRA_DIST =
 
