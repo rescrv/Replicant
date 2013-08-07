@@ -192,6 +192,21 @@ configuration_manager :: any(bool (configuration::*func)(uint64_t) const, uint64
     return false;
 }
 
+bool
+configuration_manager :: contains(const configuration& config) const
+{
+    for (std::list<configuration>::const_iterator it = m_configs.begin();
+            it != m_configs.end(); ++it)
+    {
+        if (*it == config)
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 void
 configuration_manager :: advance(const configuration& config)
 {

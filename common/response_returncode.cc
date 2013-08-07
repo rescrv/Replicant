@@ -36,21 +36,21 @@ replicant :: operator << (std::ostream& lhs, response_returncode rhs)
 {
     switch (rhs)
     {
-        stringify(RESPONSE_SUCCESS);
-        stringify(RESPONSE_REGISTRATION_FAIL);
-        stringify(RESPONSE_OBJ_EXIST);
-        stringify(RESPONSE_OBJ_NOT_EXIST);
-        stringify(RESPONSE_COND_NOT_EXIST);
-        stringify(RESPONSE_COND_DESTROYED);
-        stringify(RESPONSE_SERVER_ERROR);
-        stringify(RESPONSE_DLOPEN_FAIL);
-        stringify(RESPONSE_DLSYM_FAIL);
-        stringify(RESPONSE_NO_CTOR);
-        stringify(RESPONSE_NO_RTOR);
-        stringify(RESPONSE_NO_DTOR);
-        stringify(RESPONSE_NO_SNAP);
-        stringify(RESPONSE_NO_FUNC);
-        stringify(RESPONSE_MALFORMED);
+        STRINGIFY(RESPONSE_SUCCESS);
+        STRINGIFY(RESPONSE_REGISTRATION_FAIL);
+        STRINGIFY(RESPONSE_OBJ_EXIST);
+        STRINGIFY(RESPONSE_OBJ_NOT_EXIST);
+        STRINGIFY(RESPONSE_COND_NOT_EXIST);
+        STRINGIFY(RESPONSE_COND_DESTROYED);
+        STRINGIFY(RESPONSE_SERVER_ERROR);
+        STRINGIFY(RESPONSE_DLOPEN_FAIL);
+        STRINGIFY(RESPONSE_DLSYM_FAIL);
+        STRINGIFY(RESPONSE_NO_CTOR);
+        STRINGIFY(RESPONSE_NO_RTOR);
+        STRINGIFY(RESPONSE_NO_DTOR);
+        STRINGIFY(RESPONSE_NO_SNAP);
+        STRINGIFY(RESPONSE_NO_FUNC);
+        STRINGIFY(RESPONSE_MALFORMED);
         default:
             lhs << "unknown returncode";
     }

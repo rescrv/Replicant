@@ -70,7 +70,10 @@ class daemon
                 bool set_bind_to,
                 po6::net::location bind_to,
                 bool set_existing,
-                po6::net::hostname existing);
+                po6::net::hostname existing,
+                const char* init_obj,
+                const char* init_lib,
+                const char* init_str);
 
     // Configure the chain membership via (re)configuration
     private:
@@ -108,7 +111,6 @@ class daemon
         // about this configuration w.r.t. previously issued ones and this call
         // will assert that
         void propose_config(const configuration& config);
-        void periodic_describe_cluster(uint64_t now);
         void periodic_maintain_cluster(uint64_t now);
 
     // Client-related functions
@@ -136,20 +138,28 @@ class daemon
                            const e::slice& data);
         void acknowledge_command(uint64_t slot);
         void record_execution(uint64_t slot, uint64_t client, uint64_t nonce, replicant::response_returncode rc, const e::slice& data);
+        void periodic_describe_slots(uint64_t now);
 
     // Error-case chain functions
     private:
         void process_heal_req(const replicant::connection& conn,
                               std::auto_ptr<e::buffer> msg,
                               e::unpacker up);
+        void process_heal_retry(const replicant::connection& conn,
+                                std::auto_ptr<e::buffer> msg,
+                                e::unpacker up);
         void process_heal_resp(const replicant::connection& conn,
                                std::auto_ptr<e::buffer> msg,
                                e::unpacker up);
         void process_heal_done(const replicant::connection& conn,
                                std::auto_ptr<e::buffer> msg,
                                e::unpacker up);
+        void process_stable(const replicant::connection& conn,
+                            std::auto_ptr<e::buffer> msg,
+                            e::unpacker up);
         void transfer_more_state();
         void periodic_heal_next(uint64_t now);
+        void reset_healing();
 
     // Notify/wait-style conditions
     private:
@@ -207,7 +217,9 @@ class daemon
         failure_detector_map_t m_failure_detectors;
         std::vector<periodic> m_periodic;
         std::map<uint64_t, uint64_t> m_temporary_servers;
+        uint64_t m_heal_token;
         heal_next m_heal_next;
+        uint64_t m_stable_version;
         std::set<uint64_t> m_disrupted_backoff;
         bool m_disrupted_retry_scheduled;
         replicant::fact_store m_fs;

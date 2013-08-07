@@ -111,13 +111,15 @@ daemon :: daemon()
     , m_failure_detectors()
     , m_periodic()
     , m_temporary_servers()
+    , m_heal_token(0)
     , m_heal_next()
+    , m_stable_version(0)
     , m_disrupted_backoff()
     , m_disrupted_retry_scheduled(false)
     , m_fs()
 {
     m_object_manager.set_callback(this, &daemon::record_execution, &daemon::send_notify);
-    trip_periodic(0, &daemon::periodic_describe_cluster);
+    trip_periodic(0, &daemon::periodic_describe_slots);
     trip_periodic(0, &daemon::periodic_exchange);
 }
 
@@ -137,7 +139,10 @@ daemon :: run(bool daemonize,
               bool set_bind_to,
               po6::net::location bind_to,
               bool set_existing,
-              po6::net::hostname existing)
+              po6::net::hostname existing,
+              const char* init_obj,
+              const char* init_lib,
+              const char* init_str)
 {
     if (!install_signal_handler(SIGHUP))
     {
@@ -210,6 +215,7 @@ daemon :: run(bool daemonize,
     }
 
     m_us.address = bind_to;
+    bool init = false;
 
     // case 1:  start a new cluster
     if (!restored && !set_existing)
@@ -229,6 +235,7 @@ daemon :: run(bool daemonize,
         m_config_manager.reset(initial);
         m_fs.inform_configuration(initial);
         LOG(INFO) << "started new cluster from command-line arguments: " << initial;
+        init = init_obj && init_lib;
     }
     // case 2: joining a new cluster
     else if (!restored && set_existing)
@@ -350,8 +357,6 @@ daemon :: run(bool daemonize,
         m_config_manager = restored_config_manager;
     }
 
-    post_reconfiguration_hooks();
-
     for (size_t slot = 1; slot < m_fs.next_slot_to_ack(); ++slot)
     {
         uint64_t object;
@@ -371,8 +376,67 @@ daemon :: run(bool daemonize,
             !IS_SPECIAL_OBJECT(object))
         {
             m_object_manager.enqueue(slot, object, client, nonce, dat, &backing);
+            m_object_manager.throttle(object, 1000);
         }
     }
+
+    if (init)
+    {
+        assert(init_obj);
+        assert(init_lib);
+        assert(m_fs.next_slot_to_issue() == 1);
+        assert(m_fs.next_slot_to_ack() == 1);
+        std::vector<char> lib(sizeof(uint64_t));
+
+        // Encode the object name
+        assert(strlen(init_obj) <= sizeof(uint64_t));
+        memset(&lib[0], 0, sizeof(lib.size()));
+        memmove(&lib[0], init_obj, strlen(init_obj));
+        uint64_t obj = 0;
+        e::unpack64be(&lib[0], &obj);
+
+        // Read the library
+        char buf[4096];
+        po6::io::fd fd(open(init_lib, O_RDONLY));
+
+        if (fd.get() < 0)
+        {
+            PLOG(ERROR) << "could not open library";
+            return EXIT_FAILURE;
+        }
+
+        ssize_t amt = 0;
+
+        while ((amt = fd.xread(buf, 4096)) > 0)
+        {
+            size_t tmp = lib.size();
+            lib.resize(tmp + amt);
+            memmove(&lib[tmp], buf, amt);
+        }
+
+        if (amt < 0)
+        {
+            PLOG(ERROR) << "could not read library";
+            return EXIT_FAILURE;
+        }
+
+        e::slice lib_slice(&lib[0], lib.size());
+        issue_command(1, OBJECT_OBJ_NEW, 0, 0, lib_slice);
+        LOG(INFO) << "initializing " << init_obj << " with " << init_lib;
+
+        if (init_str)
+        {
+            std::vector<char> init_buf(5 + strlen(init_str) + 1);
+            memmove(&init_buf[0], "init\x00", 5);
+            memmove(&init_buf[5], init_str, strlen(init_str) + 1);
+            e::slice init_slice(&init_buf[0], init_buf.size());
+            issue_command(2, obj, 0, 0, init_slice);
+        }
+    }
+
+    LOG(INFO) << "resuming normal operation";
+    m_stable_version = m_config_manager.stable().version();
+    post_reconfiguration_hooks();
 
     replicant::connection conn;
     std::auto_ptr<e::buffer> msg;
@@ -433,11 +497,17 @@ daemon :: run(bool daemonize,
             case REPLNET_HEAL_REQ:
                 process_heal_req(conn, msg, up);
                 break;
+            case REPLNET_HEAL_RETRY:
+                process_heal_retry(conn, msg, up);
+                break;
             case REPLNET_HEAL_RESP:
                 process_heal_resp(conn, msg, up);
                 break;
             case REPLNET_HEAL_DONE:
                 process_heal_done(conn, msg, up);
+                break;
+            case REPLNET_STABLE:
+                process_stable(conn, msg, up);
                 break;
             case REPLNET_CONDITION_WAIT:
                 process_condition_wait(conn, msg, up);
@@ -481,15 +551,32 @@ daemon :: process_inform(const replicant::connection&,
     up = up >> new_config;
     CHECK_UNPACK(INFORM, up);
 
-    if (m_config_manager.latest().cluster() == new_config.cluster() &&
-        m_config_manager.latest().version() < new_config.version())
+    if (m_config_manager.latest().cluster() != new_config.cluster())
+    {
+        LOG(INFO) << "potential cross-cluster conflict between us="
+                  << m_config_manager.latest().cluster()
+                  << " and them=" << new_config.cluster();
+        return;
+    }
+
+    m_fs.inform_configuration(new_config);
+
+    if (m_config_manager.stable().version() < new_config.version())
     {
         LOG(INFO) << "informed about configuration "
                   << new_config.version()
-                  << " which replaces configuration "
-                  << m_config_manager.latest().version();
-        m_fs.inform_configuration(new_config);
-        m_config_manager.reset(new_config);
+                  << " which replaces stable configuration "
+                  << m_config_manager.stable().version();
+
+        if (m_config_manager.contains(new_config))
+        {
+            m_config_manager.advance(new_config);
+        }
+        else
+        {
+            m_config_manager.reset(new_config);
+        }
+
         post_reconfiguration_hooks();
     }
 }
@@ -656,13 +743,6 @@ daemon :: process_config_propose(const replicant::connection& conn,
     size_t configs_sz = config_chain.size() - idx_stable;
     m_fs.propose_configuration(proposal_id, proposal_time, configs, configs_sz);
 
-    // Can we just accept the proposal because it takes a NOP state transition?
-    if (configs_sz == 1 && configs[0] == m_config_manager.stable())
-    {
-        LOG(INFO) << "proposal " << proposal_id << ":" << proposal_time << " adopted by fiat";
-        return accept_proposal(sender, proposal_id, proposal_time);
-    }
-
     // Make sure that we could propose it
     if (!m_config_manager.is_compatible(configs, configs_sz))
     {
@@ -811,8 +891,7 @@ daemon :: process_config_accept(const replicant::connection& conn,
 
     if (!m_config_manager.get_proposal(proposal_id, proposal_time, &new_config))
     {
-        LOG(ERROR) << "could not get proposal from local state despite "
-                   << "knowing that it was proposed (file a bug)";
+        // This proposal was made obsolete by an "INFORM" message
         return;
     }
 
@@ -877,7 +956,7 @@ daemon :: process_config_reject(const replicant::connection& conn,
 
     if (m_fs.is_rejected_configuration(proposal_id, proposal_time))
     {
-        // This is a duplicate accept, so we can drop it
+        // This is a duplicate reject, so we can drop it
         return;
     }
 
@@ -885,8 +964,7 @@ daemon :: process_config_reject(const replicant::connection& conn,
 
     if (!m_config_manager.get_proposal(proposal_id, proposal_time, &new_config))
     {
-        LOG(ERROR) << "could not get proposal from local state despite "
-                   << "knowing that it was proposed (file a bug)";
+        // This proposal was made obsolete by an "INFORM" message
         return;
     }
 
@@ -991,7 +1069,6 @@ void
 daemon :: post_reconfiguration_hooks()
 {
     trip_periodic(0, &daemon::periodic_maintain_cluster);
-    trip_periodic(0, &daemon::periodic_describe_cluster);
 
     const configuration& config(m_config_manager.stable());
     LOG(INFO) << "deploying configuration " << config;
@@ -1028,19 +1105,8 @@ daemon :: post_reconfiguration_hooks()
         }
     }
 
-    // Heal all broken chain links
-    const chain_node* next = config.next(m_us.token);
-
-    if (next)
-    {
-        m_heal_next = heal_next();
-        trip_periodic(0, &daemon::periodic_heal_next);
-    }
-    else
-    {
-        m_heal_next = heal_next();
-        m_heal_next.state = heal_next::HEALTHY;
-    }
+    // Heal chain commands
+    reset_healing();
 
     const chain_node* tail = config.command_tail();
 
@@ -1092,13 +1158,8 @@ daemon :: post_reconfiguration_hooks()
             ++it;
         }
     }
-}
 
-void
-daemon :: periodic_describe_cluster(uint64_t now)
-{
-    trip_periodic(now + m_s.REPORT_INTERVAL, &daemon::periodic_describe_cluster);
-    LOG(INFO) << "we are " << m_us;
+    // Log to let people know
     LOG(INFO) << "the latest stable configuration is " << m_config_manager.stable();
     LOG(INFO) << "the latest proposed configuration is " << m_config_manager.latest();
     uint64_t f_d = m_s.FAULT_TOLERANCE;
@@ -1186,6 +1247,11 @@ get_suspicions(uint64_t now,
 void
 daemon :: periodic_maintain_cluster(uint64_t now)
 {
+    if (!m_config_manager.stable().in_command_chain(m_us.token))
+    {
+        return;
+    }
+
     trip_periodic(now + m_s.MAINTAIN_INTERVAL, &daemon::periodic_maintain_cluster);
     // compute the suspicion for all nodes
     std::vector<suspicion> suspicions;
@@ -1234,7 +1300,6 @@ daemon :: periodic_maintain_cluster(uint64_t now)
             if (!suspicions[i].in_chain &&
                 suspicions[i].suspicion <= threshold)
             {
-                LOG(INFO) << "THIS CASE";
                 configuration new_config(m_config_manager.latest());
                 new_config.add_to_chain(suspicions[i].token);
                 new_config.bump_version();
@@ -1250,7 +1315,8 @@ daemon :: periodic_maintain_cluster(uint64_t now)
     }
 
     // promote people only once the config chain stabilizes
-    if (m_config_manager.stable().version() == m_config_manager.latest().version())
+    if (m_config_manager.stable().version() == m_config_manager.latest().version() &&
+        m_config_manager.stable().version() == m_stable_version)
     {
         while (*m_config_manager.latest().head() == m_us &&
                m_config_manager.latest().command_size() < m_config_manager.latest().config_size())
@@ -1339,7 +1405,6 @@ daemon :: process_client_register(const replicant::connection& conn,
         return;
     }
 
-    LOG(INFO) << "registering client " << client;
     uint64_t slot = m_fs.next_slot_to_issue();
     issue_command(slot, OBJECT_CLI_REG, client, 0, e::slice("", 0));
 }
@@ -1372,7 +1437,6 @@ daemon :: process_client_disconnect(const replicant::connection& conn,
     std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
     msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_CLIENT_DISCONNECT;
     uint64_t slot = m_fs.next_slot_to_issue();
-    LOG(INFO) << "disconnecting client " << conn.token;
     issue_command(slot, OBJECT_CLI_DIE, conn.token, nonce, e::slice("", 0));
 }
 
@@ -1404,7 +1468,6 @@ daemon :: process_command_submit(const replicant::connection& conn,
         size_t sz = BUSYBEE_HEADER_SIZE + pack_size(REPLNET_CLIENT_UNKNOWN);
         msg.reset(e::buffer::create(sz));
         msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_CLIENT_UNKNOWN;
-        LOG(INFO) << "SENT " << send_no_disruption(client, msg);
         return;
     }
 
@@ -1415,7 +1478,6 @@ daemon :: process_command_submit(const replicant::connection& conn,
         size_t sz = BUSYBEE_HEADER_SIZE + pack_size(REPLNET_CLIENT_UNKNOWN);
         msg.reset(e::buffer::create(sz));
         msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_CLIENT_UNKNOWN;
-        LOG(INFO) << "SENT " << send_no_disruption(client, msg);
         return;
     }
 
@@ -1474,7 +1536,7 @@ daemon :: process_command_issue(const replicant::connection& conn,
 
     if (!conn.is_prev)
     {
-        LOG(INFO) << "dropping \"COMMAND_ISSUE\" which didn't come from the right host";
+        // just drop it, not from the right host
         return;
     }
 
@@ -1489,7 +1551,9 @@ daemon :: process_command_issue(const replicant::connection& conn,
         return;
     }
 
-    if (m_fs.is_issued_slot(slot))
+    const chain_node* tail = m_config_manager.stable().command_tail();
+
+    if (m_fs.is_issued_slot(slot) && (!tail || *tail != m_us))
     {
         // just drop it, we're waiting for an ACK ourselves
         return;
@@ -1509,8 +1573,7 @@ daemon :: process_command_ack(const replicant::connection& conn,
 
     if (!conn.is_next)
     {
-        LOG(INFO) << "dropping \"COMMAND_ACK\" which didn't come from the right host "
-                  << "(this is normal and acceptable if it happens shortly after a reconfiguration)";
+        // just drop it
         return;
     }
 
@@ -1538,7 +1601,11 @@ daemon :: issue_command(uint64_t slot,
     }
 
 #ifdef REPL_LOG_COMMANDS
-    LOG(INFO) << "ISSUE " << slot << " " << data.hex();
+    LOG(INFO) << "ISSUE slot=" << slot
+              << " object=" << object
+              << " client=" << client
+              << " nonce=" << nonce
+              << " data=" << data.hex();
 #endif
 
     m_fs.issue_slot(slot, object, client, nonce, data);
@@ -1563,7 +1630,8 @@ daemon :: issue_command(uint64_t slot,
 
     const chain_node* tail = m_config_manager.stable().command_tail();
 
-    if (tail && *tail == m_us)
+    if ((tail && *tail == m_us) ||
+        !m_config_manager.stable().in_command_chain(m_us.token))
     {
         acknowledge_command(slot);
     }
@@ -1605,7 +1673,11 @@ daemon :: acknowledge_command(uint64_t slot)
     }
 
 #ifdef REPL_LOG_COMMANDS
-    LOG(INFO) << "ACK " << slot;
+    LOG(INFO) << "ACK slot=" << slot
+              << " object=" << object
+              << " client=" << client
+              << " nonce=" << nonce
+              << " data=" << data.hex();
 #endif
 
     m_fs.ack_slot(slot);
@@ -1623,12 +1695,16 @@ daemon :: acknowledge_command(uint64_t slot)
 
     if (object == OBJECT_CLI_REG || object == OBJECT_CLI_DIE)
     {
+        replicant::response_returncode rc = RESPONSE_SUCCESS;
+
         if (object == OBJECT_CLI_REG)
         {
+            LOG(INFO) << "registering client " << client;
             m_fs.reg_client(client);
         }
         else
         {
+            LOG(INFO) << "disconnecting client " << client;
             m_fs.die_client(client);
         }
 
@@ -1636,7 +1712,7 @@ daemon :: acknowledge_command(uint64_t slot)
                   + pack_size(REPLNET_COMMAND_RESPONSE)
                   + sizeof(uint64_t) + pack_size(replicant::RESPONSE_SUCCESS);
         std::auto_ptr<e::buffer> response(e::buffer::create(sz));
-        response->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_COMMAND_RESPONSE << nonce << replicant::RESPONSE_SUCCESS;
+        response->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_COMMAND_RESPONSE << nonce << rc;
         send_no_disruption(client, response);
     }
     else
@@ -1662,41 +1738,70 @@ daemon :: record_execution(uint64_t slot, uint64_t client, uint64_t nonce, repli
 }
 
 void
+daemon :: periodic_describe_slots(uint64_t now)
+{
+    trip_periodic(now + m_s.REPORT_INTERVAL, &daemon::periodic_describe_slots);
+    LOG(INFO) << "we are " << m_us << " and here's some info:"
+              << " issued <=" << m_fs.next_slot_to_issue()
+              << " | acked <=" << m_fs.next_slot_to_ack();
+}
+
+void
 daemon :: process_heal_req(const replicant::connection& conn,
                            std::auto_ptr<e::buffer>,
                            e::unpacker up)
 {
-    uint64_t version;
-    up = up >> version;
+    uint64_t token;
+    up = up >> token;
     CHECK_UNPACK(HEAL_REQ, up);
-
-    if (m_config_manager.stable().version() > version)
-    {
-        return;
-    }
-
-    if (m_config_manager.stable().version() < version)
-    {
-        LOG(ERROR) << "dropping \"HEAL_REQ\" for newer version=" << version << " (file a bug)";
-        return;
-    }
 
     const chain_node* prev = m_config_manager.stable().prev(m_us.token);
 
     if (!prev || prev->token != conn.token)
     {
-        LOG(INFO) << "dropping \"HEAL_REQ\" that isn't from our predecessor";
+        // just drop it
         return;
     }
 
-    uint64_t to_ack = m_fs.next_slot_to_ack();
+    if (token <= m_heal_token)
+    {
+        size_t sz = BUSYBEE_HEADER_SIZE
+                  + pack_size(REPLNET_HEAL_RETRY)
+                  + sizeof(uint64_t);
+        uint64_t new_token = m_heal_token + 1;
+        std::auto_ptr<e::buffer> resp(e::buffer::create(sz));
+        resp->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_HEAL_RETRY << new_token;
+        send(conn, resp);
+        LOG(INFO) << "received request for healing from our predecessor " << conn.token
+                  << " with healing_id=" << token << ", but that token is too low;"
+                  << " requesting a retry";
+    }
+    else
+    {
+        uint64_t to_ack = m_fs.next_slot_to_ack();
+        size_t sz = BUSYBEE_HEADER_SIZE
+                  + pack_size(REPLNET_HEAL_RESP)
+                  + 2 * sizeof(uint64_t);
+        std::auto_ptr<e::buffer> resp(e::buffer::create(sz));
+        resp->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_HEAL_RESP << token << to_ack;
+        send(conn, resp);
+        LOG(INFO) << "resetting healing process with our predecessor " << conn.token
+                  << ": healing_id=" << token << " to_ack=" << to_ack;
+    }
+}
 
-    size_t sz = BUSYBEE_HEADER_SIZE
-              + pack_size(REPLNET_HEAL_RESP)
-              + 2 * sizeof(uint64_t);
-    std::auto_ptr<e::buffer> resp(e::buffer::create(sz));
-    resp->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_HEAL_RESP << version << to_ack;
-    send(conn, resp);
+void
+daemon :: process_heal_retry(const replicant::connection& conn,
+                             std::auto_ptr<e::buffer>,
+                             e::unpacker up)
+{
+    uint64_t token;
+    up = up >> token;
+    CHECK_UNPACK(HEAL_RETRY, up);
+    LOG(INFO) << "received healing retry from successor " << conn.token
+              << " with healing_id=" << token;
+    m_heal_token = std::max(m_heal_token, token) + 1;
+    reset_healing();
 }
 
 void
@@ -1704,28 +1809,17 @@ daemon :: process_heal_resp(const replicant::connection& conn,
                             std::auto_ptr<e::buffer>,
                             e::unpacker up)
 {
-    uint64_t version;
+    uint64_t token;
     uint64_t to_ack;
-    up = up >> version >> to_ack;
+    up = up >> token >> to_ack;
     CHECK_UNPACK(HEAL_RESP, up);
-
-    if (version != m_config_manager.stable().version())
-    {
-        LOG(INFO) << "dropping \"HEAL_RESP\" for an old healing process";
-        return;
-    }
-
-    if (m_heal_next.state != heal_next::REQUEST_SENT)
-    {
-        LOG(INFO) << "dropping \"HEAL_RESP\" that we weren't expecting";
-        return;
-    }
 
     const chain_node* next = m_config_manager.stable().next(m_us.token);
 
-    if (!next || next->token != conn.token)
+    if (!next || next->token != conn.token ||
+        token != m_heal_next.token)
     {
-        LOG(INFO) << "dropping \"RESP_STATE\" that isn't from our successor";
+        // just drop it
         return;
     }
 
@@ -1742,26 +1836,78 @@ daemon :: process_heal_resp(const replicant::connection& conn,
     m_heal_next.acknowledged = to_ack;
     m_heal_next.proposed = to_ack;
 
-    LOG(INFO) << "initiating state transfer starting at slot " << to_ack;
+    LOG(INFO) << "initiating state transfer to " << conn.token << " starting at slot " << to_ack;
     transfer_more_state();
 }
 
 void
 daemon :: process_heal_done(const replicant::connection& conn,
                             std::auto_ptr<e::buffer> msg,
-                            e::unpacker)
+                            e::unpacker up)
 {
-    if (conn.is_next && m_heal_next.state == heal_next::HEALTHY_SENT)
+    uint64_t token;
+    up = up >> token;
+    CHECK_UNPACK(HEAL_DONE, up);
+
+    if (conn.is_next &&
+        m_heal_next.token == token &&
+        m_heal_next.state == heal_next::HEALTHY_SENT)
     {
         // we can move m_heal_next from HEALTHY_SENT to HEALTHY
         m_heal_next.state = heal_next::HEALTHY;
         LOG(INFO) << "the connection with the next node is 100% healed";
+        const chain_node* tail = m_config_manager.stable().command_tail();
+
+        if (tail && *tail == m_us &&
+            m_stable_version < m_config_manager.stable().version())
+        {
+            m_stable_version = m_config_manager.stable().version();
+            LOG(INFO) << "reporting stability at " << m_stable_version;
+        }
+    }
+    else if (conn.is_prev)
+    {
+        msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_HEAL_DONE << token;
+        send(conn, msg);
+        LOG(INFO) << "the connection with the prev node is 100% healed";
     }
 
-    if (conn.is_prev)
+    if (m_config_manager.stable().version() == m_stable_version)
     {
-        msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_HEAL_DONE;
-        send(conn, msg);
+        size_t sz = BUSYBEE_HEADER_SIZE
+                  + pack_size(REPLNET_STABLE)
+                  + sizeof(uint64_t);
+        msg.reset(e::buffer::create(sz));
+        msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_STABLE
+                                          << m_stable_version;
+        const chain_node* prev = m_config_manager.stable().prev(m_us.token);
+
+        if (prev)
+        {
+            send(*prev, msg);
+        }
+    }
+}
+
+void
+daemon :: process_stable(const replicant::connection&,
+                         std::auto_ptr<e::buffer> msg,
+                         e::unpacker up)
+{
+    uint64_t stable;
+    up = up >> stable;
+    CHECK_UNPACK(HEAL_DONE, up);
+    const chain_node* prev = m_config_manager.stable().prev(m_us.token);
+
+    if (prev)
+    {
+        send(*prev, msg);
+    }
+
+    if (m_stable_version < stable)
+    {
+        m_stable_version = stable;
+        LOG(INFO) << "suffix of the chain (from us forward) reports stability at " << m_stable_version;
     }
 }
 
@@ -1796,6 +1942,11 @@ daemon :: transfer_more_state()
         const chain_node* next = m_config_manager.stable().next(m_us.token);
         assert(next);
 
+        if (slot % 10000 == 0)
+        {
+            LOG(INFO) << "transferred through slot " << slot;
+        }
+
         if (send(*next, msg))
         {
             ++m_heal_next.proposed;
@@ -1810,15 +1961,16 @@ daemon :: transfer_more_state()
         m_heal_next.proposed == m_fs.next_slot_to_issue())
     {
         size_t sz = BUSYBEE_HEADER_SIZE
-                  + pack_size(REPLNET_HEAL_DONE);
+                  + pack_size(REPLNET_HEAL_DONE)
+                  + sizeof(uint64_t);
         std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
-        msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_HEAL_DONE;
+        msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_HEAL_DONE << m_heal_next.token;
         const chain_node* next = m_config_manager.stable().next(m_us.token);
         assert(next);
 
         if (send(*next, msg))
         {
-            LOG(INFO) << "state transfer complete; falling back to normal chain operation";
+            LOG(INFO) << "state transfer healing_id=" << m_heal_next.token << " complete; falling back to normal chain operation";
             m_heal_next.state = heal_next::HEALTHY_SENT;
         }
     }
@@ -1827,6 +1979,22 @@ daemon :: transfer_more_state()
 void
 daemon :: periodic_heal_next(uint64_t now)
 {
+    const chain_node* next = m_config_manager.stable().next(m_us.token);
+
+    // if there is no next node we're automatically healthy
+    if (!next)
+    {
+        m_heal_next.state = heal_next::HEALTHY;
+
+        // if we're the end of the command chain, report stability
+        if (m_config_manager.stable().in_command_chain(m_us.token) &&
+            m_stable_version < m_config_manager.stable().version())
+        {
+            m_stable_version = m_config_manager.stable().version();
+            LOG(INFO) << "reporting stability at " << m_stable_version;
+        }
+    }
+
     // keep running this function until we are healed
     if (m_heal_next.state != heal_next::HEALTHY)
     {
@@ -1835,24 +2003,27 @@ daemon :: periodic_heal_next(uint64_t now)
 
     size_t sz;
     std::auto_ptr<e::buffer> msg;
-    const chain_node* next;
 
     switch (m_heal_next.state)
     {
         case heal_next::BROKEN:
-            next = m_config_manager.stable().next(m_us.token);
             assert(next);
             sz = BUSYBEE_HEADER_SIZE
                + pack_size(REPLNET_HEAL_REQ)
                + sizeof(uint64_t);
             msg.reset(e::buffer::create(sz));
             msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_HEAL_REQ
-                                              << m_config_manager.stable().version();
+                                              << m_heal_token;
 
             if (send(*next, msg))
             {
                 m_heal_next.state = heal_next::REQUEST_SENT;
+                m_heal_next.token = m_heal_token;
+                LOG(INFO) << "initiating healing with successor " << next->token
+                          << " with healing_id=" << m_heal_token;
             }
+
+            ++m_heal_token;
             break;
         case heal_next::REQUEST_SENT:
         case heal_next::HEALING:
@@ -1865,6 +2036,13 @@ daemon :: periodic_heal_next(uint64_t now)
         default:
             abort();
     }
+}
+
+void
+daemon :: reset_healing()
+{
+    m_heal_next = heal_next();
+    trip_periodic(0, &daemon::periodic_heal_next);
 }
 
 void
@@ -2113,8 +2291,7 @@ daemon :: handle_disruption_reset_healing(uint64_t token)
     {
         if (token == next->token)
         {
-            m_heal_next = heal_next();
-            trip_periodic(0, &daemon::periodic_heal_next);
+            reset_healing();
         }
     }
 }

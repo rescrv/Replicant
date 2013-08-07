@@ -61,6 +61,7 @@ class configuration_manager
         bool contains_quorum_of_all(const configuration& config) const;
         bool any(bool (configuration::*func)(const chain_node&) const, const chain_node& node) const;
         bool any(bool (configuration::*func)(uint64_t) const, uint64_t token) const;
+        bool contains(const configuration& config) const;
 
     public:
         void advance(const configuration& config);

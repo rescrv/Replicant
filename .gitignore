@@ -28,8 +28,9 @@ replicant
 replicant-block
 replicant-cli
 replicant-daemon
+replicant-debug-dump
 replicant-del-object
+replicant-integrity-check
 replicant-new-object
 replicant.pc
-replicant-repair
 stamp-h1

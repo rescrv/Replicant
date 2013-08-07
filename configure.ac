@@ -53,14 +53,15 @@ Please install popt to continue.
 AC_CHECK_LIB([rt], [clock_gettime], [needs_lrt=yes], [needs_lrt=no])
 
 if test x"${needs_lrt}" = xyes; then
-    AC_SUBST([LRT_CFLAGS], ["-lrt"])
+    AC_SUBST([LRT_LIBS], ["-lrt"])
 else
-    AC_SUBST([LRT_CFLAGS], [""])
+    AC_SUBST([LRT_LIBS], [""])
 fi
 
 PKG_CHECK_MODULES([PO6], [libpo6 >= 0.3.1])
 PKG_CHECK_MODULES([E], [libe >= 0.3.2])
 PKG_CHECK_MODULES([BUSYBEE], [busybee >= 0.3.0])
+#PKG_CHECK_MODULES([HYPERLEVELDB], [libhyperleveldb >= 2.0.dev])
 
 # Checks for header files.
 AC_CHECK_HEADER([popt.h],,[AC_MSG_ERROR([
@@ -73,11 +74,6 @@ AC_CHECK_HEADER([lmdb.h],,[AC_MSG_ERROR([
 Replicant relies upon the Lightning MDB library.
 Please install Lightning MDB to continue.
 ---------------------------------------])])
-#AC_CHECK_HEADER([hyperleveldb/db.h],,[AC_MSG_ERROR([
-#-----------------------------------------------
-#Replicant relies upon the HyperLevelDB library.
-#Please install LevelDB to continue.
-#-----------------------------------------------])])
 AC_CHECK_HEADER([glog/logging.h],,[AC_MSG_ERROR([
 ---------------------------------------
 Replicant relies upon the glog library.

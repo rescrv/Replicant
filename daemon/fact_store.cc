@@ -26,6 +26,8 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
+#define __STDC_LIMIT_MACROS
+
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
@@ -35,17 +37,22 @@
 #include <map>
 #include <memory>
 #include <set>
+#include <sstream>
 
 // Google Log
 #include <glog/logging.h>
 
 // e
 #include <e/endian.h>
+#include <e/strescape.h>
+#include <e/tuple_compare.h>
 
 // Replicant
 #include "daemon/fact_store.h"
 
 using replicant::fact_store;
+
+///////////////////////////////////// Utils ////////////////////////////////////
 
 namespace
 {
@@ -53,15 +60,15 @@ namespace
 class prefix_iterator
 {
     public:
-        prefix_iterator(const MDB_val *prefix, MDB_txn *rtxn, MDB_dbi dbi, size_t sz);
-        ~prefix_iterator() throw ();
+        prefix_iterator(const MDB_val *prefix, MDB_txn *rtxn, MDB_dbi dbi);
+        ~prefix_iterator() throw () { mdb_cursor_close(m_it); }
 
     public:
-        bool error() { return m_error; }
         bool valid();
         void next();
-        MDB_val *key();
-        MDB_val *val();
+        MDB_val *key() { return &m_key; }
+        MDB_val *val() { return &m_val; }
+        int status() { return m_status; }
 
     private:
         prefix_iterator(const prefix_iterator&);
@@ -69,175 +76,429 @@ class prefix_iterator
 
     private:
         MDB_val m_prefix;
-		MDB_val m_key;
-		MDB_val m_val;
-		MDB_txn *m_rtxn;
+        MDB_val m_key;
+        MDB_val m_val;
+        MDB_txn *m_rtxn;
         MDB_cursor *m_it;
-        size_t m_sz;
-        bool m_error;
-		bool m_valid;
+        int m_status;
+        bool m_valid;
 };
 
-prefix_iterator :: prefix_iterator(const MDB_val *prefix, MDB_txn *rtxn, MDB_dbi dbi, size_t sz)
-    : m_prefix()
-	, m_rtxn(rtxn)
+prefix_iterator :: prefix_iterator(const MDB_val *prefix, MDB_txn *rtxn, MDB_dbi dbi)
+    : m_prefix(*prefix)
+    , m_rtxn(rtxn)
     , m_it()
-    , m_sz(sz)
-    , m_error(false)
-	, m_valid(false)
+    , m_valid(false)
 {
-	int rc;
-	rc = mdb_cursor_open(m_rtxn, dbi, &m_it);
-	if (rc)
-	{
-		abort();
-	}
-	m_prefix = *prefix;
-	m_key = *prefix;
-	rc = mdb_cursor_get(m_it, &m_key, &m_val, MDB_SET_RANGE);
-	if (rc == MDB_SUCCESS)
-		m_valid = true;
-}
-
-prefix_iterator :: ~prefix_iterator() throw ()
-{
-	mdb_cursor_close(m_it);
+    m_status = mdb_cursor_open(m_rtxn, dbi, &m_it);
+    if (m_status)
+    {
+        abort();
+    }
+    m_key = *prefix;
+    m_status = mdb_cursor_get(m_it, &m_key, &m_val, MDB_SET_RANGE);
+    if (m_status == MDB_SUCCESS)
+        m_valid = true;
 }
 
 bool
 prefix_iterator :: valid()
 {
-    if (m_error)
+    if (m_status)
     {
         return false;
     }
 
-    if (m_valid)
+    while (m_valid)
     {
-		if (memcmp(m_prefix.mv_data, m_key.mv_data, m_prefix.mv_size))
-		{
-			m_valid = false;
-			return false;
-		}
-		if (m_key.mv_size != m_sz)
+        if (m_key.mv_size >= m_prefix.mv_size &&
+            !memcmp(m_prefix.mv_data, m_key.mv_data, m_prefix.mv_size))
         {
-            m_error = true;
-            return false;
+            return true;
         }
-    }
-    else
-    {
-        return false;
+
+        m_valid = false;
     }
 
-    return true;
+    return false;
 }
 
 void
 prefix_iterator :: next()
 {
-	int rc;
-	rc = mdb_cursor_get(m_it, &m_key, &m_val, MDB_NEXT);
-	if (rc == MDB_NOTFOUND) {
-		m_valid = false;
-	}
+    if (m_valid) {
+        m_status = mdb_cursor_get(m_it, &m_key, &m_val, MDB_NEXT);
+        if (m_status) {
+            m_valid = false;
+            if (m_status == MDB_NOTFOUND)
+                m_status = MDB_SUCCESS;
+        }
+    }
 }
 
-MDB_val *
-prefix_iterator :: key()
+#define STRLENOF(x)    (sizeof(x)-1)
+#define PROPOSAL_PREFIX "prop"
+#define PROPOSAL_KEY_SIZE (STRLENOF(PROPOSAL_PREFIX)  + sizeof(uint64_t) + sizeof(uint64_t))
+/* Assign a string constant to an MDB_val */
+#define MVS(v,s)    v.mv_data = (void *)s; v.mv_size = STRLENOF(s)
+/* Assign a slice or string to an MDB_val */
+#define MVSL(v,sl)  v.mv_data = (void *)(sl).data(); v.mv_size = (sl).size()
+
+static void
+pack_proposal_key(uint64_t proposal_id, uint64_t proposal_time, char* key)
 {
-    return &m_key;
+    const size_t sz = STRLENOF(PROPOSAL_PREFIX);
+    memmove(key, PROPOSAL_PREFIX, sz);
+    char* ptr = key + sz;
+    ptr = e::pack64be(proposal_id, ptr);
+    ptr = e::pack64be(proposal_time, ptr);
 }
 
-MDB_val *
-prefix_iterator :: val()
+static void
+unpack_proposal_key(const char* key, uint64_t* proposal_id, uint64_t* proposal_time)
 {
-    return &m_val;
+    const size_t sz = STRLENOF(PROPOSAL_PREFIX);
+    const char* ptr = key + sz;
+    ptr = e::unpack64be(ptr, proposal_id);
+    ptr = e::unpack64be(ptr, proposal_time);
+}
+
+#define ACCEPTED_PROPOSAL_PREFIX "acc"
+#define ACCEPTED_PROPOSAL_KEY_SIZE (STRLENOF(ACCEPTED_PROPOSAL_PREFIX) + sizeof(uint64_t) + sizeof(uint64_t))
+
+static void
+pack_accepted_proposal_key(uint64_t proposal_id, uint64_t proposal_time, char* key)
+{
+    const size_t sz = STRLENOF(ACCEPTED_PROPOSAL_PREFIX);
+    memmove(key, ACCEPTED_PROPOSAL_PREFIX, sz);
+    char* ptr = key + sz;
+    ptr = e::pack64be(proposal_id, ptr);
+    ptr = e::pack64be(proposal_time, ptr);
+}
+
+static void
+unpack_accepted_proposal_key(const char* key, uint64_t* proposal_id, uint64_t* proposal_time)
+{
+    const size_t sz = STRLENOF(ACCEPTED_PROPOSAL_PREFIX);
+    const char* ptr = key + sz;
+    ptr = e::unpack64be(ptr, proposal_id);
+    ptr = e::unpack64be(ptr, proposal_time);
+}
+
+#define REJECTED_PROPOSAL_PREFIX "rej"
+#define REJECTED_PROPOSAL_KEY_SIZE (STRLENOF(REJECTED_PROPOSAL_PREFIX) + sizeof(uint64_t) + sizeof(uint64_t))
+
+static void
+pack_rejected_proposal_key(uint64_t proposal_id, uint64_t proposal_time, char* key)
+{
+    const size_t sz = STRLENOF(REJECTED_PROPOSAL_PREFIX);
+    memmove(key, REJECTED_PROPOSAL_PREFIX, sz);
+    char* ptr = key + sz;
+    ptr = e::pack64be(proposal_id, ptr);
+    ptr = e::pack64be(proposal_time, ptr);
+}
+
+static void
+unpack_rejected_proposal_key(const char* key, uint64_t* proposal_id, uint64_t* proposal_time)
+{
+    const size_t sz = STRLENOF(REJECTED_PROPOSAL_PREFIX);
+    const char* ptr = key + sz;
+    ptr = e::unpack64be(ptr, proposal_id);
+    ptr = e::unpack64be(ptr, proposal_time);
+}
+
+#define INFORM_CONFIG_PREFIX "inf"
+#define INFORM_CONFIG_KEY_SIZE (STRLENOF(INFORM_CONFIG_PREFIX) + sizeof(uint64_t))
+
+static void
+pack_inform_config_key(uint64_t version, char* key)
+{
+    const size_t sz = STRLENOF(INFORM_CONFIG_PREFIX);
+    memmove(key, INFORM_CONFIG_PREFIX, sz);
+    char* ptr = key + sz;
+    ptr = e::pack64be(version, ptr);
+}
+
+static void
+unpack_inform_config_key(const char* key, uint64_t* version)
+{
+    const size_t sz = STRLENOF(INFORM_CONFIG_PREFIX);
+    const char* ptr = key + sz;
+    ptr = e::unpack64be(ptr, version);
+}
+
+#define CLIENT_PREFIX "client"
+#define CLIENT_KEY_SIZE (STRLENOF(CLIENT_PREFIX) + sizeof(uint64_t))
+
+static void
+pack_client_key(uint64_t client, char* key)
+{
+    const size_t sz = STRLENOF(CLIENT_PREFIX);
+    memmove(key, CLIENT_PREFIX, sz);
+    char* ptr = key + sz;
+    ptr = e::pack64be(client, ptr);
+}
+
+static void
+unpack_client_key(const char* key, uint64_t* client)
+{
+    const size_t sz = STRLENOF(CLIENT_PREFIX);
+    const char* ptr = key + sz;
+    ptr = e::unpack64be(ptr, client);
+}
+
+#define SLOT_PREFIX "slot"
+#define SLOT_KEY_SIZE (STRLENOF(SLOT_PREFIX) + sizeof(uint64_t))
+
+static void
+pack_slot_key(uint64_t slot, char* key)
+{
+    const size_t sz = STRLENOF(SLOT_PREFIX);
+    memmove(key, SLOT_PREFIX, sz);
+    char* ptr = key + sz;
+    ptr = e::pack64be(slot, ptr);
+}
+
+static void
+unpack_slot_key(const char* key, uint64_t* slot)
+{
+    const size_t sz = STRLENOF(SLOT_PREFIX);
+    const char* ptr = key + sz;
+    ptr = e::unpack64be(ptr, slot);
+}
+
+static void
+pack_slot_val(uint64_t object,
+              uint64_t client,
+              uint64_t nonce,
+              const e::slice& data,
+              std::vector<char>* val)
+{
+    val->resize(3 * sizeof(uint64_t) + data.size());
+    char* ptr = &val->front();
+    ptr = e::pack64be(object, ptr);
+    ptr = e::pack64be(client, ptr);
+    ptr = e::pack64be(nonce, ptr);
+    memmove(ptr, data.data(), data.size());
+}
+
+static bool
+unpack_slot_val(const MDB_val* val,
+                uint64_t* object,
+                uint64_t* client,
+                uint64_t* nonce,
+                e::slice* data)
+{
+    if (val->mv_size < 3 * sizeof(uint64_t))
+    {
+        return false;
+    }
+
+    const char* ptr = (const char *)val->mv_data;
+    ptr = e::unpack64be(ptr, object);
+    ptr = e::unpack64be(ptr, client);
+    ptr = e::unpack64be(ptr, nonce);
+    *data = e::slice(ptr, val->mv_size - (ptr - (const char *)val->mv_data));
+    return true;
+}
+
+static bool
+unpack_slot_val(const MDB_val* val,
+                uint64_t* object,
+                uint64_t* client,
+                uint64_t* nonce,
+                std::string* func,
+                std::string* data)
+{
+    e::slice tmp;
+
+    if (!unpack_slot_val(val, object, client, nonce, &tmp))
+    {
+        return false;
+    }
+
+    const char* ptr = reinterpret_cast<const char*>(memchr(tmp.data(), '\0', tmp.size()));
+
+    if (ptr == NULL)
+    {
+        return true;
+    }
+
+    *func = std::string(reinterpret_cast<const char*>(tmp.data()), ptr);
+    ++ptr;
+    const char* end = reinterpret_cast<const char*>(tmp.data() + tmp.size());
+
+    if (ptr < end)
+    {
+        *data = std::string(ptr, end);
+    }
+    else
+    {
+        *data = "";
+    }
+
+    return true;
+}
+
+#define ACK_PREFIX "ack"
+#define ACK_KEY_SIZE (STRLENOF(ACK_PREFIX) + sizeof(uint64_t))
+
+static void
+pack_ack_key(uint64_t slot, char* key)
+{
+    const size_t sz = STRLENOF(ACK_PREFIX);
+    memmove(key, ACK_PREFIX, sz);
+    char* ptr = key + sz;
+    ptr = e::pack64be(slot, ptr);
+}
+
+static void
+unpack_ack_key(const char* key, uint64_t* slot)
+{
+    const size_t sz = STRLENOF(ACK_PREFIX);
+    const char* ptr = key + sz;
+    ptr = e::unpack64be(ptr, slot);
+}
+
+#define EXEC_PREFIX "exec"
+#define EXEC_KEY_SIZE (STRLENOF(EXEC_PREFIX) + sizeof(uint64_t))
+
+static void
+pack_exec_key(uint64_t slot, char* key)
+{
+    const size_t sz = STRLENOF(EXEC_PREFIX);
+    memmove(key, EXEC_PREFIX, sz);
+    char* ptr = key + sz;
+    ptr = e::pack64be(slot, ptr);
+}
+
+static void
+unpack_exec_key(const char* key, uint64_t* slot)
+{
+    const size_t sz = STRLENOF(EXEC_PREFIX);
+    const char* ptr = key + sz;
+    ptr = e::unpack64be(ptr, slot);
+}
+
+static void
+pack_exec_val(replicant::response_returncode rc,
+              const e::slice& response,
+              std::vector<char>* val)
+{
+    val->resize(sizeof(uint8_t) + response.size());
+    char* ptr = &val->front();
+    *ptr = static_cast<uint8_t>(rc);
+    ++ptr;
+    memmove(ptr, response.data(), response.size());
+}
+
+static bool
+unpack_exec_val(const MDB_val* val,
+                replicant::response_returncode* rc,
+                e::slice* response)
+{
+    if (val->mv_size < 1)
+    {
+        return false;
+    }
+    const char *ptr = (const char *)val->mv_data;
+
+    *rc = static_cast<replicant::response_returncode>(ptr[0]);
+    *response = e::slice(ptr + 1, val->mv_size - 1);
+    return true;
+}
+
+static bool
+unpack_exec_val(const MDB_val* val,
+                replicant::response_returncode* rc,
+                std::string* response)
+{
+    e::slice resp;
+
+    if (!unpack_exec_val(val, rc, &resp))
+    {
+        return false;
+    }
+
+    *response = std::string(reinterpret_cast<const char*>(resp.data()), resp.size());
+    return true;
+}
+
+#define NONCE_PREFIX "nonce"
+#define NONCE_KEY_SIZE (STRLENOF(NONCE_PREFIX) + sizeof(uint64_t) + sizeof(uint64_t))
+#define NONCE_VAL_SIZE (sizeof(uint64_t))
+
+static void
+pack_nonce_key(uint64_t client, uint64_t nonce, char* key)
+{
+    const size_t sz = STRLENOF(NONCE_PREFIX);
+    memmove(key, NONCE_PREFIX, sz);
+    char* ptr = key + sz;
+    ptr = e::pack64be(client, ptr);
+    ptr = e::pack64be(nonce, ptr);
+}
+
+static void
+unpack_nonce_key(const char* key, uint64_t* client, uint64_t* nonce)
+{
+    const size_t sz = STRLENOF(NONCE_PREFIX);
+    const char* ptr = key + sz;
+    ptr = e::unpack64be(ptr, client);
+    ptr = e::unpack64be(ptr, nonce);
+}
+
+static void
+pack_nonce_val(uint64_t number, char* key)
+{
+    e::pack64be(number, key);
+}
+
+static void
+unpack_nonce_val(const char* key, uint64_t* slot)
+{
+    e::unpack64be(key, slot);
 }
 
 } // namespace
 
-///////////////////////////////////// Utils ////////////////////////////////////
+//////////////////////////////// Internal Types ////////////////////////////////
 
-#define STRLENOF(s)    (sizeof(s)-1)
-#define KEY_SIZE_PROPOSAL (STRLENOF("prop") + sizeof(uint64_t) + sizeof(uint64_t))
-#define KEY_SIZE_ACCEPTED_PROPOSAL (STRLENOF("acc") + sizeof(uint64_t) + sizeof(uint64_t))
-#define KEY_SIZE_REJECTED_PROPOSAL (STRLENOF("rej") + sizeof(uint64_t) + sizeof(uint64_t))
-#define KEY_SIZE_INFORM_CONFIG (STRLENOF("inf") + sizeof(uint64_t))
-#define KEY_SIZE_CLIENT (STRLENOF("client") + sizeof(uint64_t))
-#define KEY_SIZE_SLOT (STRLENOF("slot") + sizeof(uint64_t))
-#define KEY_SIZE_ACK  (STRLENOF("ack") + sizeof(uint64_t))
-#define KEY_SIZE_EXEC (STRLENOF("exec") + sizeof(uint64_t))
-#define KEY_SIZE_NONCE (STRLENOF("nonce") + sizeof(uint64_t) + sizeof(uint64_t))
-
-#define MVS(v,s)    v.mv_data = (void *)s; v.mv_size = STRLENOF(s)
-
-static void
-pack_key_proposal(uint64_t proposal_id, uint64_t proposal_time, char* key)
+struct fact_store :: slot
 {
-    memmove(key, "prop", 4);
-    e::pack64be(proposal_id, key + 4);
-    e::pack64be(proposal_time, key + 12);
-}
+    slot() : number(), object(), client(), nonce(), func(), data() {}
+    uint64_t number;
+    uint64_t object;
+    uint64_t client;
+    uint64_t nonce;
+    std::string func;
+    std::string data;
+    bool operator < (const slot& rhs) const
+    { return e::tuple_compare(number, object, client, nonce,
+                              rhs.number, rhs.object, rhs.client, rhs.nonce) < 0; }
+};
 
-static void
-pack_key_accepted_proposal(uint64_t proposal_id, uint64_t proposal_time, char* key)
+struct fact_store :: exec
 {
-    memmove(key, "acc", 3);
-    e::pack64be(proposal_id, key + 3);
-    e::pack64be(proposal_time, key + 11);
-}
+    exec() : number(), rc(), response() {}
+    uint64_t number;
+    response_returncode rc;
+    std::string response;
+    bool operator < (const exec& rhs) const
+    { return number < rhs.number; }
+};
 
-static void
-pack_key_rejected_proposal(uint64_t proposal_id, uint64_t proposal_time, char* key)
+struct fact_store :: slot_mapping
 {
-    memmove(key, "rej", 3);
-    e::pack64be(proposal_id, key + 3);
-    e::pack64be(proposal_time, key + 11);
-}
-
-static void
-pack_key_inform_config(uint64_t version, char* key)
-{
-    memmove(key, "inf", 3);
-    e::pack64be(version, key + 3);
-}
-
-static void
-pack_key_client(uint64_t client, char* key)
-{
-    memmove(key, "client", 6);
-    e::pack64be(client, key + 6);
-}
-
-static void
-pack_key_slot(uint64_t slot, char* key)
-{
-    memmove(key, "slot", 4);
-    e::pack64be(slot, key + 4);
-}
-
-static void
-pack_key_ack(uint64_t slot, char* key)
-{
-    memmove(key, "ack", 3);
-    e::pack64be(slot, key + 3);
-}
-
-static void
-pack_key_exec(uint64_t slot, char* key)
-{
-    memmove(key, "exec", 4);
-    e::pack64be(slot, key + 4);
-}
-
-static void
-pack_key_nonce(uint64_t client, uint64_t nonce, char* key)
-{
-    memmove(key, "nonce", 5);
-    e::pack64be(client, key + 5);
-    e::pack64be(nonce, key + 13);
-}
+    uint64_t client;
+    uint64_t nonce;
+    uint64_t slot;
+    bool operator < (const slot_mapping& rhs) const
+    { return e::tuple_compare(client, nonce, slot,
+                              rhs.client, rhs.nonce, rhs.slot) < 0; }
+    bool operator == (const slot_mapping& rhs) const
+    { return e::tuple_compare(client, nonce, slot,
+                              rhs.client, rhs.nonce, rhs.slot) == 0; }
+};
 
 ////////////////////////////////// Fact Store //////////////////////////////////
 
@@ -258,220 +519,66 @@ fact_store :: ~fact_store() throw ()
 }
 
 bool
-fact_store :: do_open(const po6::pathname& path,
-                   bool* restored,
-                   chain_node* restored_us,
-                   configuration_manager* restored_config_manager, bool isOpen)
-{
-    MDB_txn *txn;
-    MDB_val key, data;
-    int rc;
-    bool ret = false;
-
-    rc = mdb_env_create(&m_db);
-    if (rc)
-    {
-        LOG(ERROR) << "could not create LMDB env: " << mdb_strerror(rc);
-        return false;
-    }
-    rc = mdb_env_set_mapsize(m_db, 10485760);    /* 10MB default */
-    rc = mdb_env_open(m_db, path.get(), MDB_WRITEMAP|MDB_NOSYNC, 0600);
-    if (rc)
-    {
-        LOG(ERROR) << "could not open LMDB env: " << mdb_strerror(rc);
-        return false;
-    }
-    rc = mdb_txn_begin(m_db, NULL, 0, &txn);
-    if (rc)
-    {
-        LOG(ERROR) << "could not open LMDB txn: " << mdb_strerror(rc);
-        return false;
-    }
-    rc = mdb_open(txn, NULL, 0, &m_dbi);
-    if (rc)
-    {
-        LOG(ERROR) << "could not open LMDB dbi: " << mdb_strerror(rc);
-        mdb_txn_abort(txn);
-        return false;
-    }
-
-	/* Set this up for readers to use later */
-	rc = mdb_txn_begin(m_db, NULL, MDB_RDONLY, &m_rtxn);
-    if (rc)
-    {
-        LOG(ERROR) << "could not open LMDB read txn: " << mdb_strerror(rc);
-		mdb_txn_abort(txn);
-        return false;
-    }
-	rc = mdb_cursor_open(m_rtxn, m_dbi, &m_rcsr);
-    if (rc)
-    {
-        LOG(ERROR) << "could not open LMDB read cursor: " << mdb_strerror(rc);
-		mdb_txn_abort(m_rtxn);
-		mdb_txn_abort(txn);
-        return false;
-    }
-	mdb_txn_reset(m_rtxn);
-
-    // read the "replicant" key and check the version
-    bool first_time = false;
-
-    MVS(key, "replicant");
-    rc = mdb_get(txn, m_dbi, &key, &data);
- 
-    if (rc == MDB_SUCCESS)
-    {
-        if (memcmp(data.mv_data, PACKAGE_VERSION, STRLENOF(PACKAGE_VERSION)) &&
-            memcmp(data.mv_data, "0.1.1", STRLENOF("0.1.1")) &&
-            memcmp(data.mv_data, "0.1.0", STRLENOF("0.1.0")))
-        {
-            LOG(ERROR) << "could not restore from LMDB because "
-                       << "the existing data was created by "
-                       << "replicant " << (char *)data.mv_data << " but "
-                       << "this is version " << PACKAGE_VERSION << " which is not compatible";
-            goto leave;
-        }
-    }
-    else if (rc == MDB_NOTFOUND)
-    {
-        first_time = true;
-        MVS(data, PACKAGE_VERSION);
-        rc = mdb_put(txn, m_dbi, &key, &data, 0);
-		if (rc == MDB_SUCCESS)
-		{
-			rc = mdb_txn_commit(txn);
-			if (rc == MDB_SUCCESS)
-				rc = mdb_txn_begin(m_db, NULL, 0, &txn);
-		}
-
-        if (rc)
-        {
-            LOG(ERROR) << "could not save \"replicant\" key into LMDB: " << mdb_strerror(rc);
-            goto leave;
-        }
-    }
-    else
-    {
-        LOG(ERROR) << "could not read \"replicant\" key from LMDB: " << mdb_strerror(rc);
-        goto leave;
-    }
-
-    // read the "state" key and parse it
-    MVS(key, "us");
-    rc = mdb_get(txn, m_dbi, &key, &data);
-
-    if (rc == MDB_SUCCESS)
-    {
-        if (first_time)
-        {
-            LOG(ERROR) << "could not restore from LMDB because a previous "
-                       << "execution crashed and the database was tampered with; "
-                       << "you'll need to manually erase this DB and create a new one";
-            goto leave;
-        }
-
-        e::unpacker up((const char *)data.mv_data, data.mv_size);
-        up = up >> *restored_us;
-
-        if (up.error())
-        {
-            LOG(ERROR) << "could not restore from LMDB because a previous "
-                       << "execution wrote an invalid node identity; "
-                       << "you'll need to manually erase this DB and create a new one";
-            goto leave;
-        }
-
-        *restored = true;
-    }
-    else if (rc == MDB_NOTFOUND)
-    {
-        if (!only_key_is_replicant_key())
-        {
-            LOG(ERROR) << "could not restore from LMDB because a previous "
-                       << "execution didn't save a node identity, and did write "
-                       << "other data; "
-                       << "you'll need to manually erase this DB and create a new one";
-            goto leave;
-        }
-
-        *restored = false;
-    }
-
-    if (!fsck(!isOpen, false, restored_config_manager))
-    {
-		if (isOpen)
-		{
-        LOG(ERROR) << "found integrity errors while scanning LMDB";
-        LOG(ERROR) << "because the fix to these errors may be destructive, we "
-                   << "require that you manually run \"replicant repair\" to continue";
-        LOG(ERROR) << "you're advised to make a backup of the data directory first";
-		} else {
-        std::cerr << "If any of the above messages are fatal, we cannot repair "
-                  << "the database without possibly violating safety of the "
-                  << "system.  To restore this node, remove the data and start "
-                  << "fresh.  If a majority of nodes are in a bad state, file "
-                  << "a bug and mention this note." << std::endl;
-		}
-        goto leave;
-    }
-	ret = true;
-
-leave:
-	rc = mdb_txn_commit(txn);
-	if (rc)
-	{
-            LOG(ERROR) << "could not commit \"replicant\" key into LMDB: " << mdb_strerror(rc);
-			ret = false;
-	}
-    return ret;
-}
-
-bool
 fact_store :: open(const po6::pathname& path,
                    bool* restored,
-                   chain_node* restored_us,
-                   configuration_manager* restored_config_manager)
+                   chain_node* us,
+                   configuration_manager* config_manager)
 {
-	return do_open(path, restored, restored_us, restored_config_manager, true);
-}
+    int st;
+    st = open_db(path, true);
 
-bool
-fact_store :: repair(const po6::pathname& path)
-{
-    configuration_manager config_manager;
-	bool restored;
-	chain_node restored_us;
+    if (st)
+    {
+        LOG(ERROR) << "could not open DB: " << mdb_strerror(st);
+        return false;
+    }
 
-	return do_open(path, &restored, &restored_us, &config_manager, false);
+    std::ostringstream ostr;
+
+    if (!initialize(ostr, restored, us))
+    {
+        LOG(ERROR) << ostr;
+        return false;
+    }
+
+    if (*restored && !integrity_check(1, false, false, config_manager))
+    {
+        LOG(ERROR) << "Integrity check failed.";
+        LOG(ERROR) << "Some of the above errors may be fixable automatically using the integrity-check tool";
+        LOG(ERROR) << "For more information try \"man replicant-integrity-check\"";
+        return false;
+    }
+
+    return true;
 }
 
 bool
 fact_store :: save(const chain_node& us)
 {
-	MDB_val key, data;
-	MDB_txn *txn;
-	int rc;
+    MDB_val key, data;
+    MDB_txn *txn;
+    int rc;
     size_t sz = pack_size(us);
     std::auto_ptr<e::buffer> buf(e::buffer::create(sz));
     buf->pack_at(0) << us;
 
-	rc = mdb_txn_begin(m_db, NULL, 0, &txn);
-	if (rc)
-	{
-        LOG(ERROR) << "could not record node identity as " << us << ": " << mdb_strerror(rc);
-        return false;
-	}
-	MVS(key, "us");
-	data.mv_data = buf->data();
-	data.mv_size = buf->size();
-	rc = mdb_put(txn, m_dbi, &key, &data, 0);
+    rc = mdb_txn_begin(m_db, NULL, 0, &txn);
     if (rc)
     {
         LOG(ERROR) << "could not record node identity as " << us << ": " << mdb_strerror(rc);
-		mdb_txn_abort(txn);
         return false;
     }
-	rc = mdb_txn_commit(txn);
+    MVS(key, "us");
+    data.mv_data = buf->data();
+    data.mv_size = buf->size();
+    rc = mdb_put(txn, m_dbi, &key, &data, 0);
+    if (rc)
+    {
+        LOG(ERROR) << "could not record node identity as " << us << ": " << mdb_strerror(rc);
+        mdb_txn_abort(txn);
+        return false;
+    }
+    rc = mdb_txn_commit(txn);
     if (rc)
     {
         LOG(ERROR) << "could not record node identity as " << us << ": " << mdb_strerror(rc);
@@ -484,28 +591,25 @@ fact_store :: save(const chain_node& us)
 bool
 fact_store :: is_proposed_configuration(uint64_t proposal_id, uint64_t proposal_time)
 {
-    char key[KEY_SIZE_PROPOSAL];
-	MDB_val k = { sizeof(key), key };
-    pack_key_proposal(proposal_id, proposal_time, key);
-    return check_key_exists(&k);
+    char key[PROPOSAL_KEY_SIZE];
+    pack_proposal_key(proposal_id, proposal_time, key);
+    return check_key_exists(key, PROPOSAL_KEY_SIZE);
 }
 
 bool
 fact_store :: is_accepted_configuration(uint64_t proposal_id, uint64_t proposal_time)
 {
-    char key[KEY_SIZE_ACCEPTED_PROPOSAL];
-	MDB_val k = { sizeof(key), key };
-    pack_key_accepted_proposal(proposal_id, proposal_time, key);
-    return check_key_exists(&k);
+    char key[ACCEPTED_PROPOSAL_KEY_SIZE];
+    pack_accepted_proposal_key(proposal_id, proposal_time, key);
+    return check_key_exists(key, ACCEPTED_PROPOSAL_KEY_SIZE);
 }
 
 bool
 fact_store :: is_rejected_configuration(uint64_t proposal_id, uint64_t proposal_time)
 {
-    char key[KEY_SIZE_REJECTED_PROPOSAL];
-	MDB_val k = { sizeof(key), key };
-    pack_key_rejected_proposal(proposal_id, proposal_time, key);
-    return check_key_exists(&k);
+    char key[REJECTED_PROPOSAL_KEY_SIZE];
+    pack_rejected_proposal_key(proposal_id, proposal_time, key);
+    return check_key_exists(key, REJECTED_PROPOSAL_KEY_SIZE);
 }
 
 void
@@ -513,10 +617,8 @@ fact_store :: propose_configuration(uint64_t proposal_id, uint64_t proposal_time
                                     const configuration* configs, size_t configs_sz)
 {
     assert(!is_proposed_configuration(proposal_id, proposal_time));
-    char key[KEY_SIZE_PROPOSAL];
-	MDB_val k = { sizeof(key), key };
-	MDB_val val;
-    pack_key_proposal(proposal_id, proposal_time, key);
+    char key[PROPOSAL_KEY_SIZE];
+    pack_proposal_key(proposal_id, proposal_time, key);
     size_t sz = 0;
 
     for (size_t i = 0; i < configs_sz; ++i)
@@ -532,9 +634,7 @@ fact_store :: propose_configuration(uint64_t proposal_id, uint64_t proposal_time
         ptr = pack_config(configs[i], ptr);
     }
 
-	val.mv_data = &value.front();
-	val.mv_size = value.size();
-    store_key_value(&k, &val);
+    store_key_value(key, PROPOSAL_KEY_SIZE, &value.front(), value.size());
 }
 
 void
@@ -543,11 +643,9 @@ fact_store :: accept_configuration(uint64_t proposal_id, uint64_t proposal_time)
     assert(is_proposed_configuration(proposal_id, proposal_time));
     assert(!is_accepted_configuration(proposal_id, proposal_time));
     assert(!is_rejected_configuration(proposal_id, proposal_time));
-    char key[KEY_SIZE_ACCEPTED_PROPOSAL];
-	MDB_val k = { sizeof(key), key };
-	MDB_val val = { 0, (void *)"" };
-    pack_key_accepted_proposal(proposal_id, proposal_time, key);
-    store_key_value(&k, &val);
+    char key[ACCEPTED_PROPOSAL_KEY_SIZE];
+    pack_accepted_proposal_key(proposal_id, proposal_time, key);
+    store_key_value(key, ACCEPTED_PROPOSAL_KEY_SIZE, "", 0);
 }
 
 void
@@ -556,280 +654,192 @@ fact_store :: reject_configuration(uint64_t proposal_id, uint64_t proposal_time)
     assert(is_proposed_configuration(proposal_id, proposal_time));
     assert(!is_accepted_configuration(proposal_id, proposal_time));
     assert(!is_rejected_configuration(proposal_id, proposal_time));
-    char key[KEY_SIZE_REJECTED_PROPOSAL];
-	MDB_val k = { sizeof(key), key };
-	MDB_val val = { 0, (void *)"" };
-    pack_key_rejected_proposal(proposal_id, proposal_time, key);
-    store_key_value(&k, &val);
+    char key[REJECTED_PROPOSAL_KEY_SIZE];
+    pack_rejected_proposal_key(proposal_id, proposal_time, key);
+    store_key_value(key, REJECTED_PROPOSAL_KEY_SIZE, "", 0);
 }
 
 void
 fact_store :: inform_configuration(const configuration& config)
 {
-    char key[KEY_SIZE_INFORM_CONFIG];
-	MDB_val k = { sizeof(key), key };
-	MDB_val val;
-    pack_key_inform_config(config.version(), key);
+    char key[INFORM_CONFIG_KEY_SIZE];
+    pack_inform_config_key(config.version(), key);
     std::vector<char> value(pack_size(config));
     pack_config(config, &value.front());
-	val.mv_data = &value.front();
-	val.mv_size = value.size();
-    store_key_value(&k, &val);
+    store_key_value(key, INFORM_CONFIG_KEY_SIZE, &value.front(), value.size());
 }
 
 bool
 fact_store :: is_client(uint64_t client)
 {
-    char key[KEY_SIZE_CLIENT];
-	MDB_val k = { sizeof(key), key };
-    pack_key_client(client, key);
-    return check_key_exists(&k);
+    char key[CLIENT_KEY_SIZE];
+    pack_client_key(client, key);
+    return check_key_exists(key, CLIENT_KEY_SIZE);
 }
 
 bool
 fact_store :: is_live_client(uint64_t client)
 {
-    char key[KEY_SIZE_CLIENT];
-	MDB_val k = { sizeof(key), key };
-    pack_key_client(client, key);
-    MDB_val backing;
-	bool ret = false;
+    char key[CLIENT_KEY_SIZE];
+    pack_client_key(client, key);
+    std::string backing;
 
-    if (!retrieve_value(&k, &backing))
+    if (!retrieve_value(key, CLIENT_KEY_SIZE, &backing))
     {
         return false;
     }
 
-    if (backing.mv_size != 3)
+    if (backing == "reg")
     {
-        abort();
+        return true;
     }
-
-    if (!memcmp(backing.mv_data, "reg", 3))
+    else if (backing == "die")
     {
-        ret = true;
-    }
-    else if (!memcmp(backing.mv_data, "die", 3))
-    {
-        ret = false;
+        return false;
     }
     else
     {
         abort();
     }
-	mdb_txn_reset(m_rtxn);
-	return ret;
 }
 
 void
 fact_store :: get_all_clients(std::vector<uint64_t>* clients)
 {
-	MDB_val key;
-	int rc;
+    MDB_val pref;
+    MVS(pref,CLIENT_PREFIX);
+    mdb_txn_renew(m_rtxn);
+    prefix_iterator iter(&pref, m_rtxn, m_dbi);
 
-	rc = mdb_txn_renew(m_rtxn);
-	if (rc)
-	{
-		return;
-	}
-	rc = mdb_cursor_renew(m_rtxn, m_rcsr);
-	if (rc)
-	{
-		mdb_txn_reset(m_rtxn);
-		return;
-	}
-	MVS(key, "client\x00\x00\x00\x00\x00\x00\x00\x00");
-	rc = mdb_cursor_get(m_rcsr, &key, NULL, MDB_SET_RANGE);
-
-	while (rc == MDB_SUCCESS)
+    for (; iter.valid(); iter.next())
     {
-        if (strncmp((const char *)key.mv_data, "client", 6) == 0 && key.mv_size == 14)
+        if (iter.key()->mv_size != CLIENT_KEY_SIZE)
         {
-            uint64_t tmp;
-            e::unpack64be((char *)key.mv_data + 6, &tmp);
-            clients->push_back(tmp);
-        }
-        else
-        {
-            break;
+            continue;
         }
 
-        rc = mdb_cursor_get(m_rcsr, &key, NULL, MDB_NEXT);
+        uint64_t id;
+        unpack_client_key((const char *)iter.key()->mv_data, &id);
+        clients->push_back(id);
     }
-	mdb_txn_reset(m_rtxn);
+    mdb_txn_reset(m_rtxn);
 }
 
 void
 fact_store :: reg_client(uint64_t client)
 {
-    char key[KEY_SIZE_CLIENT];
-	MDB_val k = { sizeof(key), key };
-	MDB_val val;
-    pack_key_client(client, key);
-	MVS(val, "reg");
-    store_key_value(&k, &val);
+    char key[CLIENT_KEY_SIZE];
+    pack_client_key(client, key);
+    store_key_value(key, CLIENT_KEY_SIZE, "reg", 3);
 }
 
 void
 fact_store :: die_client(uint64_t client)
 {
-    char key[KEY_SIZE_CLIENT];
-	MDB_val k = { sizeof(key), key };
-	MDB_val val;
-    pack_key_client(client, key);
-	MVS(val, "die");
-    store_key_value(&k, &val);
+    char key[CLIENT_KEY_SIZE];
+    pack_client_key(client, key);
+    store_key_value(key, CLIENT_KEY_SIZE, "die", 3);
 }
 
 bool
-fact_store :: get_slot(uint64_t slot,
+fact_store :: get_slot(uint64_t number,
                        uint64_t* object,
                        uint64_t* client,
                        uint64_t* nonce,
                        e::slice* data,
                        std::string* backing)
 {
-    char key[KEY_SIZE_SLOT];
-	MDB_val k = { sizeof(key), key };
-	MDB_val bdata;
-    pack_key_slot(slot, key);
+    char key[SLOT_KEY_SIZE];
+    pack_slot_key(number, key);
 
-    if (!retrieve_value(&k, &bdata))
+    if (!retrieve_value(key, SLOT_KEY_SIZE, backing))
     {
         return false;
     }
 
-    if (bdata.mv_size < 3 * sizeof(uint64_t))
-    {
-        abort();
-    }
-
-	backing->assign((const char *)bdata.mv_data, bdata.mv_size);
-	mdb_txn_reset(m_rtxn);
-    const char* ptr = backing->data();
-    ptr = e::unpack64be(ptr, object);
-    ptr = e::unpack64be(ptr, client);
-    ptr = e::unpack64be(ptr, nonce);
-    *data = e::slice(ptr, backing->size() - 3 * sizeof(uint64_t));
-    return true;
+    MDB_val v;
+    MVSL(v,*backing);
+    return unpack_slot_val(&v, object, client, nonce, data);
 }
 
 bool
 fact_store :: get_slot(uint64_t client,
                        uint64_t nonce,
-                       uint64_t* slot)
+                       uint64_t* number)
 {
-    char key[KEY_SIZE_NONCE];
-	MDB_val k = { sizeof(key), key };
-    pack_key_nonce(client, nonce, key);
-    MDB_val backing;
+    char key[NONCE_KEY_SIZE];
+    pack_nonce_key(client, nonce, key);
+    std::string backing;
 
-    if (!retrieve_value(&k, &backing))
+    if (!retrieve_value(key, NONCE_KEY_SIZE, &backing) ||
+        backing.size() != NONCE_VAL_SIZE)
     {
         return false;
     }
 
-    if (backing.mv_size < sizeof(uint64_t))
-    {
-        abort();
-    }
-
-    e::unpack64be((const char *)backing.mv_data, slot);
-	mdb_txn_reset(m_rtxn);
+    unpack_nonce_val(backing.data(), number);
     return true;
 }
 
 bool
-fact_store :: get_exec(uint64_t slot,
+fact_store :: get_exec(uint64_t number,
                        replicant::response_returncode* rc,
                        e::slice* data,
                        std::string* backing)
 {
-    char key[KEY_SIZE_EXEC];
-	MDB_val k = { sizeof(key), key };
-	MDB_val bdata;
-    pack_key_exec(slot, key);
+    char key[EXEC_KEY_SIZE];
+    pack_exec_key(number, key);
 
-    if (!retrieve_value(&k, &bdata))
+    if (!retrieve_value(key, EXEC_KEY_SIZE, backing))
     {
         return false;
     }
 
-    if (bdata.mv_size == 0)
-    {
-        abort();
-    }
-
-	backing->assign((const char *)bdata.mv_data, bdata.mv_size);
-	mdb_txn_reset(m_rtxn);
-    *rc = static_cast<replicant::response_returncode>((*backing)[0]);
-    *data = e::slice(backing->data() + 1, backing->size() - 1);
-    return true;
+    MDB_val v;
+    MVSL(v,*backing);
+    return unpack_exec_val(&v, rc, data);
 }
 
 bool
-fact_store :: is_acknowledged_slot(uint64_t slot)
+fact_store :: is_acknowledged_slot(uint64_t number)
 {
-    char key[KEY_SIZE_ACK];
-	MDB_val k = { sizeof(key), key };
-    pack_key_ack(slot, key);
-    return check_key_exists(&k);
+    char key[ACK_KEY_SIZE];
+    pack_ack_key(number, key);
+    return check_key_exists(key, ACK_KEY_SIZE);
 }
 
 bool
-fact_store :: is_issued_slot(uint64_t slot)
+fact_store :: is_issued_slot(uint64_t number)
 {
-    char key[KEY_SIZE_SLOT];
-	MDB_val k = { sizeof(key), key };
-    pack_key_slot(slot, key);
-    return check_key_exists(&k);
+    char key[SLOT_KEY_SIZE];
+    pack_slot_key(number, key);
+    return check_key_exists(key, SLOT_KEY_SIZE);
 }
 
 uint64_t
 fact_store :: next_slot_to_issue()
 {
-    MDB_val key;
-    int rc;
-
     if (m_cache_next_slot_issue != 0)
     {
         return m_cache_next_slot_issue;
     }
 
-    rc = mdb_txn_renew(m_rtxn);
-    if (rc)
-    {
-            LOG(ERROR) << "could not read slot list because txn_renew failed:  "
-                       << mdb_strerror(rc);
-            abort();
-    }
-    rc = mdb_cursor_renew(m_rtxn, m_rcsr);
-    if (rc)
-    {
-            LOG(ERROR) << "could not read slot list because cursor_open failed:  "
-                       << mdb_strerror(rc);
-            mdb_txn_reset(m_rtxn);
-            abort();
-    }
-
-    MVS(key, "slot\x00\x00\x00\x00\x00\x00\x00\x00");
-
+    MDB_val pref;
+    MVS(pref,SLOT_PREFIX);
+    mdb_txn_renew(m_rtxn);
+    prefix_iterator iter(&pref, m_rtxn, m_dbi);
     uint64_t next_to_issue = 1;
 
-    rc = mdb_cursor_get(m_rcsr, &key, NULL, MDB_SET_RANGE);
-    while (rc == MDB_SUCCESS)
+    for (; iter.valid(); iter.next())
     {
-        if (strncmp((const char *)key.mv_data, "slot", 4) == 0 && key.mv_size == 12)
+        if (iter.key()->mv_size != SLOT_KEY_SIZE)
         {
-            uint64_t tmp;
-            e::unpack64be((char *)key.mv_data + 4, &tmp);
-            next_to_issue = std::max(next_to_issue, tmp + 1);
+            continue;
         }
-        else
-        {
-            break;
-        }
-        rc = mdb_cursor_get(m_rcsr, &key, NULL, MDB_NEXT);
+
+        uint64_t n;
+        unpack_slot_key((const char *)iter.key()->mv_data, &n);
+        next_to_issue = std::max(next_to_issue, n + 1);
     }
     mdb_txn_reset(m_rtxn);
 
@@ -840,48 +850,27 @@ fact_store :: next_slot_to_issue()
 uint64_t
 fact_store :: next_slot_to_ack()
 {
-    MDB_val key;
-    int rc;
-
     if (m_cache_next_slot_ack != 0)
     {
         return m_cache_next_slot_ack;
     }
 
-    rc = mdb_txn_renew(m_rtxn);
-    if (rc)
-    {
-            LOG(ERROR) << "could not read ack list because txn_begin failed:  "
-                       << mdb_strerror(rc);
-            abort();
-    }
-    rc = mdb_cursor_renew(m_rtxn, m_rcsr);
-    if (rc)
-    {
-            LOG(ERROR) << "could not read ack list because cursor_open failed:  "
-                       << mdb_strerror(rc);
-            mdb_txn_reset(m_rtxn);
-            abort();
-    }
-
-    MVS(key, "ack\x00\x00\x00\x00\x00\x00\x00\x00");
-
+    MDB_val pref;
+    MVS(pref,ACK_PREFIX);
+    mdb_txn_renew(m_rtxn);
+    prefix_iterator iter(&pref, m_rtxn, m_dbi);
     uint64_t next_to_ack = 1;
 
-    rc = mdb_cursor_get(m_rcsr, &key, NULL, MDB_SET_RANGE);
-    while (rc == MDB_SUCCESS)
+    for (; iter.valid(); iter.next())
     {
-        if (strncmp((const char *)key.mv_data, "ack", 3) == 0 && key.mv_size == 11)
+        if (iter.key()->mv_size != ACK_KEY_SIZE)
         {
-            uint64_t tmp;
-            e::unpack64be((char *)key.mv_data + 3, &tmp);
-            next_to_ack = std::max(next_to_ack, tmp + 1);
+            continue;
         }
-        else
-        {
-            break;
-        }
-        rc = mdb_cursor_get(m_rcsr, &key, NULL, MDB_NEXT);
+
+        uint64_t n;
+        unpack_ack_key((const char *)iter.key()->mv_data, &n);
+        next_to_ack = std::max(next_to_ack, n + 1);
     }
     mdb_txn_reset(m_rtxn);
 
@@ -890,121 +879,87 @@ fact_store :: next_slot_to_ack()
 }
 
 void
-fact_store :: issue_slot(uint64_t slot,
+fact_store :: issue_slot(uint64_t number,
                          uint64_t object,
                          uint64_t client,
                          uint64_t nonce,
                          const e::slice& data)
 {
-    assert(slot == m_cache_next_slot_issue || m_cache_next_slot_issue == 0);
-    char key[KEY_SIZE_SLOT];
-	MDB_val k = { sizeof(key), key };
-	MDB_val val;
-    pack_key_slot(slot, key);
-    std::vector<char> value(3 * sizeof(uint64_t) + data.size());
-    char* ptr = &value.front();
-    ptr = e::pack64be(object, ptr);
-    ptr = e::pack64be(client, ptr);
-    ptr = e::pack64be(nonce, ptr);
-    memmove(ptr, data.data(), data.size());
-	val.mv_data = &value.front();
-	val.mv_size = value.size();
-    store_key_value(&k, &val);
+    assert(number == m_cache_next_slot_issue || m_cache_next_slot_issue == 0);
+    char key[SLOT_KEY_SIZE];
+    pack_slot_key(number, key);
+    std::vector<char> val;
+    pack_slot_val(object, client, nonce, data, &val);
+    store_key_value(key, SLOT_KEY_SIZE, &val.front(), val.size());
 
-    if (slot == m_cache_next_slot_issue && m_cache_next_slot_issue != 0)
+    if (number == m_cache_next_slot_issue && m_cache_next_slot_issue != 0)
     {
         ++m_cache_next_slot_issue;
     }
 
-    char keyn[KEY_SIZE_NONCE];
-    pack_key_nonce(client, nonce, keyn);
-    char valn[sizeof(uint64_t)];
-    e::pack64be(slot, valn);
-	k.mv_data = keyn;
-	k.mv_size = sizeof(keyn);
-	val.mv_data = valn;
-	val.mv_size = sizeof(valn);
-    store_key_value(&k, &val);
+    char keyn[NONCE_KEY_SIZE];
+    pack_nonce_key(client, nonce, keyn);
+    char valn[NONCE_VAL_SIZE];
+    pack_nonce_val(number, valn);
+    store_key_value(keyn, NONCE_KEY_SIZE, valn, NONCE_VAL_SIZE);
 }
 
 void
-fact_store :: ack_slot(uint64_t slot)
+fact_store :: ack_slot(uint64_t number)
 {
-    assert(slot == m_cache_next_slot_ack || m_cache_next_slot_ack == 0);
-    char key[KEY_SIZE_ACK];
-	MDB_val k = { sizeof(key), key };
-	MDB_val val = { 0, (void *)"" };
-    pack_key_ack(slot, key);
-    store_key_value(&k, &val);
+    assert(number == m_cache_next_slot_ack || m_cache_next_slot_ack == 0);
+    char key[ACK_KEY_SIZE];
+    pack_ack_key(number, key);
+    store_key_value(key, ACK_KEY_SIZE, "", 0);
 
-    if (slot == m_cache_next_slot_ack && m_cache_next_slot_ack != 0)
+    if (number == m_cache_next_slot_ack && m_cache_next_slot_ack != 0)
     {
         ++m_cache_next_slot_ack;
     }
 }
 
 void
-fact_store :: exec_slot(uint64_t slot,
+fact_store :: exec_slot(uint64_t number,
                         replicant::response_returncode rc,
                         const e::slice& data)
 {
-    char key[KEY_SIZE_EXEC];
-	MDB_val k = { sizeof(key), key };
-	MDB_val val;
-    pack_key_exec(slot, key);
-    std::vector<char> value(sizeof(uint8_t) + data.size());
-    char* ptr = &value.front();
-    *ptr = static_cast<uint8_t>(rc);
-    ++ptr;
-    memmove(ptr, data.data(), data.size());
-	val.mv_data = &value.front();
-	val.mv_size = value.size();
-    store_key_value(&k, &val);
+    char key[EXEC_KEY_SIZE];
+    pack_exec_key(number, key);
+    std::vector<char> value;
+    pack_exec_val(rc, data, &value);
+    store_key_value(key, EXEC_KEY_SIZE, &value.front(), value.size());
 }
 
 void
 fact_store :: clear_unacked_slots()
 {
-    uint64_t acked = next_slot_to_ack();
-    uint64_t issued = next_slot_to_issue();
-	MDB_val pref;
+    uint64_t next_to_ack = next_slot_to_ack();
+    uint64_t next_to_issue = next_slot_to_issue();
 
-	MVS(pref, "nonce");
-	mdb_txn_renew(m_rtxn);
-    prefix_iterator nonces(&pref, m_rtxn, m_dbi, 21);
-
-    for (; nonces.valid(); nonces.next())
+    while (next_to_issue >= next_to_ack)
     {
-        const char* ptr = (const char *)nonces.key()->mv_data;
+        char key[SLOT_KEY_SIZE];
+        pack_slot_key(next_to_issue, key);
+        std::string backing;
+        uint64_t object;
         uint64_t client;
         uint64_t nonce;
-        e::unpack64be(ptr + 5, &client);
-        e::unpack64be(ptr + 13, &nonce);
-        ptr = (const char *)nonces.val()->mv_data;
+        e::slice data;
+        MDB_val v;
 
-        if (nonces.val()->mv_size != sizeof(uint64_t))
+        if (retrieve_value(key, SLOT_KEY_SIZE, &backing)) {
+            MDB_val v;
+            MVSL(v,backing);
+            if (unpack_slot_val(&v, &object, &client, &nonce, &data))
         {
-            continue;
+            char keyn[NONCE_KEY_SIZE];
+            pack_nonce_key(client, nonce, keyn);
+            delete_key(keyn, NONCE_KEY_SIZE);
+        }
         }
 
-        uint64_t slot;
-        e::unpack64be(ptr, &slot);
-
-        if (slot > acked)
-        {
-            delete_key(nonces.key());
-        }
-    }
-	mdb_txn_reset(m_rtxn);
-
-    while (issued > acked)
-    {
-        char key[KEY_SIZE_SLOT];
-		MDB_val k = { sizeof(key), key };
-        --issued;
-        pack_key_slot(issued, key);
-
-        delete_key(&k);
+        delete_key(key, SLOT_KEY_SIZE);
+        --next_to_issue;
     }
 
     m_cache_next_slot_issue = 0;
@@ -1012,727 +967,1236 @@ fact_store :: clear_unacked_slots()
 }
 
 bool
-fact_store :: check_key_exists(MDB_val *key)
+fact_store :: debug_dump(const po6::pathname& path)
 {
-	MDB_val val;
-	bool do_reset = true;
-	int rc;
+    int st;
+    st = open_db(path, false);
 
-	rc = mdb_txn_renew(m_rtxn);
-	if (rc)
-	{
-		do_reset = false;
-	}
-	rc = mdb_get(m_rtxn, m_dbi, key, &val);
-	if (do_reset)
-		mdb_txn_reset(m_rtxn);
-	if (rc == MDB_SUCCESS)
+    if (st)
     {
-        return true;
+        std::cerr << "could not open DB: " << mdb_strerror(st) << std::endl;
+        return false;
     }
-    else if (rc == MDB_NOTFOUND)
+
+    // dump information relating to reconfiguration
+    typedef std::pair<uint64_t, uint64_t> uup;
+    std::vector<uup> proposals;
+    std::vector<std::vector<configuration> > proposed_configs;
+    std::vector<uup> accepted_proposals;
+    std::vector<uup> rejected_proposals;
+    std::vector<std::pair<uint64_t, configuration> > informed_configs;
+    std::vector<std::pair<uint64_t, const char*> > clients;
+    std::vector<slot> slots_issued;
+    std::vector<uint64_t> slots_acked;
+    std::vector<exec> slots_execd;
+    std::vector<slot_mapping> slot_mappings;
+
+    if (!scan_all(&proposals, &proposed_configs, &accepted_proposals,
+                  &rejected_proposals, &informed_configs, &clients,
+                  &slots_issued, &slots_acked, &slots_execd, &slot_mappings))
     {
         return false;
     }
-    else
+
+    assert(proposals.size() == proposed_configs.size());
+
+    for (size_t i = 0; i < proposals.size(); ++i)
     {
-        LOG(ERROR) << "LMDB failed: " << mdb_strerror(rc);
-        abort();
+        std::cout << "proposal " << proposals[i].first << ":" << proposals[i].second << "\n";
+
+        for (size_t j = 0; j < proposed_configs[i].size(); ++j)
+        {
+            std::cout << "         " << proposed_configs[i][j] << "\n";
+        }
     }
+
+    for (size_t i = 0; i < accepted_proposals.size(); ++i)
+    {
+        std::cout << "accepted " << accepted_proposals[i].first << ":" << accepted_proposals[i].second << "\n";
+    }
+
+    for (size_t i = 0; i < rejected_proposals.size(); ++i)
+    {
+        std::cout << "rejected " << rejected_proposals[i].first << ":" << rejected_proposals[i].second << "\n";
+    }
+
+    for (size_t i = 0; i < informed_configs.size(); ++i)
+    {
+        std::cout << "informed " << informed_configs[i].first << ": " << informed_configs[i].second << "\n";
+    }
+
+    for (size_t i = 0; i < clients.size(); ++i)
+    {
+        std::cout << "client " << clients[i].first << " state=" << clients[i].second << "\n";
+    }
+
+    for (size_t i = 0; i < slots_issued.size(); ++i)
+    {
+        std::cout << "issued slot " << slots_issued[i].number << ":"
+                  << " object=" << slots_issued[i].object
+                  << " client=" << slots_issued[i].client
+                  << " nonce=" << slots_issued[i].nonce
+                  << " func=" << e::strescape(slots_issued[i].func)
+                  << " data=\"" << e::strescape(slots_issued[i].data) << "\"\n";
+    }
+
+    for (size_t i = 0; i < slots_acked.size(); ++i)
+    {
+        std::cout << "acked slot " << slots_acked[i] << "\n";
+    }
+
+    for (size_t i = 0; i < slots_execd.size(); ++i)
+    {
+        std::cout << "execd slot " << slots_execd[i].number
+                  << " status=" << slots_execd[i].rc 
+                  << " response=\"" << e::strescape(slots_execd[i].response) << "\"\n";
+    }
+
+    for (size_t i = 0; i < slot_mappings.size(); ++i)
+    {
+        std::cout << "slot mapping client=" << slot_mappings[i].client
+                  << " nonce=" << slot_mappings[i].nonce << " -> "
+                  << "slot=" << slot_mappings[i].slot << "\n";
+    }
+
+    return true;
 }
 
 bool
-fact_store :: retrieve_value(MDB_val *key, MDB_val *value)
+fact_store :: integrity_check(const po6::pathname& path, bool destructive)
 {
-	int rc;
-	bool do_reset = true;
+    int st;
+    st = open_db(path, false);
 
-	rc = mdb_txn_renew(m_rtxn);
-	if (rc)
-	{
-		do_reset = false;
-	}
-	rc = mdb_get(m_rtxn, m_dbi, key, value);
+    if (st)
+    {
+        std::cerr << "could not open LevelDB: " << mdb_strerror(st) << std::endl;
+        return false;
+    }
+
+    std::ostringstream ostr;
+    bool restored;
+    chain_node us;
+
+    if (!initialize(ostr, &restored, &us))
+    {
+        std::cerr << ostr.str() << std::endl;
+        return false;
+    }
+
+    if (restored && !integrity_check(5, true, destructive, NULL))
+    {
+        std::cerr << "Integrity check failed.\n"
+                  << "Fix the above errors and re-run the integrity check.\n"
+                  << "For more information try \"man replicant-integrity-check\"\n";
+        return false;
+    }
+
+    return true;
+}
+
+int
+fact_store :: open_db(const po6::pathname& path, bool create)
+{
+    MDB_txn *txn;
+    int rc;
+
+    rc = mdb_env_create(&m_db);
+    if (rc)
+    {
+        LOG(ERROR) << "could not create LMDB env: " << mdb_strerror(rc);
+        return rc;
+    }
+    rc = mdb_env_set_mapsize(m_db, 10485760);    /* 10MB default */
+    rc = mdb_env_open(m_db, path.get(), MDB_WRITEMAP, 0600);
+    if (rc)
+    {
+        LOG(ERROR) << "could not open LMDB env: " << mdb_strerror(rc);
+        return rc;
+    }
+    rc = mdb_txn_begin(m_db, NULL, 0, &txn);
+    if (rc)
+    {
+        LOG(ERROR) << "could not open LMDB txn: " << mdb_strerror(rc);
+        return rc;
+    }
+    rc = mdb_open(txn, NULL, 0, &m_dbi);
+    if (rc)
+    {
+        LOG(ERROR) << "could not open LMDB dbi: " << mdb_strerror(rc);
+        mdb_txn_abort(txn);
+        return rc;
+    }
+    mdb_txn_commit(txn);
+
+    /* Set this up for readers to use later */
+    rc = mdb_txn_begin(m_db, NULL, MDB_RDONLY, &m_rtxn);
+    if (rc)
+    {
+        LOG(ERROR) << "could not open LMDB read txn: " << mdb_strerror(rc);
+        return rc;
+    }
+    rc = mdb_cursor_open(m_rtxn, m_dbi, &m_rcsr);
+    if (rc)
+    {
+        LOG(ERROR) << "could not open LMDB read cursor: " << mdb_strerror(rc);
+        mdb_txn_abort(m_rtxn);
+        return rc;
+    }
+    mdb_txn_reset(m_rtxn);
+    return rc;
+}
+
+bool
+fact_store :: initialize(std::ostream& ostr, bool* restored, chain_node* us)
+{
+    MDB_txn *txn;
+    MDB_val key, data;
+    int rc;
+    bool ret = false;
+
+    rc = mdb_txn_begin(m_db, NULL, 0, &txn);
+    if (rc)
+    {
+        ostr << "could not open LMDB txn: " << mdb_strerror(rc);
+        return false;
+    }
+
+    // read the "replicant" key and check the version
+    bool first_time = false;
+
+    MVS(key, "replicant");
+    rc = mdb_get(txn, m_dbi, &key, &data);
+ 
+    if (rc == MDB_SUCCESS)
+    {
+        if (data.mv_size != STRLENOF(PACKAGE_VERSION) ||
+            memcmp(data.mv_data, PACKAGE_VERSION, STRLENOF(PACKAGE_VERSION)))
+        {
+            ostr << "could not restore from DB because "
+                 << "the existing data was created by "
+                 << "replicant " << (char *)data.mv_data << " but "
+                 << "this is version " << PACKAGE_VERSION << " which is not compatible";
+            goto leave;
+        }
+    }
+    else if (rc == MDB_NOTFOUND)
+    {
+        first_time = true;
+        MVS(data, PACKAGE_VERSION);
+        rc = mdb_put(txn, m_dbi, &key, &data, 0);
+        if (rc == MDB_SUCCESS)
+        {
+            rc = mdb_txn_commit(txn);
+            if (rc == MDB_SUCCESS)
+                rc = mdb_txn_begin(m_db, NULL, 0, &txn);
+        }
+
+        if (rc)
+        {
+            ostr << "could not save \"replicant\" key into DB: " << mdb_strerror(rc);
+            goto leave;
+        }
+    }
+    else
+    {
+        ostr << "could not read \"replicant\" key from DB: " << mdb_strerror(rc);
+        goto leave;
+    }
+
+    // read the "state" key and parse it
+    MVS(key, "us");
+    rc = mdb_get(txn, m_dbi, &key, &data);
+
+    if (rc == MDB_SUCCESS)
+    {
+        if (first_time)
+        {
+            ostr << "could not restore from DB because a previous "
+                 << "execution crashed and the database was tampered with; "
+                 << "you'll need to manually erase this DB and create a new one";
+            goto leave;
+        }
+
+        e::unpacker up((const char *)data.mv_data, data.mv_size);
+        up = up >> *us;
+
+        if (up.error())
+        {
+            ostr << "could not restore from DB because a previous "
+                 << "execution wrote an invalid node identity; "
+                 << "you'll need to manually erase this DB and create a new one";
+            goto leave;
+        }
+    }
+    else if (rc == MDB_NOTFOUND)
+    {
+        if (!only_key_is_replicant_key())
+        {
+            ostr << "could not restore from DB because a previous "
+                 << "execution didn't save a node identity, and wrote "
+                 << "other data; "
+                 << "you'll need to manually erase this DB and create a new one";
+            goto leave;
+        }
+    }
+
+    ret = true;
+leave:
+    mdb_txn_abort(txn);
+    *restored = !first_time;
+    return ret;
+}
+
+#define REPORT_ERROR(X) do { if (output) std::cout << "integrity error: " << X << std::endl; error = true; } while (0)
+
+bool
+fact_store :: integrity_check(int tries_remaining, bool output, bool destructive, configuration_manager* config_manager)
+{
+    // pull all of the information from the database
+    int st;
+    typedef std::pair<uint64_t, uint64_t> uup;
+    std::vector<uup> proposals;
+    std::vector<std::vector<configuration> > proposed_configs;
+    std::vector<uup> accepted_proposals;
+    std::vector<uup> rejected_proposals;
+    std::vector<std::pair<uint64_t, configuration> > informed_configs;
+    std::vector<std::pair<uint64_t, const char*> > clients;
+    std::vector<slot> slots_issued;
+    std::vector<uint64_t> slots_acked;
+    std::vector<exec> slots_execd;
+    std::vector<slot_mapping> slot_mappings;
+    bool tried_something = false;
+
+    if (!scan_all(&proposals, &proposed_configs, &accepted_proposals,
+                  &rejected_proposals, &informed_configs, &clients,
+                  &slots_issued, &slots_acked, &slots_execd, &slot_mappings))
+    {
+        return false;
+    }
+
+    bool error = false;
+
+    // every proposal may either be accepted or rejected, not both
+    for (size_t i = 0; i < proposals.size(); ++i)
+    {
+        bool accepted = std::binary_search(accepted_proposals.begin(),
+                                           accepted_proposals.end(),
+                                           proposals[i]);
+        bool rejected = std::binary_search(rejected_proposals.begin(),
+                                           rejected_proposals.end(),
+                                           proposals[i]);
+
+        if (accepted && rejected)
+        {
+            REPORT_ERROR("proposal " << proposals[i].first << ":" << proposals[i].second
+                         << " rejected and accepted simultaneously");
+        }
+
+        if (proposed_configs[i].empty())
+        {
+            REPORT_ERROR("proposal " << proposals[i].first << ":" << proposals[i].second
+                         << " contains no configurations");
+        } 
+
+        // every configuration in a proposal must validate
+        for (size_t j = 0; j < proposed_configs[i].size(); ++j)
+        {
+            if (!proposed_configs[i][j].validate())
+            {
+                REPORT_ERROR("proposal " << proposals[i].first << ":" << proposals[i].second
+                             << " contains invalid configuration " << proposed_configs[i][j]);
+            }
+
+            if (j > 0 && 
+                proposed_configs[i][j - 1].version() + 1 != proposed_configs[i][j].version())
+            {
+                REPORT_ERROR("proposal " << proposals[i].first << ":" << proposals[i].second
+                             << " contains contains discontinous configurations");
+            }
+        }
+    }
+
+    // every accepted proposal must be proposed as well
+    for (size_t i = 0; i < accepted_proposals.size(); ++i)
+    {
+        if (!std::binary_search(proposals.begin(),
+                                proposals.end(),
+                                accepted_proposals[i]))
+        {
+            REPORT_ERROR("unknown proposal " << accepted_proposals[i].first << ":" << accepted_proposals[i].second << " accepted");
+        }
+    }
+
+    // every rejected proposal must be proposed as well
+    for (size_t i = 0; i < rejected_proposals.size(); ++i)
+    {
+        if (!std::binary_search(proposals.begin(),
+                                proposals.end(),
+                                rejected_proposals[i]))
+        {
+            REPORT_ERROR("unknown proposal " << rejected_proposals[i].first << ":" << rejected_proposals[i].second << " rejected");
+        }
+    }
+
+    // there must be at least one informed config
+    if (informed_configs.empty())
+    {
+        REPORT_ERROR("no \"informed\" configs");
+    }
+
+    // every informed config must validate
+    for (size_t i = 0; i < informed_configs.size(); ++i)
+    {
+        if (informed_configs[i].first != informed_configs[i].second.version() ||
+            !informed_configs[i].second.validate())
+        {
+            REPORT_ERROR("informed config " << informed_configs[i].first
+                         << " is invalid " << informed_configs[i].second);
+        }
+    }
+
+    // select every accepted configuration
+    std::vector<std::pair<uint64_t, configuration> > accepted_configs(informed_configs);
+
+    for (size_t i = 0; i < proposals.size(); ++i)
+    {
+        if (std::binary_search(accepted_proposals.begin(),
+                               accepted_proposals.end(),
+                               proposals[i]))
+        {
+            for (size_t j = 0; j < proposed_configs[i].size(); ++j)
+            {
+                const configuration& c(proposed_configs[i][j]);
+                uint64_t v = c.version();
+                accepted_configs.push_back(std::make_pair(v, c));
+            }
+        }
+        else if (!std::binary_search(rejected_proposals.begin(),
+                                     rejected_proposals.end(),
+                                     proposals[i]))
+        {
+            const configuration& c(proposed_configs[i][0]);
+            uint64_t v = c.version();
+            accepted_configs.push_back(std::make_pair(v, c));
+        }
+    }
+
+    std::sort(accepted_configs.begin(), accepted_configs.end());
+    std::vector<std::pair<uint64_t, configuration> >::iterator cit;
+    cit = std::unique(accepted_configs.begin(), accepted_configs.end());
+    accepted_configs.resize(cit - accepted_configs.begin());
+
+    for (size_t i = 1; i < accepted_configs.size(); ++i)
+    {
+        if (accepted_configs[i - 1].first == accepted_configs[i].first)
+        {
+            REPORT_ERROR("conflicting configurations with the same version "
+                         << accepted_configs[i - 1].second << " != "
+                         << accepted_configs[i].second);
+        }
+    }
+
+    // construct a config manager from the state pulled from the fact store
+    if (!accepted_configs.empty())
+    {
+        configuration_manager cm;
+        uint64_t min_version = accepted_configs.back().second.version();
+        cm.reset(accepted_configs.back().second);
+
+        for (size_t i = 0; i < proposals.size(); ++i)
+        {
+            if (std::binary_search(accepted_proposals.begin(),
+                                   accepted_proposals.end(),
+                                   proposals[i]) ||
+                std::binary_search(rejected_proposals.begin(),
+                                   rejected_proposals.end(),
+                                   proposals[i]) ||
+                proposed_configs[i].back().version() <= min_version)
+            {
+                continue;
+            }
+
+            configuration* configs = &proposed_configs[i][0];
+            size_t configs_sz = proposed_configs[i].size();
+
+            while (configs->version() < min_version)
+            {
+                ++configs;
+                --configs_sz;
+            }
+
+            assert(configs->version() == min_version);
+            assert(configs_sz > 1);
+
+            if (!cm.is_compatible(configs, configs_sz))
+            {
+                REPORT_ERROR("proposed configurations are incompatible");
+            }
+
+            cm.merge(proposals[i].first,
+                     proposals[i].second,
+                     configs, configs_sz);
+        }
+
+        if (config_manager)
+        {
+            *config_manager = cm;
+        }
+    }
+    else
+    {
+        REPORT_ERROR("not checking proposals further; no accepted configurations found");
+    }
+
+    uint64_t erase_slots_above = UINT64_MAX;
+
+    // check that slots are continuous
+    for (size_t i = 1; i < slots_issued.size(); ++i)
+    {
+        if (slots_issued[i - 1].number + 1 != slots_issued[i].number)
+        {
+            REPORT_ERROR("discontinuity in issued slots: jumps from "
+                         << slots_issued[i - 1].number << " to "
+                         << slots_issued[i].number);
+
+            // if not acked, this is recoverable
+            if (slots_issued[i].number > slots_acked.empty() ? 0 : slots_acked.back())
+            {
+                erase_slots_above = std::min(erase_slots_above,
+                                             slots_issued[i].number);
+            }
+        }
+    }
+
+    if (erase_slots_above < UINT64_MAX)
+    {
+        if (!destructive)
+        {
+            REPORT_ERROR("must erase slots above " << erase_slots_above
+                         << " (this error may be fixed automatically by a destructive integrity check)");
+        }
+        else
+        {
+            REPORT_ERROR("must erase slots above " << erase_slots_above
+                         << " (running in destructive mode: trying to fix automatically)");
+
+            for (size_t i = 0; i < slots_issued.size(); ++i)
+            {
+                uint64_t number = slots_issued[slots_issued.size() - i - 1].number;
+
+                if (number >= erase_slots_above)
+                {
+                    char key[SLOT_KEY_SIZE];
+                    pack_slot_key(number, key);
+                    delete_key(key, SLOT_KEY_SIZE);
+                }
+            }
+
+            tried_something = true;
+        }
+    }
+
+    // check that acks are continous and refer to issued slots
+    for (size_t i = 0; i < slots_acked.size(); ++i)
+    {
+        if (i > 0 && slots_acked[i - 1] + 1 != slots_acked[i])
+        {
+            REPORT_ERROR("discontinuity in acked slots: jumps from "
+                         << slots_acked[i - 1] << " to " << slots_acked[i]);
+        }
+
+        if (slots_issued.empty() ||
+            slots_issued.front().number > slots_acked[i] ||
+            slots_issued.back().number < slots_acked[i])
+        {
+            REPORT_ERROR("acked slot " << slots_acked[i]
+                         << " does not refer to issued slot");
+        }
+    }
+
+    // check that execs refer to acked slots
+    for (size_t i = 0; i < slots_execd.size(); ++i)
+    {
+        if (slots_acked.empty() ||
+            slots_acked.front() > slots_execd[i].number ||
+            slots_acked.back() < slots_execd[i].number)
+        {
+            REPORT_ERROR("exec'd slot " << slots_execd[i].number
+                         << " does not refer to acked slot");
+        }
+    }
+
+    // check the bidirection mapping (client, nonce) <-> slot
+    for (size_t i = 0; i < slot_mappings.size(); ++i)
+    {
+        if (slots_issued.empty() ||
+            slots_issued.front().number > slot_mappings[i].slot ||
+            slots_issued.back().number < slot_mappings[i].slot)
+        {
+            if (!destructive)
+            {
+                REPORT_ERROR("slot mapping (" << slot_mappings[i].client << ", "
+                             << slot_mappings[i].nonce << ") -> "
+                             << slot_mappings[i].slot << " points to invalid slot"
+                             << " (this error may be fixed automatically by a destructive integrity check)");
+            }
+            else
+            {
+                REPORT_ERROR("slot mapping (" << slot_mappings[i].client << ", "
+                             << slot_mappings[i].nonce << ") -> "
+                             << slot_mappings[i].slot << " points to invalid slot"
+                             << " (running in destructive mode: trying to fix automatically)");
+                char key[NONCE_KEY_SIZE];
+                pack_nonce_key(slot_mappings[i].client, slot_mappings[i].nonce, key);
+                delete_key(key, NONCE_KEY_SIZE);
+                tried_something = true;
+            }
+
+            continue;
+        }
+
+        slot s;
+        s.number = slot_mappings[i].slot;
+        std::vector<slot>::iterator it;
+        it = std::lower_bound(slots_issued.begin(),
+                              slots_issued.end(), s);
+        assert(it != slots_issued.end());
+
+        if (it->client != slot_mappings[i].client ||
+            it->nonce != slot_mappings[i].nonce)
+        {
+            REPORT_ERROR("unreciprocal slot mapping ("
+                         << slot_mappings[i].client << ", "
+                         << slot_mappings[i].nonce << ") -> "
+                         << slot_mappings[i].slot << " -> ("
+                         << slots_issued[i].client << ", "
+                         << slots_issued[i].nonce << ")");
+        }
+    }
+
+    for (size_t i = 0; i < slots_issued.size(); ++i)
+    {
+        slot_mapping sm;
+        sm.client = slots_issued[i].client;
+        sm.nonce = slots_issued[i].nonce;
+        sm.slot = 0;
+        std::vector<slot_mapping>::iterator it;
+        it = std::lower_bound(slot_mappings.begin(),
+                              slot_mappings.end(),
+                              sm);
+
+        if (it == slot_mappings.end() ||
+            it->client != sm.client ||
+            it->nonce != sm.nonce)
+        {
+            if (!destructive)
+            {
+                REPORT_ERROR("slot " << slots_issued[i].number
+                             << " claims to originate from ("
+                             << slots_issued[i].client << ", "
+                             << slots_issued[i].nonce
+                             << "), but said slot (client, nonce) pair doesn't exist"
+                             << " (this error may be fixed automatically by a destructive integrity check)");
+            }
+            else
+            {
+                REPORT_ERROR("slot " << slots_issued[i].number
+                             << " claims to originate from ("
+                             << slots_issued[i].client << ", "
+                             << slots_issued[i].nonce
+                             << "), but said slot (client, nonce) pair doesn't exist"
+                             << " (running in destructive mode: trying to fix automatically)");
+                char key[NONCE_KEY_SIZE];
+                pack_nonce_key(slots_issued[i].client, slots_issued[i].nonce, key);
+                char val[NONCE_VAL_SIZE];
+                pack_nonce_val(slots_issued[i].number, val);
+                store_key_value(key, NONCE_KEY_SIZE, val, NONCE_VAL_SIZE);
+                tried_something = true;
+            }
+        }
+        else if (it->slot != slots_issued[i].number)
+        {
+            if (!destructive)
+            {
+                REPORT_ERROR("unreciprocal slot mapping "
+                             << slots_issued[i].number << " -> ("
+                             << slots_issued[i].client << ", "
+                             << slots_issued[i].nonce << ") -> "
+                             << it->slot
+                             << " (this error may be fixed automatically by a destructive integrity check)");
+            }
+            else
+            {
+                REPORT_ERROR("unreciprocal slot mapping "
+                             << slots_issued[i].number << " -> ("
+                             << slots_issued[i].client << ", "
+                             << slots_issued[i].nonce << ") -> "
+                             << it->slot
+                             << " (running in destructive mode: trying to fix automatically)");
+                char key[NONCE_KEY_SIZE];
+                pack_nonce_key(slots_issued[i].client, slots_issued[i].nonce, key);
+                char val[NONCE_VAL_SIZE];
+                pack_nonce_val(slots_issued[i].number, val);
+                store_key_value(key, NONCE_KEY_SIZE, val, NONCE_VAL_SIZE);
+                tried_something = true;
+            }
+        }
+    }
+
+    if (tried_something && tries_remaining > 0)
+    {
+        std::cout << "tried some fixes... making another pass" << std::endl;
+        return integrity_check(tries_remaining - 1, output, destructive, config_manager);
+    }
+
+    return !error;
+}
+
+#undef REPORT_ERROR
+
+bool
+fact_store :: check_key_exists(const char* key, size_t key_sz)
+{
+    MDB_val k, val;
+    bool do_reset = true;
+    int rc;
+
+    rc = mdb_txn_renew(m_rtxn);
+    if (rc)
+    {
+        do_reset = false;
+    }
+    k.mv_data = (void *)key; k.mv_size = key_sz;
+    rc = mdb_get(m_rtxn, m_dbi, &k, &val);
+    if (do_reset)
+        mdb_txn_reset(m_rtxn);
     if (rc == MDB_SUCCESS)
     {
         return true;
     }
     else if (rc == MDB_NOTFOUND)
     {
-		if (do_reset)
-			mdb_txn_reset(m_rtxn);
         return false;
     }
     else
     {
-        LOG(ERROR) << "LMDB failed: " << mdb_strerror(rc);
+        LOG(ERROR) << "DB failed: " << mdb_strerror(rc);
         abort();
     }
 }
 
 void
-fact_store :: store_key_value(MDB_val *key, MDB_val *value)
+fact_store :: store_key_value(const char* key, size_t key_sz,
+                              const char* value, size_t value_sz)
 {
-	MDB_txn *txn;
-	int rc;
+    MDB_txn *txn;
+    MDB_val k, v;
+    int rc;
 
-	rc = mdb_txn_begin(m_db, NULL, 0, &txn);
-	if (rc)
-	{
-		abort();
-	}
-	rc = mdb_put(txn, m_dbi, key, value, 0);
+    k.mv_data = (void *)key; k.mv_size = key_sz;
+    v.mv_data = (void *)value; v.mv_size = value_sz;
+
+    rc = mdb_txn_begin(m_db, NULL, 0, &txn);
+    if (rc)
+    {
+        abort();
+    }
+    rc = mdb_put(txn, m_dbi, &k, &v, 0);
     if (rc == MDB_SUCCESS)
     {
         rc = mdb_txn_commit(txn);
     }
     else
     {
-        LOG(ERROR) << "LMDB put failed: " << mdb_strerror(rc);
-		mdb_txn_abort(txn);
+        mdb_txn_abort(txn);
+        LOG(ERROR) << "DB put failed: " << mdb_strerror(rc);
+        abort();
+    }
+}
+
+bool
+fact_store :: retrieve_value(const char* key, size_t key_sz,
+                             std::string* backing)
+{
+    MDB_val k, v;
+    int rc;
+    bool do_reset = true;
+
+    rc = mdb_txn_renew(m_rtxn);
+    if (rc)
+    {
+        do_reset = false;
+    }
+    k.mv_data = (void *)key; k.mv_size = key_sz;
+    rc = mdb_get(m_rtxn, m_dbi, &k, &v);
+    if (rc == MDB_SUCCESS)
+    {
+        backing->assign((const char *)v.mv_data, v.mv_size);
+        if (do_reset)
+            mdb_txn_reset(m_rtxn);
+        return true;
+    }
+    else if (rc == MDB_NOTFOUND)
+    {
+        if (do_reset)
+            mdb_txn_reset(m_rtxn);
+        return false;
+    }
+    else
+    {
+        LOG(ERROR) << "DB failed: " << mdb_strerror(rc);
         abort();
     }
 }
 
 void
-fact_store :: delete_key(MDB_val *key)
+fact_store :: delete_key(const char* key, size_t key_sz)
 {
-	MDB_txn *txn;
-	int rc;
+    MDB_txn *txn;
+    MDB_val k;
+    int rc;
 
-	rc = mdb_txn_begin(m_db, NULL, 0, &txn);
-	if (rc)
-	{
-		abort();
-	}
-	rc = mdb_del(txn, m_dbi, key, NULL);
-	if (rc == MDB_NOTFOUND)
-	{
-		mdb_txn_abort(txn);
-		return;
-	}
-	if (rc == MDB_SUCCESS)
-	{
-		rc = mdb_txn_commit(txn);
-		if (rc == MDB_SUCCESS)
-			return;
-	}
-    else
+    rc = mdb_txn_begin(m_db, NULL, 0, &txn);
+    if (rc)
     {
-        LOG(ERROR) << "LMDB delete failed: " << mdb_strerror(rc);
         abort();
     }
+    k.mv_data = (void *)key; k.mv_size = key_sz;
+    rc = mdb_del(txn, m_dbi, &k, NULL);
+    if (rc == MDB_NOTFOUND)
+    {
+        mdb_txn_abort(txn);
+        return;
+    }
+    if (rc == MDB_SUCCESS)
+    {
+        rc = mdb_txn_commit(txn);
+        if (rc == MDB_SUCCESS)
+            return;
+    }
+    LOG(ERROR) << "DB delete failed: " << mdb_strerror(rc);
+    abort();
 }
 
 bool
 fact_store :: only_key_is_replicant_key()
 {
-	MDB_cursor *mc;
-	MDB_txn *txn;
-	MDB_val key;
-	int rc;
+    MDB_cursor *mc;
+    MDB_txn *txn;
+    MDB_val key;
+    int rc;
 
-	rc = mdb_txn_begin(m_db, NULL, MDB_RDONLY, &txn);
-	if (rc)
-	{
-		abort();
-	}
-	rc = mdb_cursor_open(txn, m_dbi, &mc);
-	if (rc)
-	{
-		abort();
-	}
+    rc = mdb_txn_begin(m_db, NULL, MDB_RDONLY, &txn);
+    if (rc)
+    {
+        abort();
+    }
+    rc = mdb_cursor_open(txn, m_dbi, &mc);
+    if (rc)
+    {
+        abort();
+    }
 
     bool seen = false;
 
     while ((rc = mdb_cursor_get(mc, &key, NULL, MDB_NEXT)) == MDB_SUCCESS)
     {
-		if (key.mv_size != 9 || memcmp(key.mv_data, "replicant", 9))
+        if (key.mv_size != 9 || memcmp(key.mv_data, "replicant", 9))
         {
-			mdb_cursor_close(mc);
-			mdb_txn_abort(txn);
+            mdb_cursor_close(mc);
+            mdb_txn_abort(txn);
             return false;
         }
 
         seen = true;
     }
-	mdb_cursor_close(mc);
-	mdb_txn_abort(txn);
+    mdb_cursor_close(mc);
+    mdb_txn_abort(txn);
     return seen;
 }
 
-#define FSCK_LOG if (verbose) std::cerr
-
 bool
-fact_store :: fsck(bool verbose, bool destructive, configuration_manager* config_manager)
+fact_store :: scan_all(std::vector<std::pair<uint64_t, uint64_t> >* proposals,
+                       std::vector<std::vector<configuration> >* proposed_configs,
+                       std::vector<std::pair<uint64_t, uint64_t> >* accepted_proposals,
+                       std::vector<std::pair<uint64_t, uint64_t> >* rejected_proposals,
+                       std::vector<std::pair<uint64_t, configuration> >* informed_configs,
+                       std::vector<std::pair<uint64_t, const char*> >* clients,
+                       std::vector<slot>* slots_issued,
+                       std::vector<uint64_t>* slots_acked,
+                       std::vector<exec>* slots_execd,
+                       std::vector<slot_mapping>* slot_mappings)
 {
-    if (!fsck_meta_state(verbose, destructive, config_manager))
+    int st;
+    bool ret = true;
+    mdb_txn_renew(m_rtxn);
+
+    do {
+    st = scan_proposals(proposals, proposed_configs);
+
+    if (st)
     {
-        return false;
+        std::cerr << "could not scan proposed proposals: " << mdb_strerror(st) << std::endl;
+        ret = false;
+        break;
     }
 
-    if (!fsck_clients(verbose, destructive))
+    st = scan_accepted_proposals(accepted_proposals);
+
+    if (st)
     {
-        return false;
+        std::cerr << "could not scan accepted proposals: " << mdb_strerror(st) << std::endl;
+        ret = false;
+        break;
     }
 
-    if (!fsck_slots(verbose, destructive))
+    st = scan_rejected_proposals(rejected_proposals);
+
+    if (st)
     {
-        return false;
+        std::cerr << "could not scan rejected proposals: " << mdb_strerror(st) << std::endl;
+        ret = false;
+        break;
     }
 
-    return true;
+    st = scan_informed_configurations(informed_configs);
+
+    if (st)
+    {
+        std::cerr << "could not scan inform configurations: " << mdb_strerror(st) << std::endl;
+        ret = false;
+        break;
+    }
+
+    st = scan_clients(clients);
+
+    if (st)
+    {
+        std::cerr << "could not scan clients: " << mdb_strerror(st) << std::endl;
+        ret = false;
+        break;
+    }
+
+    st = scan_issue_slots(slots_issued);
+
+    if (st)
+    {
+        std::cerr << "could not scan issued slots: " << mdb_strerror(st) << std::endl;
+        ret = false;
+        break;
+    }
+
+    st = scan_ack_slots(slots_acked);
+
+    if (st)
+    {
+        std::cerr << "could not scan acked slots: " << mdb_strerror(st) << std::endl;
+        ret = false;
+        break;
+    }
+
+    st = scan_exec_slots(slots_execd);
+
+    if (st)
+    {
+        std::cerr << "could not scan exec'd slots: " << mdb_strerror(st) << std::endl;
+        ret = false;
+        break;
+    }
+
+    st = scan_slot_mappings(slot_mappings);
+
+    if (st)
+    {
+        std::cerr << "could not scan slot mappings: " << mdb_strerror(st) << std::endl;
+        ret = false;
+        break;
+    }
+    } while(0);
+    mdb_txn_reset(m_rtxn);
+    return ret;
 }
 
-#define XCONCAT(x, y) x ## y
-#define CONCAT(x, y) XCONCAT(x, y)
-#define ADD_CONFIGURATION(CS, C, D) \
-    std::map<uint64_t, configuration>::iterator CONCAT(it, __LINE__) = (CS).find((C).version()); \
-    if (CONCAT(it, __LINE__) == (CS).end()) \
-    { \
-        (CS)[(C).version()] = (C); \
-    } \
-    else if (CONCAT(it, __LINE__)->second != (C)) \
-    { \
-        FSCK_LOG << "FATAL conflicting " D " configurations:\n" \
-                 << "        " << CONCAT(it, __LINE__)->second << "\n" \
-                 << "        " << (C) << std::endl; \
-        return false; \
-    }
-
-bool
-fact_store :: fsck_meta_state(bool verbose,
-                              bool destructive,
-                              configuration_manager* config_manager)
+int
+fact_store :: scan_proposals(std::vector<std::pair<uint64_t, uint64_t> >* proposals,
+                             std::vector<std::vector<configuration> >* proposed_configurations)
 {
-    typedef std::pair<uint64_t, uint64_t> uup;
-    std::vector<uup> accepted_proposals;
-    std::vector<uup> rejected_proposals;
-    std::vector<configuration_manager::proposal> proposals;
-    std::map<uint64_t, configuration> proposed;
-    std::map<uint64_t, configuration> accepted;
+    MDB_val pref;
+    assert(proposals->size() == proposed_configurations->size());
+    MVS(pref,PROPOSAL_PREFIX);
+    prefix_iterator iter(&pref, m_rtxn, m_dbi);
 
-    if (!scan_accepted_proposals(verbose, destructive, &accepted_proposals))
+    for (; iter.valid(); iter.next())
     {
-        return false;
-    }
-
-    if (!scan_rejected_proposals(verbose, destructive, &rejected_proposals))
-    {
-        return false;
-    }
-
-    for (size_t i = 0; i < accepted_proposals.size(); ++i)
-    {
-        for (size_t j = 0; j < rejected_proposals.size(); ++j)
+        if (iter.key()->mv_size != PROPOSAL_KEY_SIZE)
         {
-            if (accepted_proposals[i] == rejected_proposals[j])
-            {
-                uint64_t proposal_id = accepted_proposals[i].first;
-                uint64_t proposal_time = accepted_proposals[i].second;
-                FSCK_LOG << "proposal " << proposal_id << ":" << proposal_time
-                         << " rejected and accepted simultaneously" << std::endl;
-                return false;
-            }
+            // ("key with proposed prefix and improper length");
+            return MDB_INCOMPATIBLE;
         }
-    }
 
-    if (!scan_informed_configurations(verbose, destructive, &accepted))
-    {
-        return false;
-    }
-
-    if (!scan_proposals(verbose, destructive,
-                        accepted_proposals, rejected_proposals,
-                        &proposals, &proposed, &accepted))
-    {
-        return false;
-    }
-
-    if (accepted.empty())
-    {
-        return true;
-    }
-
-    std::map<uint64_t, configuration>::reverse_iterator rit = accepted.rbegin();
-    config_manager->reset(rit->second);
-    std::vector<configuration> latest_proposal;
-    latest_proposal.push_back(rit->second);
-
-    if (!proposed.empty())
-    {
-        uint64_t latest_proposed_version = proposed.rbegin()->first;
-
-        for (uint64_t version = rit->first + 1;
-                version <= latest_proposed_version; ++version)
-        {
-            std::map<uint64_t, configuration>::iterator it = proposed.find(version);
-
-            if (it == proposed.end())
-            {
-                FSCK_LOG << "FATAL discontinuity in proposed configurations" << std::endl;
-                return false;
-            }
-
-            latest_proposal.push_back(it->second);
-        }
-    }
-
-    if (!config_manager->is_compatible(&latest_proposal.front(), latest_proposal.size()))
-    {
-        FSCK_LOG << "FATAL proposed configurations are not compatible" << std::endl;
-        return false;
-    }
-
-    for (size_t i = 0; i < proposals.size(); ++i)
-    {
-        if (proposals[i].version > rit->first)
-        {
-            size_t length = proposals[i].version - rit->first + 1;
-            config_manager->merge(proposals[i].id, proposals[i].time,
-                                  &latest_proposal.front(), length);
-        }
-    }
-
-    return true;
-}
-
-bool
-fact_store :: scan_accepted_proposals(bool verbose,
-                                      bool,
-                                      std::vector<std::pair<uint64_t, uint64_t> >* accepted_proposals)
-{
-	MDB_val pref;
-	MVS(pref, "acc");
-	mdb_txn_renew(m_rtxn);
-    prefix_iterator accected(&pref, m_rtxn, m_dbi, 19);
-
-    for (; accected.valid(); accected.next())
-    {
-        const char* ptr = (const char *)accected.key()->mv_data;
         uint64_t proposal_id;
         uint64_t proposal_time;
-        e::unpack64be(ptr + 3, &proposal_id);
-        e::unpack64be(ptr + 11, &proposal_time);
+        unpack_proposal_key((const char *)iter.key()->mv_data, &proposal_id, &proposal_time);
+        std::vector<configuration> configs;
+        e::unpacker up((const char *)iter.val()->mv_data, iter.val()->mv_size);
+
+        while (up.remain() && !up.error())
+        {
+            configuration c;
+            up = up >> c;
+
+            if (!up.error())
+            {
+                configs.push_back(c);
+            }
+        }
+
+        if (up.error())
+        {
+            // ("could not unpack proposed configurations");
+            return MDB_INCOMPATIBLE;
+        }
+
+        proposals->push_back(std::make_pair(proposal_id, proposal_time));
+        proposed_configurations->push_back(configs);
+    }
+    assert(proposals->size() == proposed_configurations->size());
+    return iter.status();
+}
+
+int
+fact_store :: scan_accepted_proposals(std::vector<std::pair<uint64_t, uint64_t> >* accepted_proposals)
+{
+    MDB_val pref;
+    MVS(pref,ACCEPTED_PROPOSAL_PREFIX);
+    prefix_iterator iter(&pref, m_rtxn, m_dbi);
+
+    for (; iter.valid(); iter.next())
+    {
+        if (iter.key()->mv_size != ACCEPTED_PROPOSAL_KEY_SIZE)
+        {
+            // ("key with accept prefix and improper length");
+            return MDB_INCOMPATIBLE;
+        }
+
+        uint64_t proposal_id;
+        uint64_t proposal_time;
+        unpack_accepted_proposal_key((const char *)iter.key()->mv_data, &proposal_id, &proposal_time);
         accepted_proposals->push_back(std::make_pair(proposal_id, proposal_time));
     }
-	mdb_txn_reset(m_rtxn);
 
-    if (accected.error())
-    {
-        FSCK_LOG << "FATAL scanning accepted proposals encountered bad key" << std::endl;
-        return false;
-    }
-
-    std::sort(accepted_proposals->begin(), accepted_proposals->end());
-    return true;
+    return iter.status();
 }
 
-bool
-fact_store :: scan_rejected_proposals(bool verbose,
-                                      bool,
-                                      std::vector<std::pair<uint64_t, uint64_t> >* rejected_proposals)
+int
+fact_store :: scan_rejected_proposals(std::vector<std::pair<uint64_t, uint64_t> >* rejected_proposals)
 {
-	MDB_val pref;
-	MVS(pref, "rej");
-	mdb_txn_renew(m_rtxn);
-    prefix_iterator rejected(&pref, m_rtxn, m_dbi, 19);
+    MDB_val pref;
+    MVS(pref,REJECTED_PROPOSAL_PREFIX);
+    prefix_iterator iter(&pref, m_rtxn, m_dbi);
 
-    for (; rejected.valid(); rejected.next())
+    for (; iter.valid(); iter.next())
     {
-        const char* ptr = (const char *)rejected.key()->mv_data;
+        if (iter.key()->mv_size != REJECTED_PROPOSAL_KEY_SIZE)
+        {
+            // ("key with reject prefix and improper length");
+            return MDB_INCOMPATIBLE;
+        }
+
         uint64_t proposal_id;
         uint64_t proposal_time;
-        e::unpack64be(ptr + 3, &proposal_id);
-        e::unpack64be(ptr + 11, &proposal_time);
+        unpack_rejected_proposal_key((const char *)iter.key()->mv_data, &proposal_id, &proposal_time);
         rejected_proposals->push_back(std::make_pair(proposal_id, proposal_time));
     }
-	mdb_txn_reset(m_rtxn);
 
-    if (rejected.error())
-    {
-        FSCK_LOG << "FATAL scanning rejected proposals encountered bad key" << std::endl;
-        return false;
-    }
-
-    std::sort(rejected_proposals->begin(), rejected_proposals->end());
-    return true;
+    return iter.status();
 }
 
-bool
-fact_store :: scan_informed_configurations(bool verbose,
-                                           bool,
-                                           std::map<uint64_t, configuration>* configurations)
+int
+fact_store :: scan_informed_configurations(std::vector<std::pair<uint64_t, configuration> >* configurations)
 {
-	MDB_val pref;
-	bool ret = false;
-	MVS(pref, "inf");
-	mdb_txn_renew(m_rtxn);
-    prefix_iterator informs(&pref, m_rtxn, m_dbi, 11);
+    MDB_val pref;
+    MVS(pref,INFORM_CONFIG_PREFIX);
+    prefix_iterator iter(&pref, m_rtxn, m_dbi);
 
-    for (; informs.valid(); informs.next())
+    for (; iter.valid(); iter.next())
     {
-        const char* ptr = (const char *)informs.key()->mv_data;
+        if (iter.key()->mv_size != INFORM_CONFIG_KEY_SIZE)
+        {
+            // ("key with inform prefix and improper length");
+            return MDB_INCOMPATIBLE;
+        }
+
         uint64_t version;
-        e::unpack64be(ptr + 3, &version);
+        unpack_inform_config_key((const char *)iter.key()->mv_data, &version);
         configuration tmp;
-        e::unpacker up((char *)informs.val()->mv_data, informs.val()->mv_size);
+        e::unpacker up((const char *)iter.val()->mv_data, iter.val()->mv_size);
         up = up >> tmp;
 
         if (up.error())
         {
-            FSCK_LOG << "FATAL encountered bad inform message: " << (const char *)informs.val()->mv_data << std::endl;
-            goto fail;
+             // ("could not unpack informed configuration");
+            return MDB_INCOMPATIBLE;
         }
 
-        if (tmp.version() != version)
-        {
-            FSCK_LOG << "FATAL informed configuration has mismatched version: " << version << " != " << tmp.version() << std::endl;
-            goto fail;
-        }
-
-        if (!tmp.validate())
-        {
-            FSCK_LOG << "FATAL informed configuration does not validate: " << tmp << std::endl;
-            goto fail;
-        }
-
-        ADD_CONFIGURATION(*configurations, tmp, "informed");
+        configurations->push_back(std::make_pair(version, tmp));
     }
 
-    if (informs.error())
-    {
-        FSCK_LOG << "FATAL scanning informs encountered bad key" << std::endl;
-        goto fail;
-    }
-
-	ret = true;
-fail:
-	mdb_txn_reset(m_rtxn);
-    return ret;
+    return iter.status();
 }
 
-bool
-fact_store :: scan_proposals(bool verbose,
-                             bool,
-                             const std::vector<std::pair<uint64_t, uint64_t> >& accepted_proposals,
-                             const std::vector<std::pair<uint64_t, uint64_t> >& rejected_proposals,
-                             std::vector<configuration_manager::proposal>* proposals,
-                             std::map<uint64_t, configuration>* proposed,
-                             std::map<uint64_t, configuration>* accepted)
+int
+fact_store :: scan_clients(std::vector<std::pair<uint64_t, const char*> >* clients)
 {
-	MDB_val pref;
-	bool ret = false;
-	MVS(pref, "prop");
-	mdb_txn_renew(m_rtxn);
-    prefix_iterator props(&pref, m_rtxn, m_dbi, 20);
+    MDB_val pref;
+    MVS(pref,CLIENT_PREFIX);
+    prefix_iterator iter(&pref, m_rtxn, m_dbi);
 
-    for (; props.valid(); props.next())
+    for (; iter.valid(); iter.next())
     {
-        const char* ptr = (const char *)props.key()->mv_data;
-        uint64_t proposal_id;
-        uint64_t proposal_time;
-        e::unpack64be(ptr + 4, &proposal_id);
-        e::unpack64be(ptr + 12, &proposal_time);
-        std::vector<configuration> configs;
-        e::unpacker up((const char *)props.val()->mv_data, props.val()->mv_size);
-
-        while (!up.error() && !up.empty())
+        if (iter.key()->mv_size != CLIENT_KEY_SIZE)
         {
-            configuration tmp;
-            up = up >> tmp;
-
-            if (up.error() || !tmp.validate())
-            {
-                up = up.as_error();
-                continue;
-            }
-
-            configs.push_back(tmp);
+            // ("key with client prefix and improper length");
+            return MDB_INCOMPATIBLE;
         }
 
-        if (up.error() || configs.empty())
+        uint64_t id;
+        unpack_client_key((const char *)iter.key()->mv_data, &id);
+
+        if (iter.val()->mv_size != 3)
         {
-            FSCK_LOG << "ERROR corrupt proposal: " << proposal_id << ":" << proposal_time << std::endl;
-            goto fail;
+            // ("could not unpack client status");
+            return MDB_INCOMPATIBLE;
         }
 
-        if (std::binary_search(rejected_proposals.begin(),
-                               rejected_proposals.end(),
-                               std::make_pair(proposal_id, proposal_time)))
+        const char* c = NULL;
+
+        if (strncmp((const char *)iter.val()->mv_data, "reg", 3) == 0)
         {
-            continue;
+            c = "reg";
         }
-        else if (std::binary_search(accepted_proposals.begin(),
-                                    accepted_proposals.end(),
-                                    std::make_pair(proposal_id, proposal_time)))
+        else if (strncmp((const char *)iter.val()->mv_data, "die", 3) == 0)
         {
-            ADD_CONFIGURATION(*accepted, configs.back(), "accepted");
+            c = "die";
         }
         else
         {
-            proposals->push_back(configuration_manager::proposal(proposal_id, proposal_time, configs.back().version()));
-
-            for (size_t i = 0; i < configs.size(); ++i)
-            {
-                ADD_CONFIGURATION(*proposed, configs[i], "proposed");
-            }
-
-            ADD_CONFIGURATION(*accepted, configs.back(), "accepted");
+            // ("could not unpack client status");
+            return MDB_INCOMPATIBLE;
         }
+
+        clients->push_back(std::make_pair(id, c));
     }
 
-    if (props.error())
-    {
-        FSCK_LOG << "FATAL scanning proposals encountered bad key" << std::endl;
-        goto fail;
-    }
-	ret = true;
-
-fail:
-	mdb_txn_reset(m_rtxn);
-    return ret;
+    return iter.status();
 }
 
-bool
-fact_store :: fsck_clients(bool verbose,
-                           bool)
+int
+fact_store :: scan_issue_slots(std::vector<slot>* slots)
 {
-	MDB_val pref;
-	bool ret = false;
-	MVS(pref, "client");
-	mdb_txn_renew(m_rtxn);
-    prefix_iterator clients(&pref, m_rtxn, m_dbi, 14);
+    MDB_val pref;
+    MVS(pref,SLOT_PREFIX);
+    prefix_iterator iter(&pref, m_rtxn, m_dbi);
 
-    for (; clients.valid(); clients.next())
+    for (; iter.valid(); iter.next())
     {
-        const char* ptr = (const char *)clients.key()->mv_data;
-        uint64_t client;
-        e::unpack64be(ptr + 4, &client);
-
-		if (memcmp(clients.val()->mv_data, "reg", 3) &&
-		    memcmp(clients.val()->mv_data, "die", 3))
+        if (iter.key()->mv_size != SLOT_KEY_SIZE)
         {
-            FSCK_LOG << "FATAL client " << client << " is neither registered nor dead" << std::endl;
-            goto fail;
+            // ("key with slot prefix and improper length");
+            return MDB_INCOMPATIBLE;
         }
+
+        slot s;
+        unpack_slot_key((const char *)iter.key()->mv_data, &s.number);
+
+        if (!unpack_slot_val(iter.val(), &s.object, &s.client, &s.nonce,
+                             &s.func, &s.data))
+        {
+            // ("could not unpack slot data");
+            return MDB_INCOMPATIBLE;
+        }
+
+        slots->push_back(s);
     }
 
-    if (clients.error())
-    {
-        FSCK_LOG << "FATAL scanning clients encountered bad key" << std::endl;
-        goto fail;
-    }
-	ret = true;
-fail:
-	mdb_txn_reset(m_rtxn);
-    return ret;
+    return iter.status();
 }
 
-bool
-fact_store :: fsck_slots(bool verbose,
-                         bool destructive)
+int
+fact_store :: scan_ack_slots(std::vector<uint64_t>* slots)
 {
-    // check slots ////////////////////////////////////////////////////////////
-	MDB_val pref;
-	MVS(pref, "slots");
-	mdb_txn_renew(m_rtxn);
-    prefix_iterator slots(&pref, m_rtxn, m_dbi, 12);
-    uint64_t prev_slot = 0;
-    bool slot_jumps = false;
-	bool ret = false;
+    MDB_val pref;
+    MVS(pref,ACK_PREFIX);
+    prefix_iterator iter(&pref, m_rtxn, m_dbi);
 
-    for (; slots.valid(); slots.next())
+    for (; iter.valid(); iter.next())
     {
-        const char* ptr = (const char *)slots.key()->mv_data;
-        uint64_t slot;
-        e::unpack64be(ptr + 4, &slot);
-
-        if (!slot_jumps && prev_slot + 1 != slot)
+        if (iter.key()->mv_size != ACK_KEY_SIZE)
         {
-            FSCK_LOG << "ERROR discontinuity in slots:  jumps from " << prev_slot << " to " << slot << std::endl;
-            slot_jumps = true;
+            // ("key with ack prefix and improper length");
+            return MDB_INCOMPATIBLE;
         }
 
-        if (slot_jumps)
-        {
-            FSCK_LOG << "deleting key for slot " << slot << " to remedy the discontinuity" << std::endl;
+        uint64_t s;
+        unpack_ack_key((const char *)iter.key()->mv_data, &s);
+        slots->push_back(s);
+    }
 
-            if (destructive)
-            {
-                delete_key(slots.key());
-            }
-            else
-            {
-                goto fail;
-            }
+    return iter.status();
+}
+
+int
+fact_store :: scan_exec_slots(std::vector<exec>* slots)
+{
+    MDB_val pref;
+    MVS(pref,EXEC_PREFIX);
+    prefix_iterator iter(&pref, m_rtxn, m_dbi);
+
+    for (; iter.valid(); iter.next())
+    {
+        if (iter.key()->mv_size != EXEC_KEY_SIZE)
+        {
+            // ("key with exec prefix and improper length");
+            return MDB_INCOMPATIBLE;
         }
 
-        prev_slot = slot;
-    }
+        exec e;
+        unpack_exec_key((const char *)iter.key()->mv_data, &e.number);
 
-    if (slots.error())
-    {
-        FSCK_LOG << "FATAL scanning slots encountered bad key" << std::endl;
-        goto fail;
-    }
-
-    // check acks /////////////////////////////////////////////////////////////
-	MVS(pref, "ack");
-	{
-    prefix_iterator acks(&pref, m_rtxn, m_dbi, 11);
-
-    for (; acks.valid(); acks.next())
-    {
-        const char* ptr = (const char *)acks.key()->mv_data;
-        uint64_t ack;
-        e::unpack64be(ptr + 3, &ack);
-        char skey[KEY_SIZE_SLOT];
-		MDB_val sk = {sizeof(skey), skey};
-        pack_key_slot(ack, skey);
-
-        if (!check_key_exists(&sk))
+        if (!unpack_exec_val(iter.val(), &e.rc, &e.response))
         {
-            FSCK_LOG << "ERROR deleting key for ack " << ack << " because it has no corresponding slot" << std::endl;
-
-            if (destructive)
-            {
-                delete_key(acks.key());
-            }
-            else
-            {
-                goto fail;
-            }
-        }
-    }
-
-    if (acks.error())
-    {
-        FSCK_LOG << "FATAL scanning acks encountered bad key" << std::endl;
-        goto fail;
-    }
-	}
-
-    // check execs ////////////////////////////////////////////////////////////
-	MVS(pref, "exec");
-	{
-    prefix_iterator execs(&pref, m_rtxn, m_dbi, 12);
-
-    for (; execs.valid(); execs.next())
-    {
-        const char* ptr = (const char *)execs.key()->mv_data;
-        uint64_t exec;
-        e::unpack64be(ptr + 4, &exec);
-        char akey[KEY_SIZE_ACK];
-		MDB_val ak = {sizeof(akey), akey};
-        pack_key_ack(exec, akey);
-
-        if (!check_key_exists(&ak))
-        {
-            FSCK_LOG << "ERROR deleting key for exec " << exec << " because it has no corresponding ack" << std::endl;
-
-            if (destructive)
-            {
-                delete_key(execs.key());
-            }
-            else
-            {
-                goto fail;
-            }
-        }
-    }
-
-    if (execs.error())
-    {
-        FSCK_LOG << "FATAL scanning execs encountered bad key" << std::endl;
-        goto fail;
-    }
-	}
-
-    // check nonces ///////////////////////////////////////////////////////////
-	MVS(pref, "nonce");
-	{
-    prefix_iterator nonces(&pref, m_rtxn, m_dbi, 21);
-
-    for (; nonces.valid(); nonces.next())
-    {
-        const char* ptr = (const char *)nonces.key()->mv_data;
-        uint64_t client;
-        uint64_t nonce;
-        e::unpack64be(ptr + 5, &client);
-        e::unpack64be(ptr + 13, &nonce);
-        ptr = (const char *)nonces.val()->mv_data;
-
-        if (nonces.val()->mv_size != sizeof(uint64_t))
-        {
-            FSCK_LOG << "FATAL (client=" << client << ", nonce=" << nonce << ") does not map to a valid slot" << std::endl;
-            goto fail;
+            // ("could not unpack exec data");
+            return MDB_INCOMPATIBLE;
         }
 
-        uint64_t slot;
-        e::unpack64be(ptr, &slot);
-        char skey[KEY_SIZE_SLOT];
-		MDB_val sk = {sizeof(skey), skey};
-		MDB_val sbacking;
-        pack_key_slot(slot, skey);
-
-        if (!retrieve_value(&sk, &sbacking) ||
-            sbacking.mv_size < 3 * sizeof(uint64_t))
-        {
-            FSCK_LOG << "ERROR deleting key (client=" << client << ", nonce=" << nonce << ") because it has no valid slot" << std::endl;
-
-            if (destructive)
-            {
-                delete_key(&sk);
-            }
-            else
-            {
-                goto fail;
-            }
-        }
-
-        uint64_t sclient;
-        uint64_t snonce;
-        ptr = (const char *)sbacking.mv_data;
-        e::unpack64be(ptr + 8, &sclient);
-        e::unpack64be(ptr + 16, &snonce);
-
-        if (client != sclient || nonce != snonce)
-        {
-            FSCK_LOG << "FATAL key (client=" << client << ", nonce=" << nonce << ") points at slot " << slot << " which does not reciprocate" << std::endl;
-            FSCK_LOG << "          (sclient=" << sclient << ", snonce=" << snonce << ")" << std::endl;
-            goto fail;
-        }
-
-        char ckey[KEY_SIZE_CLIENT];
-        pack_key_client(client, ckey);
-		MDB_val ck = {sizeof(ckey), ckey};
-
-        if (!check_key_exists(&ck))
-        {
-            FSCK_LOG << "ERROR deleting key (client=" << client << ", nonce=" << nonce << ") for unknown client" << std::endl;
-
-            if (destructive)
-            {
-                delete_key(&ck);
-            }
-            else
-            {
-                goto fail;
-            }
-        }
+        slots->push_back(e);
     }
 
-    if (nonces.error())
+    return iter.status();
+}
+
+int
+fact_store :: scan_slot_mappings(std::vector<slot_mapping>* mappings)
+{
+    MDB_val pref;
+    MVS(pref,NONCE_PREFIX);
+    prefix_iterator iter(&pref, m_rtxn, m_dbi);
+
+    for (; iter.valid(); iter.next())
     {
-        FSCK_LOG << "FATAL scanning nonces encountered bad key" << std::endl;
-        goto fail;
+        if (iter.key()->mv_size != NONCE_KEY_SIZE ||
+            iter.val()->mv_size != NONCE_VAL_SIZE)
+        {
+            // ("key with exec prefix and improper length");
+            return MDB_INCOMPATIBLE;
+        }
+
+        slot_mapping sm;
+        unpack_nonce_key((const char *)iter.key()->mv_data, &sm.client, &sm.nonce);
+        unpack_nonce_val((const char *)iter.val()->mv_data, &sm.slot);
+        mappings->push_back(sm);
     }
-	}
-	ret = true;
 
-fail:
-	mdb_txn_reset(m_rtxn);
-
-    return ret;
+    return iter.status();
 }

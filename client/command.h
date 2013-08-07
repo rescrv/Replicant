@@ -29,6 +29,7 @@
 #define replicant_command_h_
 
 // e
+#include <e/error.h>
 #include <e/intrusive_ptr.h>
 
 // Replicant
@@ -46,13 +47,11 @@ class replicant_client::command
         ~command() throw ();
 
     public:
-        uint64_t nonce() const throw () { return m_nonce; }
-        uint64_t clientid() const throw () { return m_clientid; }
-        e::buffer* request() const throw () { return m_request.get(); }
-        const replicant::chain_node& sent_to() const throw () { return m_sent_to; }
-        const char* last_error_desc() const throw() { return m_last_error_desc; }
-        const char* last_error_file() const throw() { return m_last_error_file; }
-        uint64_t last_error_line() const throw() { return m_last_error_line; }
+        uint64_t nonce() const { return m_nonce; }
+        uint64_t clientid() const { return m_clientid; }
+        e::buffer* request() const { return m_request.get(); }
+        const replicant::chain_node& sent_to() const { return m_sent_to; }
+        e::error error() const { return m_error; }
 
     public:
         void set_nonce(uint64_t nonce);
@@ -61,9 +60,7 @@ class replicant_client::command
         void succeed(std::auto_ptr<e::buffer> msg,
                      const e::slice& resp,
                      replicant_returncode status);
-        void set_last_error_desc(const char* desc) throw() { m_last_error_desc = desc; }
-        void set_last_error_file(const char* file) throw() { m_last_error_file = file; }
-        void set_last_error_line(uint64_t line) throw() { m_last_error_line = line; }
+        void set_error(const e::error& err);
 
     private:
         friend class e::intrusive_ptr<command>;
@@ -87,9 +84,7 @@ class replicant_client::command
         const char** m_output;
         size_t* m_output_sz;
         replicant::chain_node m_sent_to;
-        const char* m_last_error_desc;
-        const char* m_last_error_file;
-        uint64_t m_last_error_line;
+        e::error m_error;
 };
 
 #endif // replicant_command_h_

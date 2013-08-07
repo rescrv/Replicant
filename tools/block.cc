@@ -1,4 +1,4 @@
-// Copyright (c) 2012, Robert Escriva
+// Copyright (c) 2012-2013, Robert Escriva
 // All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
@@ -25,113 +25,60 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
-// C
-#include <cstdlib>
-
-// STL
-#include <string>
-
-// po6
-#include <po6/error.h>
-
-// e
-#include <e/guard.h>
-
 // Replicant
 #include "client/replicant.h"
 #include "tools/common.h"
 
-static const char* _object = "cond";
-static const char* _condition = "cond";
-
-static struct poptOption obj_popts[] = {
-    {"object", 'o', POPT_ARG_STRING, &_object, 'o',
-     "manipulate a specific object (default: \"cond\")",
-     "object"},
-    {"condition", 'c', POPT_ARG_STRING, &_condition, 'c',
-     "wait on a specific condition (default: \"cond\")",
-     "condition"},
-    POPT_TABLEEND
-};
-
-static struct poptOption popts[] = {
-    POPT_AUTOHELP
-    CONNECT_TABLE
-    {NULL, 0, POPT_ARG_INCLUDE_TABLE, obj_popts, 0, "Manipulate an object:", NULL},
-    POPT_TABLEEND
-};
-
 int
 main(int argc, const char* argv[])
 {
-    poptContext poptcon;
-    poptcon = poptGetContext(NULL, argc, argv, popts, POPT_CONTEXT_POSIXMEHARDER);
-    e::guard g = e::makeguard(poptFreeContext, poptcon); g.use_variable();
-    poptSetOtherOptionHelp(poptcon, "[OPTIONS]");
-    int rc;
+    static const char* object = "cond";
+    static const char* condition = "wakeup";
+    connect_opts conn;
+    e::argparser obj;
+    obj.arg().name('o', "object")
+             .description("manipulate a specific object (default: \"cond\")")
+             .metavar("object").as_string(&object);
+    obj.arg().name('c', "condition")
+             .description("wait on a specific condition (default: \"wakeup\")")
+             .metavar("condition").as_string(&condition);
+    e::argparser ap;
+    ap.autohelp();
+    ap.option_string("[OPTIONS]");
+    ap.add("Connect to a cluster:", conn.parser());
+    ap.add("Manipulate an object:", obj);
 
-    while ((rc = poptGetNextOpt(poptcon)) != -1)
+    if (!ap.parse(argc, argv))
     {
-        switch (rc)
-        {
-            case 'h':
-                if (!check_host())
-                {
-                    return EXIT_FAILURE;
-                }
-                break;
-            case 'p':
-                if (!check_port())
-                {
-                    return EXIT_FAILURE;
-                }
-                break;
-            case 'o':
-                break;
-            case 'c':
-                break;
-            case POPT_ERROR_NOARG:
-            case POPT_ERROR_BADOPT:
-            case POPT_ERROR_BADNUMBER:
-            case POPT_ERROR_OVERFLOW:
-                std::cerr << poptStrerror(rc) << " " << poptBadOption(poptcon, 0) << std::endl;
-                return EXIT_FAILURE;
-            case POPT_ERROR_OPTSTOODEEP:
-            case POPT_ERROR_BADQUOTE:
-            case POPT_ERROR_ERRNO:
-            default:
-                std::cerr << "logic error in argument parsing" << std::endl;
-                return EXIT_FAILURE;
-        }
+        return EXIT_FAILURE;
     }
 
-    const char** args = poptGetArgs(poptcon);
-    size_t num_args = 0;
-
-    while (args && args[num_args])
+    if (ap.args_sz() != 0)
     {
-        ++num_args;
+        std::cerr << "command takes no positional arguments\n" << std::endl;
+        ap.usage();
+        return EXIT_FAILURE;
     }
 
-    if (num_args != 0)
+    if (!conn.validate())
     {
-        std::cerr << "extra arguments provided\n" << std::endl;
-        poptPrintUsage(poptcon, stderr, 0);
+        std::cerr << "invalid host:port specification\n" << std::endl;
+        ap.usage();
         return EXIT_FAILURE;
     }
 
     try
     {
-        replicant_client r(_connect_host, _connect_port);
+        replicant_client r(conn.host(), conn.port());
         replicant_returncode re;
 
         for (uint64_t state = 0; ; ++state)
         {
-            int64_t wid = r.wait(_object, _condition, state, &re);
+            int64_t wid = r.wait(object, condition, state, &re);
 
             if (wid < 0)
             {
-                std::cerr << "could not initiate wait: " << r.last_error_desc()
+                std::cerr << "could not initiate wait: " << r.last_error().msg()
                           << " (" << re << ")" << std::endl;
                 return EXIT_FAILURE;
             }
@@ -141,7 +88,7 @@ main(int argc, const char* argv[])
 
             if (lid < 0)
             {
-                std::cerr << "could not loop: " << r.last_error_desc()
+                std::cerr << "could not loop: " << r.last_error().msg()
                           << " (" << le << ")" << std::endl;
                 return EXIT_FAILURE;
             }
@@ -154,7 +101,7 @@ main(int argc, const char* argv[])
 
             if (re != REPLICANT_SUCCESS)
             {
-                std::cerr << "could not process request: " << r.last_error_desc()
+                std::cerr << "could not process request: " << r.last_error().msg()
                           << " (" << re << ")" << std::endl;
                 return EXIT_FAILURE;
             }

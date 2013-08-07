@@ -1,4 +1,4 @@
-// Copyright (c) 2012, Robert Escriva
+// Copyright (c) 2013, Robert Escriva
 // All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
@@ -28,42 +28,47 @@
 // e
 #include <e/popt.h>
 
-class connect_opts
+// Replicant
+#include "daemon/fact_store.h"
+
+int
+main(int argc, const char* argv[])
 {
-    public:
-        connect_opts()
-            : m_ap(), m_host("127.0.0.1"), m_port(1982)
-        {
-            m_ap.arg().name('h', "host")
-                      .description("connect to an IP address or hostname (default: 127.0.0.1)")
-                      .metavar("addr").as_string(&m_host);
-            m_ap.arg().name('p', "port")
-                      .description("connect to an alternative port (default: 1982)")
-                      .metavar("port").as_long(&m_port);
-        }
-        ~connect_opts() throw () {}
+    const char* _data = ".";
+    bool dry_run = true;
+    e::argparser ap;
+    ap.autohelp();
+    ap.arg().name('D', "data")
+            .description("store persistent state in this directory (default: .)")
+            .as_string(&_data).metavar("dir");
+    ap.arg().name('n', "dry-run")
+            .description("perform a dry run, not actually changing state (default: yes)")
+            .set_true(&dry_run);
+    ap.arg().name('a', "automatic")
+            .description("try to automatically fix errors (default: no)")
+            .set_false(&dry_run);
 
-    public:
-        const e::argparser& parser() { return m_ap; }
-        const char* host() { return m_host; }
-        uint16_t port() { return m_port; }
-        bool validate()
-        {
-            if (m_port <= 0 || m_port >= (1 << 16))
-            {
-                std::cerr << "port number to connect to is out of range" << std::endl;
-                return false;
-            }
+    if (!ap.parse(argc, argv))
+    {
+        return EXIT_FAILURE;
+    }
 
-            return true;
-        }
+    if (ap.args_sz() != 0)
+    {
+        std::cerr << "command takes no arguments" << std::endl;
+        ap.usage();
+        return EXIT_FAILURE;
+    }
 
-    private:
-        connect_opts(const connect_opts&);
-        connect_opts& operator = (const connect_opts&);
-
-    private:
-        e::argparser m_ap;
-        const char* m_host;
-        long m_port;
-};
+    try
+    {
+        po6::pathname data(_data);
+        replicant::fact_store fs;
+        return fs.integrity_check(data, !dry_run) ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+    catch (std::exception& e)
+    {
+        std::cerr << "error:  " << e.what() << std::endl;
+        return EXIT_FAILURE;
+    }
+}
