@@ -117,13 +117,14 @@ prefix_iterator :: valid()
     return false;
 }
 
+#define STRLENOF(x)	(sizeof(x)-1)
 #define PROPOSAL_PREFIX "prop"
-#define PROPOSAL_KEY_SIZE (strlen(PROPOSAL_PREFIX)  + sizeof(uint64_t) + sizeof(uint64_t))
+#define PROPOSAL_KEY_SIZE (STRLENOF(PROPOSAL_PREFIX)  + sizeof(uint64_t) + sizeof(uint64_t))
 
 static void
 pack_proposal_key(uint64_t proposal_id, uint64_t proposal_time, char* key)
 {
-    const size_t sz = strlen(PROPOSAL_PREFIX);
+    const size_t sz = STRLENOF(PROPOSAL_PREFIX);
     memmove(key, PROPOSAL_PREFIX, sz);
     char* ptr = key + sz;
     ptr = e::pack64be(proposal_id, ptr);
@@ -133,19 +134,19 @@ pack_proposal_key(uint64_t proposal_id, uint64_t proposal_time, char* key)
 static void
 unpack_proposal_key(const char* key, uint64_t* proposal_id, uint64_t* proposal_time)
 {
-    const size_t sz = strlen(PROPOSAL_PREFIX);
+    const size_t sz = STRLENOF(PROPOSAL_PREFIX);
     const char* ptr = key + sz;
     ptr = e::unpack64be(ptr, proposal_id);
     ptr = e::unpack64be(ptr, proposal_time);
 }
 
 #define ACCEPTED_PROPOSAL_PREFIX "acc"
-#define ACCEPTED_PROPOSAL_KEY_SIZE (strlen(ACCEPTED_PROPOSAL_PREFIX) + sizeof(uint64_t) + sizeof(uint64_t))
+#define ACCEPTED_PROPOSAL_KEY_SIZE (STRLENOF(ACCEPTED_PROPOSAL_PREFIX) + sizeof(uint64_t) + sizeof(uint64_t))
 
 static void
 pack_accepted_proposal_key(uint64_t proposal_id, uint64_t proposal_time, char* key)
 {
-    const size_t sz = strlen(ACCEPTED_PROPOSAL_PREFIX);
+    const size_t sz = STRLENOF(ACCEPTED_PROPOSAL_PREFIX);
     memmove(key, ACCEPTED_PROPOSAL_PREFIX, sz);
     char* ptr = key + sz;
     ptr = e::pack64be(proposal_id, ptr);
@@ -155,19 +156,19 @@ pack_accepted_proposal_key(uint64_t proposal_id, uint64_t proposal_time, char* k
 static void
 unpack_accepted_proposal_key(const char* key, uint64_t* proposal_id, uint64_t* proposal_time)
 {
-    const size_t sz = strlen(ACCEPTED_PROPOSAL_PREFIX);
+    const size_t sz = STRLENOF(ACCEPTED_PROPOSAL_PREFIX);
     const char* ptr = key + sz;
     ptr = e::unpack64be(ptr, proposal_id);
     ptr = e::unpack64be(ptr, proposal_time);
 }
 
 #define REJECTED_PROPOSAL_PREFIX "rej"
-#define REJECTED_PROPOSAL_KEY_SIZE (strlen(REJECTED_PROPOSAL_PREFIX) + sizeof(uint64_t) + sizeof(uint64_t))
+#define REJECTED_PROPOSAL_KEY_SIZE (STRLENOF(REJECTED_PROPOSAL_PREFIX) + sizeof(uint64_t) + sizeof(uint64_t))
 
 static void
 pack_rejected_proposal_key(uint64_t proposal_id, uint64_t proposal_time, char* key)
 {
-    const size_t sz = strlen(REJECTED_PROPOSAL_PREFIX);
+    const size_t sz = STRLENOF(REJECTED_PROPOSAL_PREFIX);
     memmove(key, REJECTED_PROPOSAL_PREFIX, sz);
     char* ptr = key + sz;
     ptr = e::pack64be(proposal_id, ptr);
@@ -177,19 +178,19 @@ pack_rejected_proposal_key(uint64_t proposal_id, uint64_t proposal_time, char* k
 static void
 unpack_rejected_proposal_key(const char* key, uint64_t* proposal_id, uint64_t* proposal_time)
 {
-    const size_t sz = strlen(REJECTED_PROPOSAL_PREFIX);
+    const size_t sz = STRLENOF(REJECTED_PROPOSAL_PREFIX);
     const char* ptr = key + sz;
     ptr = e::unpack64be(ptr, proposal_id);
     ptr = e::unpack64be(ptr, proposal_time);
 }
 
 #define INFORM_CONFIG_PREFIX "inf"
-#define INFORM_CONFIG_KEY_SIZE (strlen(INFORM_CONFIG_PREFIX) + sizeof(uint64_t))
+#define INFORM_CONFIG_KEY_SIZE (STRLENOF(INFORM_CONFIG_PREFIX) + sizeof(uint64_t))
 
 static void
 pack_inform_config_key(uint64_t version, char* key)
 {
-    const size_t sz = strlen(INFORM_CONFIG_PREFIX);
+    const size_t sz = STRLENOF(INFORM_CONFIG_PREFIX);
     memmove(key, INFORM_CONFIG_PREFIX, sz);
     char* ptr = key + sz;
     ptr = e::pack64be(version, ptr);
@@ -198,18 +199,18 @@ pack_inform_config_key(uint64_t version, char* key)
 static void
 unpack_inform_config_key(const char* key, uint64_t* version)
 {
-    const size_t sz = strlen(INFORM_CONFIG_PREFIX);
+    const size_t sz = STRLENOF(INFORM_CONFIG_PREFIX);
     const char* ptr = key + sz;
     ptr = e::unpack64be(ptr, version);
 }
 
 #define CLIENT_PREFIX "client"
-#define CLIENT_KEY_SIZE (strlen(CLIENT_PREFIX) + sizeof(uint64_t))
+#define CLIENT_KEY_SIZE (STRLENOF(CLIENT_PREFIX) + sizeof(uint64_t))
 
 static void
 pack_client_key(uint64_t client, char* key)
 {
-    const size_t sz = strlen(CLIENT_PREFIX);
+    const size_t sz = STRLENOF(CLIENT_PREFIX);
     memmove(key, CLIENT_PREFIX, sz);
     char* ptr = key + sz;
     ptr = e::pack64be(client, ptr);
@@ -218,18 +219,18 @@ pack_client_key(uint64_t client, char* key)
 static void
 unpack_client_key(const char* key, uint64_t* client)
 {
-    const size_t sz = strlen(CLIENT_PREFIX);
+    const size_t sz = STRLENOF(CLIENT_PREFIX);
     const char* ptr = key + sz;
     ptr = e::unpack64be(ptr, client);
 }
 
 #define SLOT_PREFIX "slot"
-#define SLOT_KEY_SIZE (strlen(SLOT_PREFIX) + sizeof(uint64_t))
+#define SLOT_KEY_SIZE (STRLENOF(SLOT_PREFIX) + sizeof(uint64_t))
 
 static void
 pack_slot_key(uint64_t slot, char* key)
 {
-    const size_t sz = strlen(SLOT_PREFIX);
+    const size_t sz = STRLENOF(SLOT_PREFIX);
     memmove(key, SLOT_PREFIX, sz);
     char* ptr = key + sz;
     ptr = e::pack64be(slot, ptr);
@@ -238,7 +239,7 @@ pack_slot_key(uint64_t slot, char* key)
 static void
 unpack_slot_key(const char* key, uint64_t* slot)
 {
-    const size_t sz = strlen(SLOT_PREFIX);
+    const size_t sz = STRLENOF(SLOT_PREFIX);
     const char* ptr = key + sz;
     ptr = e::unpack64be(ptr, slot);
 }
@@ -317,12 +318,12 @@ unpack_slot_val(const leveldb::Slice& val,
 }
 
 #define ACK_PREFIX "ack"
-#define ACK_KEY_SIZE (strlen(ACK_PREFIX) + sizeof(uint64_t))
+#define ACK_KEY_SIZE (STRLENOF(ACK_PREFIX) + sizeof(uint64_t))
 
 static void
 pack_ack_key(uint64_t slot, char* key)
 {
-    const size_t sz = strlen(ACK_PREFIX);
+    const size_t sz = STRLENOF(ACK_PREFIX);
     memmove(key, ACK_PREFIX, sz);
     char* ptr = key + sz;
     ptr = e::pack64be(slot, ptr);
@@ -331,18 +332,18 @@ pack_ack_key(uint64_t slot, char* key)
 static void
 unpack_ack_key(const char* key, uint64_t* slot)
 {
-    const size_t sz = strlen(ACK_PREFIX);
+    const size_t sz = STRLENOF(ACK_PREFIX);
     const char* ptr = key + sz;
     ptr = e::unpack64be(ptr, slot);
 }
 
 #define EXEC_PREFIX "exec"
-#define EXEC_KEY_SIZE (strlen(EXEC_PREFIX) + sizeof(uint64_t))
+#define EXEC_KEY_SIZE (STRLENOF(EXEC_PREFIX) + sizeof(uint64_t))
 
 static void
 pack_exec_key(uint64_t slot, char* key)
 {
-    const size_t sz = strlen(EXEC_PREFIX);
+    const size_t sz = STRLENOF(EXEC_PREFIX);
     memmove(key, EXEC_PREFIX, sz);
     char* ptr = key + sz;
     ptr = e::pack64be(slot, ptr);
@@ -351,7 +352,7 @@ pack_exec_key(uint64_t slot, char* key)
 static void
 unpack_exec_key(const char* key, uint64_t* slot)
 {
-    const size_t sz = strlen(EXEC_PREFIX);
+    const size_t sz = STRLENOF(EXEC_PREFIX);
     const char* ptr = key + sz;
     ptr = e::unpack64be(ptr, slot);
 }
@@ -400,13 +401,13 @@ unpack_exec_val(const leveldb::Slice& val,
 }
 
 #define NONCE_PREFIX "nonce"
-#define NONCE_KEY_SIZE (strlen(NONCE_PREFIX) + sizeof(uint64_t) + sizeof(uint64_t))
+#define NONCE_KEY_SIZE (STRLENOF(NONCE_PREFIX) + sizeof(uint64_t) + sizeof(uint64_t))
 #define NONCE_VAL_SIZE (sizeof(uint64_t))
 
 static void
 pack_nonce_key(uint64_t client, uint64_t nonce, char* key)
 {
-    const size_t sz = strlen(NONCE_PREFIX);
+    const size_t sz = STRLENOF(NONCE_PREFIX);
     memmove(key, NONCE_PREFIX, sz);
     char* ptr = key + sz;
     ptr = e::pack64be(client, ptr);
@@ -416,7 +417,7 @@ pack_nonce_key(uint64_t client, uint64_t nonce, char* key)
 static void
 unpack_nonce_key(const char* key, uint64_t* client, uint64_t* nonce)
 {
-    const size_t sz = strlen(NONCE_PREFIX);
+    const size_t sz = STRLENOF(NONCE_PREFIX);
     const char* ptr = key + sz;
     ptr = e::unpack64be(ptr, client);
     ptr = e::unpack64be(ptr, nonce);
@@ -1076,7 +1077,7 @@ fact_store :: initialize(std::ostream& ostr, bool* restored, chain_node* us)
     {
         first_time = true;
         leveldb::Slice k("replicant", 9);
-        leveldb::Slice v(PACKAGE_VERSION, strlen(PACKAGE_VERSION));
+        leveldb::Slice v(PACKAGE_VERSION, STRLENOF(PACKAGE_VERSION));
         st = m_db->Put(wopts, k, v);
 
         if (!st.ok())
