@@ -34,8 +34,8 @@
 // STL
 #include <map>
 
-// LevelDB
-#include <hyperleveldb/db.h>
+// Lightning MDB
+#include <lmdb.h>
 
 // Replicant
 #include "common/configuration.h"
@@ -115,7 +115,7 @@ class fact_store
 
     // setup the database
     private:
-        leveldb::Status open_db(const po6::pathname& path, bool create);
+        int open_db(const po6::pathname& path, bool create);
         bool initialize(std::ostream& ostr, bool* restored, chain_node* us);
 
     // integrity checks
@@ -145,23 +145,26 @@ class fact_store
                       std::vector<uint64_t>* slots_acked,
                       std::vector<exec>* slots_execd,
                       std::vector<slot_mapping>* slot_mappings);
-        leveldb::Status scan_proposals(std::vector<std::pair<uint64_t, uint64_t> >* proposals,
+        int scan_proposals(std::vector<std::pair<uint64_t, uint64_t> >* proposals,
                                        std::vector<std::vector<configuration> >* proposed_configs);
-        leveldb::Status scan_accepted_proposals(std::vector<std::pair<uint64_t, uint64_t> >* accepted_proposals);
-        leveldb::Status scan_rejected_proposals(std::vector<std::pair<uint64_t, uint64_t> >* rejected_proposals);
-        leveldb::Status scan_informed_configurations(std::vector<std::pair<uint64_t, configuration> >* informed_configs);
-        leveldb::Status scan_clients(std::vector<std::pair<uint64_t, const char*> >* clients);
-        leveldb::Status scan_issue_slots(std::vector<slot>* slots_issued);
-        leveldb::Status scan_ack_slots(std::vector<uint64_t>* slots_acked);
-        leveldb::Status scan_exec_slots(std::vector<exec>* slots_execd);
-        leveldb::Status scan_slot_mappings(std::vector<slot_mapping>* slot_mappings);
+        int scan_accepted_proposals(std::vector<std::pair<uint64_t, uint64_t> >* accepted_proposals);
+        int scan_rejected_proposals(std::vector<std::pair<uint64_t, uint64_t> >* rejected_proposals);
+        int scan_informed_configurations(std::vector<std::pair<uint64_t, configuration> >* informed_configs);
+        int scan_clients(std::vector<std::pair<uint64_t, const char*> >* clients);
+        int scan_issue_slots(std::vector<slot>* slots_issued);
+        int scan_ack_slots(std::vector<uint64_t>* slots_acked);
+        int scan_exec_slots(std::vector<exec>* slots_execd);
+        int scan_slot_mappings(std::vector<slot_mapping>* slot_mappings);
 
     private:
         fact_store(const fact_store&);
         fact_store& operator = (const fact_store&);
 
     private:
-        leveldb::DB* m_db;
+        MDB_env *m_db;
+        MDB_txn *m_rtxn;
+        MDB_cursor *m_rcsr;
+        MDB_dbi m_dbi;
         uint64_t m_cache_next_slot_issue;
         uint64_t m_cache_next_slot_ack;
 };

@@ -1,4 +1,5 @@
 // Copyright (c) 2012, Robert Escriva
+// Copyright (c) 2013, Howard Chu, Symas Corp.
 // All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
@@ -41,10 +42,6 @@
 // Google Log
 #include <glog/logging.h>
 
-// LevelDB
-#include <hyperleveldb/filter_policy.h>
-#include <hyperleveldb/iterator.h>
-
 // e
 #include <e/endian.h>
 #include <e/strescape.h>
@@ -63,63 +60,89 @@ namespace
 class prefix_iterator
 {
     public:
-        prefix_iterator(const leveldb::Slice& prefix, leveldb::DB* db);
-        ~prefix_iterator() throw () {}
+        prefix_iterator(const MDB_val *prefix, MDB_txn *rtxn, MDB_dbi dbi);
+        ~prefix_iterator() throw () { mdb_cursor_close(m_it); }
 
     public:
         bool valid();
-        void next() { m_it->Next(); }
-        leveldb::Slice key() { return m_it->key(); }
-        leveldb::Slice val() { return m_it->value(); }
-        leveldb::Status status() { return m_status; }
+        void next();
+        MDB_val *key() { return &m_key; }
+        MDB_val *val() { return &m_val; }
+        int status() { return m_status; }
 
     private:
         prefix_iterator(const prefix_iterator&);
         prefix_iterator& operator = (const prefix_iterator&);
 
     private:
-        leveldb::Slice m_prefix;
-        std::auto_ptr<leveldb::Iterator> m_it;
-        leveldb::Status m_status;
+        MDB_val m_prefix;
+        MDB_val m_key;
+        MDB_val m_val;
+        MDB_txn *m_rtxn;
+        MDB_cursor *m_it;
+        int m_status;
+        bool m_valid;
 };
 
-prefix_iterator :: prefix_iterator(const leveldb::Slice& prefix, leveldb::DB* db)
-    : m_prefix(prefix)
+prefix_iterator :: prefix_iterator(const MDB_val *prefix, MDB_txn *rtxn, MDB_dbi dbi)
+    : m_prefix(*prefix)
+    , m_rtxn(rtxn)
     , m_it()
-    , m_status()
+    , m_valid(false)
 {
-    leveldb::ReadOptions opts;
-    opts.verify_checksums = true;
-    m_it.reset(db->NewIterator(opts));
-    m_it->Seek(prefix);
+    m_status = mdb_cursor_open(m_rtxn, dbi, &m_it);
+    if (m_status)
+    {
+        abort();
+    }
+    m_key = *prefix;
+    m_status = mdb_cursor_get(m_it, &m_key, &m_val, MDB_SET_RANGE);
+    if (m_status == MDB_SUCCESS)
+        m_valid = true;
 }
 
 bool
 prefix_iterator :: valid()
 {
-    if (!m_status.ok())
+    if (m_status)
     {
         return false;
     }
 
-    while (m_it->Valid())
+    while (m_valid)
     {
-        if (m_it->key().starts_with(m_prefix))
+        if (m_key.mv_size >= m_prefix.mv_size &&
+            !memcmp(m_prefix.mv_data, m_key.mv_data, m_prefix.mv_size))
         {
             return true;
         }
 
-        m_it->SeekToLast();
-        return false;
+        m_valid = false;
     }
 
-    m_status = m_it->status();
     return false;
 }
 
-#define STRLENOF(x)	(sizeof(x)-1)
+void
+prefix_iterator :: next()
+{
+    if (m_valid) {
+        m_status = mdb_cursor_get(m_it, &m_key, &m_val, MDB_NEXT);
+        if (m_status) {
+            m_valid = false;
+            if (m_status == MDB_NOTFOUND)
+                m_status = MDB_SUCCESS;
+        }
+    }
+}
+
+#define STRLENOF(x)    (sizeof(x)-1)
 #define PROPOSAL_PREFIX "prop"
 #define PROPOSAL_KEY_SIZE (STRLENOF(PROPOSAL_PREFIX)  + sizeof(uint64_t) + sizeof(uint64_t))
+/* Assign a string constant to an MDB_val */
+#define MVS(v,s)    v.mv_data = (void *)s; v.mv_size = STRLENOF(s)
+/* Assign a slice or string to an MDB_val */
+#define MVSL(v,sl)  v.mv_data = (void *)(sl).data(); v.mv_size = (sl).size()
 
 static void
 pack_proposal_key(uint64_t proposal_id, uint64_t proposal_time, char* key)
@@ -260,27 +283,27 @@ pack_slot_val(uint64_t object,
 }
 
 static bool
-unpack_slot_val(const leveldb::Slice& val,
+unpack_slot_val(const MDB_val* val,
                 uint64_t* object,
                 uint64_t* client,
                 uint64_t* nonce,
                 e::slice* data)
 {
-    if (val.size() < 3 * sizeof(uint64_t))
+    if (val->mv_size < 3 * sizeof(uint64_t))
     {
         return false;
     }
 
-    const char* ptr = val.data();
+    const char* ptr = (const char *)val->mv_data;
     ptr = e::unpack64be(ptr, object);
     ptr = e::unpack64be(ptr, client);
     ptr = e::unpack64be(ptr, nonce);
-    *data = e::slice(ptr, val.size() - (ptr - val.data()));
+    *data = e::slice(ptr, val->mv_size - (ptr - (const char *)val->mv_data));
     return true;
 }
 
 static bool
-unpack_slot_val(const leveldb::Slice& val,
+unpack_slot_val(const MDB_val* val,
                 uint64_t* object,
                 uint64_t* client,
                 uint64_t* nonce,
@@ -370,22 +393,23 @@ pack_exec_val(replicant::response_returncode rc,
 }
 
 static bool
-unpack_exec_val(const leveldb::Slice& val,
+unpack_exec_val(const MDB_val* val,
                 replicant::response_returncode* rc,
                 e::slice* response)
 {
-    if (val.size() < 1)
+    if (val->mv_size < 1)
     {
         return false;
     }
+    const char *ptr = (const char *)val->mv_data;
 
-    *rc = static_cast<replicant::response_returncode>(val.data()[0]);
-    *response = e::slice(val.data() + 1, val.size() - 1);
+    *rc = static_cast<replicant::response_returncode>(ptr[0]);
+    *response = e::slice(ptr + 1, val->mv_size - 1);
     return true;
 }
 
 static bool
-unpack_exec_val(const leveldb::Slice& val,
+unpack_exec_val(const MDB_val* val,
                 replicant::response_returncode* rc,
                 std::string* response)
 {
@@ -489,7 +513,7 @@ fact_store :: ~fact_store() throw ()
 {
     if (m_db)
     {
-        delete m_db;
+        mdb_env_close(m_db);
         m_db = NULL;
     }
 }
@@ -500,12 +524,12 @@ fact_store :: open(const po6::pathname& path,
                    chain_node* us,
                    configuration_manager* config_manager)
 {
-    leveldb::Status st;
+    int st;
     st = open_db(path, true);
 
-    if (!st.ok())
+    if (st)
     {
-        LOG(ERROR) << "could not open LevelDB: " << st.ToString();
+        LOG(ERROR) << "could not open DB: " << mdb_strerror(st);
         return false;
     }
 
@@ -531,18 +555,33 @@ fact_store :: open(const po6::pathname& path,
 bool
 fact_store :: save(const chain_node& us)
 {
-    leveldb::WriteOptions wopts;
-    wopts.sync = true;
+    MDB_val key, data;
+    MDB_txn *txn;
+    int rc;
     size_t sz = pack_size(us);
     std::auto_ptr<e::buffer> buf(e::buffer::create(sz));
     buf->pack_at(0) << us;
-    leveldb::Slice k("us", 2);
-    leveldb::Slice v(reinterpret_cast<const char*>(buf->data()), buf->size());
-    leveldb::Status st = m_db->Put(wopts, k, v);
 
-    if (!st.ok())
+    rc = mdb_txn_begin(m_db, NULL, 0, &txn);
+    if (rc)
     {
-        LOG(ERROR) << "could not record node identity as " << us << ": " << st.ToString();
+        LOG(ERROR) << "could not record node identity as " << us << ": " << mdb_strerror(rc);
+        return false;
+    }
+    MVS(key, "us");
+    data.mv_data = buf->data();
+    data.mv_size = buf->size();
+    rc = mdb_put(txn, m_dbi, &key, &data, 0);
+    if (rc)
+    {
+        LOG(ERROR) << "could not record node identity as " << us << ": " << mdb_strerror(rc);
+        mdb_txn_abort(txn);
+        return false;
+    }
+    rc = mdb_txn_commit(txn);
+    if (rc)
+    {
+        LOG(ERROR) << "could not record node identity as " << us << ": " << mdb_strerror(rc);
         return false;
     }
 
@@ -667,19 +706,23 @@ fact_store :: is_live_client(uint64_t client)
 void
 fact_store :: get_all_clients(std::vector<uint64_t>* clients)
 {
-    prefix_iterator iter(leveldb::Slice(CLIENT_PREFIX), m_db);
+    MDB_val pref;
+    MVS(pref,CLIENT_PREFIX);
+    mdb_txn_renew(m_rtxn);
+    prefix_iterator iter(&pref, m_rtxn, m_dbi);
 
     for (; iter.valid(); iter.next())
     {
-        if (iter.key().size() != CLIENT_KEY_SIZE)
+        if (iter.key()->mv_size != CLIENT_KEY_SIZE)
         {
             continue;
         }
 
         uint64_t id;
-        unpack_client_key(iter.key().data(), &id);
+        unpack_client_key((const char *)iter.key()->mv_data, &id);
         clients->push_back(id);
     }
+    mdb_txn_reset(m_rtxn);
 }
 
 void
@@ -714,7 +757,9 @@ fact_store :: get_slot(uint64_t number,
         return false;
     }
 
-    return unpack_slot_val(leveldb::Slice(*backing), object, client, nonce, data);
+    MDB_val v;
+    MVSL(v,*backing);
+    return unpack_slot_val(&v, object, client, nonce, data);
 }
 
 bool
@@ -750,7 +795,9 @@ fact_store :: get_exec(uint64_t number,
         return false;
     }
 
-    return unpack_exec_val(leveldb::Slice(*backing), rc, data);
+    MDB_val v;
+    MVSL(v,*backing);
+    return unpack_exec_val(&v, rc, data);
 }
 
 bool
@@ -777,20 +824,24 @@ fact_store :: next_slot_to_issue()
         return m_cache_next_slot_issue;
     }
 
-    prefix_iterator iter(leveldb::Slice(SLOT_PREFIX), m_db);
+    MDB_val pref;
+    MVS(pref,SLOT_PREFIX);
+    mdb_txn_renew(m_rtxn);
+    prefix_iterator iter(&pref, m_rtxn, m_dbi);
     uint64_t next_to_issue = 1;
 
     for (; iter.valid(); iter.next())
     {
-        if (iter.key().size() != SLOT_KEY_SIZE)
+        if (iter.key()->mv_size != SLOT_KEY_SIZE)
         {
             continue;
         }
 
         uint64_t n;
-        unpack_slot_key(iter.key().data(), &n);
+        unpack_slot_key((const char *)iter.key()->mv_data, &n);
         next_to_issue = std::max(next_to_issue, n + 1);
     }
+    mdb_txn_reset(m_rtxn);
 
     m_cache_next_slot_issue = next_to_issue;
     return next_to_issue;
@@ -804,20 +855,24 @@ fact_store :: next_slot_to_ack()
         return m_cache_next_slot_ack;
     }
 
-    prefix_iterator iter(leveldb::Slice(ACK_PREFIX), m_db);
+    MDB_val pref;
+    MVS(pref,ACK_PREFIX);
+    mdb_txn_renew(m_rtxn);
+    prefix_iterator iter(&pref, m_rtxn, m_dbi);
     uint64_t next_to_ack = 1;
 
     for (; iter.valid(); iter.next())
     {
-        if (iter.key().size() != ACK_KEY_SIZE)
+        if (iter.key()->mv_size != ACK_KEY_SIZE)
         {
             continue;
         }
 
         uint64_t n;
-        unpack_ack_key(iter.key().data(), &n);
+        unpack_ack_key((const char *)iter.key()->mv_data, &n);
         next_to_ack = std::max(next_to_ack, n + 1);
     }
+    mdb_txn_reset(m_rtxn);
 
     m_cache_next_slot_ack = next_to_ack;
     return next_to_ack;
@@ -890,13 +945,17 @@ fact_store :: clear_unacked_slots()
         uint64_t client;
         uint64_t nonce;
         e::slice data;
+        MDB_val v;
 
-        if (retrieve_value(key, SLOT_KEY_SIZE, &backing) &&
-            unpack_slot_val(leveldb::Slice(backing), &object, &client, &nonce, &data))
+        if (retrieve_value(key, SLOT_KEY_SIZE, &backing)) {
+            MDB_val v;
+            MVSL(v,backing);
+            if (unpack_slot_val(&v, &object, &client, &nonce, &data))
         {
             char keyn[NONCE_KEY_SIZE];
             pack_nonce_key(client, nonce, keyn);
             delete_key(keyn, NONCE_KEY_SIZE);
+        }
         }
 
         delete_key(key, SLOT_KEY_SIZE);
@@ -910,12 +969,12 @@ fact_store :: clear_unacked_slots()
 bool
 fact_store :: debug_dump(const po6::pathname& path)
 {
-    leveldb::Status st;
+    int st;
     st = open_db(path, false);
 
-    if (!st.ok())
+    if (st)
     {
-        std::cerr << "could not open LevelDB: " << st.ToString() << std::endl;
+        std::cerr << "could not open DB: " << mdb_strerror(st) << std::endl;
         return false;
     }
 
@@ -1006,12 +1065,12 @@ fact_store :: debug_dump(const po6::pathname& path)
 bool
 fact_store :: integrity_check(const po6::pathname& path, bool destructive)
 {
-    leveldb::Status st;
+    int st;
     st = open_db(path, false);
 
-    if (!st.ok())
+    if (st)
     {
-        std::cerr << "could not open LevelDB: " << st.ToString() << std::endl;
+        std::cerr << "could not open LevelDB: " << mdb_strerror(st) << std::endl;
         return false;
     }
 
@@ -1036,101 +1095,157 @@ fact_store :: integrity_check(const po6::pathname& path, bool destructive)
     return true;
 }
 
-leveldb::Status
+int
 fact_store :: open_db(const po6::pathname& path, bool create)
 {
-    leveldb::Options opts;
-    opts.create_if_missing = create;
-    opts.filter_policy = leveldb::NewBloomFilterPolicy(10);
-    std::string name(path.get());
-    return leveldb::DB::Open(opts, name, &m_db);
+    MDB_txn *txn;
+    int rc;
+
+    rc = mdb_env_create(&m_db);
+    if (rc)
+    {
+        LOG(ERROR) << "could not create LMDB env: " << mdb_strerror(rc);
+        return rc;
+    }
+    rc = mdb_env_set_mapsize(m_db, 10485760);    /* 10MB default */
+    rc = mdb_env_open(m_db, path.get(), MDB_WRITEMAP, 0600);
+    if (rc)
+    {
+        LOG(ERROR) << "could not open LMDB env: " << mdb_strerror(rc);
+        return rc;
+    }
+    rc = mdb_txn_begin(m_db, NULL, 0, &txn);
+    if (rc)
+    {
+        LOG(ERROR) << "could not open LMDB txn: " << mdb_strerror(rc);
+        return rc;
+    }
+    rc = mdb_open(txn, NULL, 0, &m_dbi);
+    if (rc)
+    {
+        LOG(ERROR) << "could not open LMDB dbi: " << mdb_strerror(rc);
+        mdb_txn_abort(txn);
+        return rc;
+    }
+    mdb_txn_commit(txn);
+
+    /* Set this up for readers to use later */
+    rc = mdb_txn_begin(m_db, NULL, MDB_RDONLY, &m_rtxn);
+    if (rc)
+    {
+        LOG(ERROR) << "could not open LMDB read txn: " << mdb_strerror(rc);
+        return rc;
+    }
+    rc = mdb_cursor_open(m_rtxn, m_dbi, &m_rcsr);
+    if (rc)
+    {
+        LOG(ERROR) << "could not open LMDB read cursor: " << mdb_strerror(rc);
+        mdb_txn_abort(m_rtxn);
+        return rc;
+    }
+    mdb_txn_reset(m_rtxn);
+    return rc;
 }
 
 bool
 fact_store :: initialize(std::ostream& ostr, bool* restored, chain_node* us)
 {
-    leveldb::ReadOptions ropts;
-    ropts.fill_cache = true;
-    ropts.verify_checksums = true;
-    leveldb::WriteOptions wopts;
-    wopts.sync = true;
+    MDB_txn *txn;
+    MDB_val key, data;
+    int rc;
+    bool ret = false;
+
+    rc = mdb_txn_begin(m_db, NULL, 0, &txn);
+    if (rc)
+    {
+        ostr << "could not open LMDB txn: " << mdb_strerror(rc);
+        return false;
+    }
 
     // read the "replicant" key and check the version
-    std::string rbacking;
-    leveldb::Status st = m_db->Get(ropts, leveldb::Slice("replicant", 9), &rbacking);
     bool first_time = false;
 
-    if (st.ok())
+    MVS(key, "replicant");
+    rc = mdb_get(txn, m_dbi, &key, &data);
+ 
+    if (rc == MDB_SUCCESS)
     {
-        first_time = false;
-
-        if (rbacking != PACKAGE_VERSION)
+        if (data.mv_size != STRLENOF(PACKAGE_VERSION) ||
+            memcmp(data.mv_data, PACKAGE_VERSION, STRLENOF(PACKAGE_VERSION)))
         {
-            ostr << "could not restore from LevelDB because "
+            ostr << "could not restore from DB because "
                  << "the existing data was created by "
-                 << "replicant " << rbacking << " but "
+                 << "replicant " << (char *)data.mv_data << " but "
                  << "this is version " << PACKAGE_VERSION << " which is not compatible";
-            return false;
+            goto leave;
         }
     }
-    else if (st.IsNotFound())
+    else if (rc == MDB_NOTFOUND)
     {
         first_time = true;
-        leveldb::Slice k("replicant", 9);
-        leveldb::Slice v(PACKAGE_VERSION, STRLENOF(PACKAGE_VERSION));
-        st = m_db->Put(wopts, k, v);
-
-        if (!st.ok())
+        MVS(data, PACKAGE_VERSION);
+        rc = mdb_put(txn, m_dbi, &key, &data, 0);
+        if (rc == MDB_SUCCESS)
         {
-            ostr << "could not save \"replicant\" key into LevelDB: " << st.ToString();
-            return false;
+            rc = mdb_txn_commit(txn);
+            if (rc == MDB_SUCCESS)
+                rc = mdb_txn_begin(m_db, NULL, 0, &txn);
+        }
+
+        if (rc)
+        {
+            ostr << "could not save \"replicant\" key into DB: " << mdb_strerror(rc);
+            goto leave;
         }
     }
     else
     {
-        ostr << "could not read \"replicant\" key from LevelDB: " << st.ToString();
-        return false;
+        ostr << "could not read \"replicant\" key from DB: " << mdb_strerror(rc);
+        goto leave;
     }
 
     // read the "state" key and parse it
-    std::string sbacking;
-    st = m_db->Get(ropts, leveldb::Slice("us", 2), &sbacking);
+    MVS(key, "us");
+    rc = mdb_get(txn, m_dbi, &key, &data);
 
-    if (st.ok())
+    if (rc == MDB_SUCCESS)
     {
         if (first_time)
         {
-            ostr << "could not restore from LevelDB because a previous "
+            ostr << "could not restore from DB because a previous "
                  << "execution crashed and the database was tampered with; "
                  << "you'll need to manually erase this DB and create a new one";
-            return false;
+            goto leave;
         }
 
-        e::unpacker up(sbacking.data(), sbacking.size());
+        e::unpacker up((const char *)data.mv_data, data.mv_size);
         up = up >> *us;
 
         if (up.error())
         {
-            ostr << "could not restore from LevelDB because a previous "
+            ostr << "could not restore from DB because a previous "
                  << "execution wrote an invalid node identity; "
                  << "you'll need to manually erase this DB and create a new one";
-            return false;
+            goto leave;
         }
     }
-    else if (st.IsNotFound())
+    else if (rc == MDB_NOTFOUND)
     {
         if (!only_key_is_replicant_key())
         {
-            ostr << "could not restore from LevelDB because a previous "
-                 << "execution didn't save a node identity and wrote "
+            ostr << "could not restore from DB because a previous "
+                 << "execution didn't save a node identity, and wrote "
                  << "other data; "
                  << "you'll need to manually erase this DB and create a new one";
-            return false;
+            goto leave;
         }
     }
 
+    ret = true;
+leave:
+    mdb_txn_abort(txn);
     *restored = !first_time;
-    return true;
+    return ret;
 }
 
 #define REPORT_ERROR(X) do { if (output) std::cout << "integrity error: " << X << std::endl; error = true; } while (0)
@@ -1139,7 +1254,7 @@ bool
 fact_store :: integrity_check(int tries_remaining, bool output, bool destructive, configuration_manager* config_manager)
 {
     // pull all of the information from the database
-    leveldb::Status st;
+    int st;
     typedef std::pair<uint64_t, uint64_t> uup;
     std::vector<uup> proposals;
     std::vector<std::vector<configuration> > proposed_configs;
@@ -1162,7 +1277,7 @@ fact_store :: integrity_check(int tries_remaining, bool output, bool destructive
 
     bool error = false;
 
-    // every proposal is may either be accepted or rejected, not both
+    // every proposal may either be accepted or rejected, not both
     for (size_t i = 0; i < proposals.size(); ++i)
     {
         bool accepted = std::binary_search(accepted_proposals.begin(),
@@ -1543,34 +1658,30 @@ fact_store :: integrity_check(int tries_remaining, bool output, bool destructive
 bool
 fact_store :: check_key_exists(const char* key, size_t key_sz)
 {
-    leveldb::ReadOptions opts;
-    opts.fill_cache = true;
-    opts.verify_checksums = true;
-    leveldb::Slice k(key, key_sz);
-    std::string backing;
-    leveldb::Status st = m_db->Get(opts, k, &backing);
+    MDB_val k, val;
+    bool do_reset = true;
+    int rc;
 
-    if (st.ok())
+    rc = mdb_txn_renew(m_rtxn);
+    if (rc)
+    {
+        do_reset = false;
+    }
+    k.mv_data = (void *)key; k.mv_size = key_sz;
+    rc = mdb_get(m_rtxn, m_dbi, &k, &val);
+    if (do_reset)
+        mdb_txn_reset(m_rtxn);
+    if (rc == MDB_SUCCESS)
     {
         return true;
     }
-    else if (st.IsNotFound())
+    else if (rc == MDB_NOTFOUND)
     {
         return false;
     }
-    else if (st.IsCorruption())
-    {
-        LOG(ERROR) << "corruption:  " << st.ToString();
-        abort();
-    }
-    else if (st.IsIOError())
-    {
-        LOG(ERROR) << "IO error:  " << st.ToString();
-        abort();
-    }
     else
     {
-        LOG(ERROR) << "LevelDB returned an unknown error that we don't know how to handle";
+        LOG(ERROR) << "DB failed: " << mdb_strerror(rc);
         abort();
     }
 }
@@ -1579,34 +1690,27 @@ void
 fact_store :: store_key_value(const char* key, size_t key_sz,
                               const char* value, size_t value_sz)
 {
-    leveldb::WriteOptions opts;
-    opts.sync = false;
-    leveldb::Slice k(key, key_sz);
-    leveldb::Slice v(value, value_sz);
-    leveldb::Status st = m_db->Put(opts, k, v);
+    MDB_txn *txn;
+    MDB_val k, v;
+    int rc;
 
-    if (st.ok())
+    k.mv_data = (void *)key; k.mv_size = key_sz;
+    v.mv_data = (void *)value; v.mv_size = value_sz;
+
+    rc = mdb_txn_begin(m_db, NULL, 0, &txn);
+    if (rc)
     {
-        return;
-    }
-    else if (st.IsNotFound())
-    {
-        LOG(ERROR) << "PUT returned not NotFound; this doesn't make sense";
         abort();
     }
-    else if (st.IsCorruption())
+    rc = mdb_put(txn, m_dbi, &k, &v, 0);
+    if (rc == MDB_SUCCESS)
     {
-        LOG(ERROR) << "corruption:  " << st.ToString();
-        abort();
-    }
-    else if (st.IsIOError())
-    {
-        LOG(ERROR) << "IO error:  " << st.ToString();
-        abort();
+        rc = mdb_txn_commit(txn);
     }
     else
     {
-        LOG(ERROR) << "LevelDB returned an unknown error that we don't know how to handle";
+        mdb_txn_abort(txn);
+        LOG(ERROR) << "DB put failed: " << mdb_strerror(rc);
         abort();
     }
 }
@@ -1615,33 +1719,33 @@ bool
 fact_store :: retrieve_value(const char* key, size_t key_sz,
                              std::string* backing)
 {
-    leveldb::ReadOptions opts;
-    opts.fill_cache = true;
-    opts.verify_checksums = true;
-    leveldb::Slice k(key, key_sz);
-    leveldb::Status st = m_db->Get(opts, k, backing);
+    MDB_val k, v;
+    int rc;
+    bool do_reset = true;
 
-    if (st.ok())
+    rc = mdb_txn_renew(m_rtxn);
+    if (rc)
     {
+        do_reset = false;
+    }
+    k.mv_data = (void *)key; k.mv_size = key_sz;
+    rc = mdb_get(m_rtxn, m_dbi, &k, &v);
+    if (rc == MDB_SUCCESS)
+    {
+        backing->assign((const char *)v.mv_data, v.mv_size);
+        if (do_reset)
+            mdb_txn_reset(m_rtxn);
         return true;
     }
-    else if (st.IsNotFound())
+    else if (rc == MDB_NOTFOUND)
     {
+        if (do_reset)
+            mdb_txn_reset(m_rtxn);
         return false;
-    }
-    else if (st.IsCorruption())
-    {
-        LOG(ERROR) << "corruption:  " << st.ToString();
-        abort();
-    }
-    else if (st.IsIOError())
-    {
-        LOG(ERROR) << "IO error:  " << st.ToString();
-        abort();
     }
     else
     {
-        LOG(ERROR) << "LevelDB returned an unknown error that we don't know how to handle";
+        LOG(ERROR) << "DB failed: " << mdb_strerror(rc);
         abort();
     }
 }
@@ -1649,54 +1753,66 @@ fact_store :: retrieve_value(const char* key, size_t key_sz,
 void
 fact_store :: delete_key(const char* key, size_t key_sz)
 {
-    leveldb::WriteOptions opts;
-    opts.sync = false;
-    leveldb::Slice k(key, key_sz);
-    leveldb::Status st = m_db->Delete(opts, k);
+    MDB_txn *txn;
+    MDB_val k;
+    int rc;
 
-    if (st.ok() || st.IsNotFound())
+    rc = mdb_txn_begin(m_db, NULL, 0, &txn);
+    if (rc)
     {
+        abort();
+    }
+    k.mv_data = (void *)key; k.mv_size = key_sz;
+    rc = mdb_del(txn, m_dbi, &k, NULL);
+    if (rc == MDB_NOTFOUND)
+    {
+        mdb_txn_abort(txn);
         return;
     }
-    else if (st.IsCorruption())
+    if (rc == MDB_SUCCESS)
     {
-        LOG(ERROR) << "corruption:  " << st.ToString();
-        abort();
+        rc = mdb_txn_commit(txn);
+        if (rc == MDB_SUCCESS)
+            return;
     }
-    else if (st.IsIOError())
-    {
-        LOG(ERROR) << "IO error:  " << st.ToString();
-        abort();
-    }
-    else
-    {
-        LOG(ERROR) << "LevelDB returned an unknown error that we don't know how to handle";
-        abort();
-    }
+    LOG(ERROR) << "DB delete failed: " << mdb_strerror(rc);
+    abort();
 }
 
 bool
 fact_store :: only_key_is_replicant_key()
 {
-    leveldb::ReadOptions opts;
-    opts.fill_cache = false;
-    opts.verify_checksums = true;
-    opts.snapshot = NULL;
-    std::auto_ptr<leveldb::Iterator> it(m_db->NewIterator(opts));
-    it->SeekToFirst();
+    MDB_cursor *mc;
+    MDB_txn *txn;
+    MDB_val key;
+    int rc;
+
+    rc = mdb_txn_begin(m_db, NULL, MDB_RDONLY, &txn);
+    if (rc)
+    {
+        abort();
+    }
+    rc = mdb_cursor_open(txn, m_dbi, &mc);
+    if (rc)
+    {
+        abort();
+    }
+
     bool seen = false;
 
-    while (it->Valid())
+    while ((rc = mdb_cursor_get(mc, &key, NULL, MDB_NEXT)) == MDB_SUCCESS)
     {
-        if (it->key().compare(leveldb::Slice("replicant", 9)) != 0)
+        if (key.mv_size != 9 || memcmp(key.mv_data, "replicant", 9))
         {
+            mdb_cursor_close(mc);
+            mdb_txn_abort(txn);
             return false;
         }
 
-        it->Next();
         seen = true;
     }
-
+    mdb_cursor_close(mc);
+    mdb_txn_abort(txn);
     return seen;
 }
 
@@ -1712,101 +1828,118 @@ fact_store :: scan_all(std::vector<std::pair<uint64_t, uint64_t> >* proposals,
                        std::vector<exec>* slots_execd,
                        std::vector<slot_mapping>* slot_mappings)
 {
-    leveldb::Status st;
+    int st;
+    bool ret = true;
+    mdb_txn_renew(m_rtxn);
+
+    do {
     st = scan_proposals(proposals, proposed_configs);
 
-    if (!st.ok())
+    if (st)
     {
-        std::cerr << "could not scan proposed proposals: " << st.ToString() << std::endl;
-        return false;
+        std::cerr << "could not scan proposed proposals: " << mdb_strerror(st) << std::endl;
+        ret = false;
+        break;
     }
 
     st = scan_accepted_proposals(accepted_proposals);
 
-    if (!st.ok())
+    if (st)
     {
-        std::cerr << "could not scan accepted proposals: " << st.ToString() << std::endl;
-        return false;
+        std::cerr << "could not scan accepted proposals: " << mdb_strerror(st) << std::endl;
+        ret = false;
+        break;
     }
 
     st = scan_rejected_proposals(rejected_proposals);
 
-    if (!st.ok())
+    if (st)
     {
-        std::cerr << "could not scan rejected proposals: " << st.ToString() << std::endl;
-        return false;
+        std::cerr << "could not scan rejected proposals: " << mdb_strerror(st) << std::endl;
+        ret = false;
+        break;
     }
 
     st = scan_informed_configurations(informed_configs);
 
-    if (!st.ok())
+    if (st)
     {
-        std::cerr << "could not scan inform configurations: " << st.ToString() << std::endl;
-        return false;
+        std::cerr << "could not scan inform configurations: " << mdb_strerror(st) << std::endl;
+        ret = false;
+        break;
     }
 
     st = scan_clients(clients);
 
-    if (!st.ok())
+    if (st)
     {
-        std::cerr << "could not scan clients: " << st.ToString() << std::endl;
-        return false;
+        std::cerr << "could not scan clients: " << mdb_strerror(st) << std::endl;
+        ret = false;
+        break;
     }
 
     st = scan_issue_slots(slots_issued);
 
-    if (!st.ok())
+    if (st)
     {
-        std::cerr << "could not scan issued slots: " << st.ToString() << std::endl;
-        return false;
+        std::cerr << "could not scan issued slots: " << mdb_strerror(st) << std::endl;
+        ret = false;
+        break;
     }
 
     st = scan_ack_slots(slots_acked);
 
-    if (!st.ok())
+    if (st)
     {
-        std::cerr << "could not scan acked slots: " << st.ToString() << std::endl;
-        return false;
+        std::cerr << "could not scan acked slots: " << mdb_strerror(st) << std::endl;
+        ret = false;
+        break;
     }
 
     st = scan_exec_slots(slots_execd);
 
-    if (!st.ok())
+    if (st)
     {
-        std::cerr << "could not scan exec'd slots: " << st.ToString() << std::endl;
-        return false;
+        std::cerr << "could not scan exec'd slots: " << mdb_strerror(st) << std::endl;
+        ret = false;
+        break;
     }
 
     st = scan_slot_mappings(slot_mappings);
 
-    if (!st.ok())
+    if (st)
     {
-        std::cerr << "could not scan slot mappings: " << st.ToString() << std::endl;
-        return false;
+        std::cerr << "could not scan slot mappings: " << mdb_strerror(st) << std::endl;
+        ret = false;
+        break;
     }
-
-    return true;
+    } while(0);
+    mdb_txn_reset(m_rtxn);
+    return ret;
 }
 
-leveldb::Status
+int
 fact_store :: scan_proposals(std::vector<std::pair<uint64_t, uint64_t> >* proposals,
                              std::vector<std::vector<configuration> >* proposed_configurations)
 {
+    MDB_val pref;
     assert(proposals->size() == proposed_configurations->size());
-    prefix_iterator iter(leveldb::Slice(PROPOSAL_PREFIX), m_db);
+    MVS(pref,PROPOSAL_PREFIX);
+    prefix_iterator iter(&pref, m_rtxn, m_dbi);
 
     for (; iter.valid(); iter.next())
     {
-        if (iter.key().size() != PROPOSAL_KEY_SIZE)
+        if (iter.key()->mv_size != PROPOSAL_KEY_SIZE)
         {
-            return leveldb::Status::Corruption("key with proposed prefix and improper length");
+            // ("key with proposed prefix and improper length");
+            return MDB_INCOMPATIBLE;
         }
 
         uint64_t proposal_id;
         uint64_t proposal_time;
-        unpack_proposal_key(iter.key().data(), &proposal_id, &proposal_time);
+        unpack_proposal_key((const char *)iter.key()->mv_data, &proposal_id, &proposal_time);
         std::vector<configuration> configs;
-        e::unpacker up(iter.val().data(), iter.val().size());
+        e::unpacker up((const char *)iter.val()->mv_data, iter.val()->mv_size);
 
         while (up.remain() && !up.error())
         {
@@ -1821,80 +1954,90 @@ fact_store :: scan_proposals(std::vector<std::pair<uint64_t, uint64_t> >* propos
 
         if (up.error())
         {
-            return leveldb::Status::Corruption("could not unpack proposed configurations");
+            // ("could not unpack proposed configurations");
+            return MDB_INCOMPATIBLE;
         }
 
         proposals->push_back(std::make_pair(proposal_id, proposal_time));
         proposed_configurations->push_back(configs);
     }
-
     assert(proposals->size() == proposed_configurations->size());
     return iter.status();
 }
 
-leveldb::Status
+int
 fact_store :: scan_accepted_proposals(std::vector<std::pair<uint64_t, uint64_t> >* accepted_proposals)
 {
-    prefix_iterator iter(leveldb::Slice(ACCEPTED_PROPOSAL_PREFIX), m_db);
+    MDB_val pref;
+    MVS(pref,ACCEPTED_PROPOSAL_PREFIX);
+    prefix_iterator iter(&pref, m_rtxn, m_dbi);
 
     for (; iter.valid(); iter.next())
     {
-        if (iter.key().size() != ACCEPTED_PROPOSAL_KEY_SIZE)
+        if (iter.key()->mv_size != ACCEPTED_PROPOSAL_KEY_SIZE)
         {
-            return leveldb::Status::Corruption("key with accept prefix and improper length");
+            // ("key with accept prefix and improper length");
+            return MDB_INCOMPATIBLE;
         }
 
         uint64_t proposal_id;
         uint64_t proposal_time;
-        unpack_accepted_proposal_key(iter.key().data(), &proposal_id, &proposal_time);
+        unpack_accepted_proposal_key((const char *)iter.key()->mv_data, &proposal_id, &proposal_time);
         accepted_proposals->push_back(std::make_pair(proposal_id, proposal_time));
     }
 
     return iter.status();
 }
 
-leveldb::Status
+int
 fact_store :: scan_rejected_proposals(std::vector<std::pair<uint64_t, uint64_t> >* rejected_proposals)
 {
-    prefix_iterator iter(leveldb::Slice(REJECTED_PROPOSAL_PREFIX), m_db);
+    MDB_val pref;
+    MVS(pref,REJECTED_PROPOSAL_PREFIX);
+    prefix_iterator iter(&pref, m_rtxn, m_dbi);
 
     for (; iter.valid(); iter.next())
     {
-        if (iter.key().size() != REJECTED_PROPOSAL_KEY_SIZE)
+        if (iter.key()->mv_size != REJECTED_PROPOSAL_KEY_SIZE)
         {
-            return leveldb::Status::Corruption("key with reject prefix and improper length");
+            // ("key with reject prefix and improper length");
+            return MDB_INCOMPATIBLE;
         }
 
         uint64_t proposal_id;
         uint64_t proposal_time;
-        unpack_rejected_proposal_key(iter.key().data(), &proposal_id, &proposal_time);
+        unpack_rejected_proposal_key((const char *)iter.key()->mv_data, &proposal_id, &proposal_time);
         rejected_proposals->push_back(std::make_pair(proposal_id, proposal_time));
     }
 
     return iter.status();
 }
 
-leveldb::Status
+int
 fact_store :: scan_informed_configurations(std::vector<std::pair<uint64_t, configuration> >* configurations)
 {
-    prefix_iterator iter(leveldb::Slice(INFORM_CONFIG_PREFIX), m_db);
+    MDB_val pref;
+    MVS(pref,INFORM_CONFIG_PREFIX);
+    prefix_iterator iter(&pref, m_rtxn, m_dbi);
 
     for (; iter.valid(); iter.next())
     {
-        if (iter.key().size() != INFORM_CONFIG_KEY_SIZE)
+        if (iter.key()->mv_size != INFORM_CONFIG_KEY_SIZE)
         {
-            return leveldb::Status::Corruption("key with inform prefix and improper length");
+            // ("key with inform prefix and improper length");
+            return MDB_INCOMPATIBLE;
         }
 
         uint64_t version;
-        unpack_inform_config_key(iter.key().data(), &version);
+        unpack_inform_config_key((const char *)iter.key()->mv_data, &version);
         configuration tmp;
-        e::unpacker up(iter.val().data(), iter.val().size());
+        e::unpacker up((const char *)iter.val()->mv_data, iter.val()->mv_size);
         up = up >> tmp;
 
         if (up.error())
         {
-            return leveldb::Status::Corruption("could not unpack informed configuration");
+             // ("could not unpack informed configuration");
+            return MDB_INCOMPATIBLE;
         }
 
         configurations->push_back(std::make_pair(version, tmp));
@@ -1903,39 +2046,44 @@ fact_store :: scan_informed_configurations(std::vector<std::pair<uint64_t, confi
     return iter.status();
 }
 
-leveldb::Status
+int
 fact_store :: scan_clients(std::vector<std::pair<uint64_t, const char*> >* clients)
 {
-    prefix_iterator iter(leveldb::Slice(CLIENT_PREFIX), m_db);
+    MDB_val pref;
+    MVS(pref,CLIENT_PREFIX);
+    prefix_iterator iter(&pref, m_rtxn, m_dbi);
 
     for (; iter.valid(); iter.next())
     {
-        if (iter.key().size() != CLIENT_KEY_SIZE)
+        if (iter.key()->mv_size != CLIENT_KEY_SIZE)
         {
-            return leveldb::Status::Corruption("key with client prefix and improper length");
+            // ("key with client prefix and improper length");
+            return MDB_INCOMPATIBLE;
         }
 
         uint64_t id;
-        unpack_client_key(iter.key().data(), &id);
+        unpack_client_key((const char *)iter.key()->mv_data, &id);
 
-        if (iter.val().size() != 3)
+        if (iter.val()->mv_size != 3)
         {
-            return leveldb::Status::Corruption("could not unpack client status");
+            // ("could not unpack client status");
+            return MDB_INCOMPATIBLE;
         }
 
         const char* c = NULL;
 
-        if (strncmp(iter.val().data(), "reg", 3) == 0)
+        if (strncmp((const char *)iter.val()->mv_data, "reg", 3) == 0)
         {
             c = "reg";
         }
-        else if (strncmp(iter.val().data(), "die", 3) == 0)
+        else if (strncmp((const char *)iter.val()->mv_data, "die", 3) == 0)
         {
             c = "die";
         }
         else
         {
-            return leveldb::Status::Corruption("could not unpack client status");
+            // ("could not unpack client status");
+            return MDB_INCOMPATIBLE;
         }
 
         clients->push_back(std::make_pair(id, c));
@@ -1944,25 +2092,29 @@ fact_store :: scan_clients(std::vector<std::pair<uint64_t, const char*> >* clien
     return iter.status();
 }
 
-leveldb::Status
+int
 fact_store :: scan_issue_slots(std::vector<slot>* slots)
 {
-    prefix_iterator iter(leveldb::Slice(SLOT_PREFIX), m_db);
+    MDB_val pref;
+    MVS(pref,SLOT_PREFIX);
+    prefix_iterator iter(&pref, m_rtxn, m_dbi);
 
     for (; iter.valid(); iter.next())
     {
-        if (iter.key().size() != SLOT_KEY_SIZE)
+        if (iter.key()->mv_size != SLOT_KEY_SIZE)
         {
-            return leveldb::Status::Corruption("key with slot prefix and improper length");
+            // ("key with slot prefix and improper length");
+            return MDB_INCOMPATIBLE;
         }
 
         slot s;
-        unpack_slot_key(iter.key().data(), &s.number);
+        unpack_slot_key((const char *)iter.key()->mv_data, &s.number);
 
         if (!unpack_slot_val(iter.val(), &s.object, &s.client, &s.nonce,
                              &s.func, &s.data))
         {
-            return leveldb::Status::Corruption("could not unpack slot data");
+            // ("could not unpack slot data");
+            return MDB_INCOMPATIBLE;
         }
 
         slots->push_back(s);
@@ -1971,44 +2123,51 @@ fact_store :: scan_issue_slots(std::vector<slot>* slots)
     return iter.status();
 }
 
-leveldb::Status
+int
 fact_store :: scan_ack_slots(std::vector<uint64_t>* slots)
 {
-    prefix_iterator iter(leveldb::Slice(ACK_PREFIX), m_db);
+    MDB_val pref;
+    MVS(pref,ACK_PREFIX);
+    prefix_iterator iter(&pref, m_rtxn, m_dbi);
 
     for (; iter.valid(); iter.next())
     {
-        if (iter.key().size() != ACK_KEY_SIZE)
+        if (iter.key()->mv_size != ACK_KEY_SIZE)
         {
-            return leveldb::Status::Corruption("key with ack prefix and improper length");
+            // ("key with ack prefix and improper length");
+            return MDB_INCOMPATIBLE;
         }
 
         uint64_t s;
-        unpack_ack_key(iter.key().data(), &s);
+        unpack_ack_key((const char *)iter.key()->mv_data, &s);
         slots->push_back(s);
     }
 
     return iter.status();
 }
 
-leveldb::Status
+int
 fact_store :: scan_exec_slots(std::vector<exec>* slots)
 {
-    prefix_iterator iter(leveldb::Slice(EXEC_PREFIX), m_db);
+    MDB_val pref;
+    MVS(pref,EXEC_PREFIX);
+    prefix_iterator iter(&pref, m_rtxn, m_dbi);
 
     for (; iter.valid(); iter.next())
     {
-        if (iter.key().size() != EXEC_KEY_SIZE)
+        if (iter.key()->mv_size != EXEC_KEY_SIZE)
         {
-            return leveldb::Status::Corruption("key with exec prefix and improper length");
+            // ("key with exec prefix and improper length");
+            return MDB_INCOMPATIBLE;
         }
 
         exec e;
-        unpack_exec_key(iter.key().data(), &e.number);
+        unpack_exec_key((const char *)iter.key()->mv_data, &e.number);
 
         if (!unpack_exec_val(iter.val(), &e.rc, &e.response))
         {
-            return leveldb::Status::Corruption("could not unpack exec data");
+            // ("could not unpack exec data");
+            return MDB_INCOMPATIBLE;
         }
 
         slots->push_back(e);
@@ -2017,22 +2176,25 @@ fact_store :: scan_exec_slots(std::vector<exec>* slots)
     return iter.status();
 }
 
-leveldb::Status
+int
 fact_store :: scan_slot_mappings(std::vector<slot_mapping>* mappings)
 {
-    prefix_iterator iter(leveldb::Slice(NONCE_PREFIX), m_db);
+    MDB_val pref;
+    MVS(pref,NONCE_PREFIX);
+    prefix_iterator iter(&pref, m_rtxn, m_dbi);
 
     for (; iter.valid(); iter.next())
     {
-        if (iter.key().size() != NONCE_KEY_SIZE ||
-            iter.val().size() != NONCE_VAL_SIZE)
+        if (iter.key()->mv_size != NONCE_KEY_SIZE ||
+            iter.val()->mv_size != NONCE_VAL_SIZE)
         {
-            return leveldb::Status::Corruption("key with exec prefix and improper length");
+            // ("key with exec prefix and improper length");
+            return MDB_INCOMPATIBLE;
         }
 
         slot_mapping sm;
-        unpack_nonce_key(iter.key().data(), &sm.client, &sm.nonce);
-        unpack_nonce_val(iter.val().data(), &sm.slot);
+        unpack_nonce_key((const char *)iter.key()->mv_data, &sm.client, &sm.nonce);
+        unpack_nonce_val((const char *)iter.val()->mv_data, &sm.slot);
         mappings->push_back(sm);
     }
 

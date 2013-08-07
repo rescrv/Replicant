@@ -32,6 +32,8 @@ AM_CFLAGS    = $(WANAL_CFLAGS)
 AM_CXXFLAGS  = $(PO6_CFLAGS) $(E_CFLAGS) $(BUSYBEE_CFLAGS) $(HYPERLEVELDB_CFLAGS) $(WANAL_CXXFLAGS)
 AM_MAKEFLAGS = --no-print-directory
 
+HYPERLEVELDB_LIBS = -llmdb
+
 pkgconfigdir = $(libdir)/pkgconfig
 replicantexecdir = $(libexecdir)/$(PACKAGE)-$(VERSION)
 
