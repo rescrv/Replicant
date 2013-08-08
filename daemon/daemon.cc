@@ -1606,6 +1606,12 @@ daemon :: process_command_ack(const replicant::connection& conn,
         return;
     }
 
+    if (m_heal_next.state != heal_next::HEALTHY)
+    {
+        m_heal_next.acknowledged = slot + 1;
+        transfer_more_state();
+    }
+
     acknowledge_command(slot);
 }
 
@@ -1663,12 +1669,6 @@ daemon :: issue_command(uint64_t slot,
 void
 daemon :: acknowledge_command(uint64_t slot)
 {
-    if (m_heal_next.state != heal_next::HEALTHY)
-    {
-        m_heal_next.acknowledged = std::max(m_heal_next.acknowledged, slot + 1);
-        transfer_more_state();
-    }
-
     if (m_fs.is_acknowledged_slot(slot))
     {
         // eliminate the dupe silently
@@ -1767,6 +1767,13 @@ daemon :: periodic_describe_slots(uint64_t now)
     LOG(INFO) << "we are " << m_us << " and here's some info:"
               << " issued <=" << m_fs.next_slot_to_issue()
               << " | acked <=" << m_fs.next_slot_to_ack();
+    LOG(INFO) << "our stable configuration is " << m_config_manager.stable();
+
+    if (m_heal_next.state != heal_next::HEALTHY)
+    {
+        LOG(INFO) << "we've transfered through " << m_heal_next.acknowledged
+                  << " and have begun transfer up to " << m_heal_next.proposed;
+    }
 }
 
 void
@@ -1944,9 +1951,13 @@ daemon :: process_stable(const replicant::connection&,
 void
 daemon :: transfer_more_state()
 {
+    m_heal_next.window = m_fs.next_slot_to_issue() - m_heal_next.acknowledged;
+    m_heal_next.window = std::max(m_heal_next.window, m_s.TRANSFER_WINDOW_LOWER_BOUND);
+    m_heal_next.window = std::min(m_heal_next.window, m_s.TRANSFER_WINDOW_UPPER_BOUND);
+
     while (m_heal_next.state < heal_next::HEALTHY_SENT &&
            m_heal_next.proposed < m_fs.next_slot_to_issue() &&
-           m_heal_next.proposed - m_heal_next.acknowledged <= m_s.TRANSFER_WINDOW)
+           m_heal_next.proposed - m_heal_next.acknowledged <= m_heal_next.window)
     {
         uint64_t slot = m_heal_next.proposed;
         uint64_t object;

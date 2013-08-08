@@ -32,6 +32,7 @@ using replicant::heal_next;
 
 heal_next :: heal_next()
     : state(BROKEN)
+    , window(1)
     , token(0)
     , acknowledged(0)
     , proposed(0)
