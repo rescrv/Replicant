@@ -535,6 +535,17 @@ daemon :: run(bool daemonize,
                 LOG(WARNING) << "unknown message type; here's some hex:  " << msg->hex();
                 break;
         }
+
+        sigset_t pending;
+        sigemptyset(&pending);
+
+        if (sigpending(&pending) == 0 &&
+            (sigismember(&pending, SIGHUP) ||
+             sigismember(&pending, SIGINT) ||
+             sigismember(&pending, SIGTERM)))
+        {
+            exit_on_signal(SIGTERM);
+        }
     }
 
     LOG(INFO) << "replicant is gracefully shutting down";
