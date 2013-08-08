@@ -59,6 +59,8 @@ class configuration_manager
         bool is_compatible(const configuration* configs,
                            size_t configs_sz) const;
         bool contains_quorum_of_all(const configuration& config) const;
+        bool contains_quorum_of_all(const configuration& config,
+                                    const configuration** fails) const;
         bool any(bool (configuration::*func)(const chain_node&) const, const chain_node& node) const;
         bool any(bool (configuration::*func)(uint64_t) const, uint64_t token) const;
         bool contains(const configuration& config) const;

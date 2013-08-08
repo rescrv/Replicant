@@ -165,11 +165,20 @@ configuration_manager :: is_compatible(const configuration* configs,
 bool
 configuration_manager :: contains_quorum_of_all(const configuration& config) const
 {
+    const configuration* fails;
+    return contains_quorum_of_all(config, &fails);
+}
+
+bool
+configuration_manager :: contains_quorum_of_all(const configuration& config,
+                                                const configuration** fails) const
+{
     for (std::list<configuration>::const_iterator it = m_configs.begin();
             it != m_configs.end(); ++it)
     {
         if (!config.quorum_of(*it))
         {
+            *fails = &(*it);
             return false;
         }
     }

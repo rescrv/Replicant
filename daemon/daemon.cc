@@ -802,10 +802,13 @@ daemon :: process_config_propose(const replicant::connection& conn,
             }
         }
 
-        if (!m_config_manager.contains_quorum_of_all(configs[i]))
+        const configuration* bad;
+
+        if (!m_config_manager.contains_quorum_of_all(configs[i], &bad))
         {
             LOG(ERROR) << "rejecting proposal " << proposal_id << ":" << proposal_time
-                       << " that violates the configuration quorum invariant";
+                       << " that violates the configuration quorum invariant with "
+                       << *bad;
             return reject_proposal(sender, proposal_id, proposal_time);
         }
     }
