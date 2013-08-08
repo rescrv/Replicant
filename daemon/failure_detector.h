@@ -44,12 +44,15 @@ class failure_detector
         ~failure_detector() throw ();
 
     public:
-        void heartbeat(uint64_t now);
+        uint64_t seqno();
+        void heartbeat(uint64_t seqno, uint64_t now);
         double suspicion(uint64_t now);
 
     private:
-        std::deque<uint64_t> m_window;
+        class ping;
+        std::deque<ping> m_window;
         uint64_t m_window_sz;
+        uint64_t m_seqno;
 };
 
 } // namespace replicant

@@ -36,6 +36,18 @@
 
 using replicant::failure_detector;
 
+class failure_detector::ping
+{
+    public:
+        ping() : seqno(0), time(0) {}
+        ping(uint64_t s, uint64_t t) : seqno(s), time(t) {}
+        ping(const ping& other) : seqno(other.seqno), time(other.time) {}
+
+    public:
+        uint64_t seqno;
+        uint64_t time;
+};
+
 failure_detector :: failure_detector()
     : m_window()
     , m_window_sz(1000)
@@ -46,11 +58,29 @@ failure_detector :: ~failure_detector() throw ()
 {
 }
 
-void
-failure_detector :: heartbeat(uint64_t now)
+uint64_t
+failure_detector :: seqno()
 {
-    assert(m_window.empty() || m_window.back() < now);
-    m_window.push_back(now);
+    if (m_window.empty())
+    {
+        return 0;
+    }
+    else
+    {
+        return m_window.back().seqno + 1;
+    }
+}
+
+void
+failure_detector :: heartbeat(uint64_t seqno, uint64_t now)
+{
+
+    if (m_window.empty() ||
+        (m_window.back().seqno < seqno &&
+         m_window.back().time < now))
+    {
+        m_window.push_back(ping(seqno, now));
+    }
 
     if (m_window.size() > m_window_sz)
     {
@@ -95,13 +125,13 @@ failure_detector :: suspicion(uint64_t now)
     double mean = 0;
     double M2 = 0;
 
-    std::deque<uint64_t>::iterator a = m_window.begin();
-    std::deque<uint64_t>::iterator b = m_window.begin() + 1;
+    std::deque<ping>::iterator a = m_window.begin();
+    std::deque<ping>::iterator b = m_window.begin() + 1;
 
     while (b != m_window.end())
     {
         ++n;
-        double diff = *b - *a;
+        double diff = b->time - a->time;
         double delta = diff - mean;
         mean = mean + delta / n;
         M2 = M2 + delta * (diff - mean);
@@ -112,13 +142,13 @@ failure_detector :: suspicion(uint64_t now)
     double stdev = sqrt(M2 / (n - 1));
 
     // A hack to initialize the failure detector.
-    if (m_window.size() * 10 < m_window_sz && now - m_window.back() < 1000000000ULL)
+    if (m_window.size() * 10 < m_window_sz && now - m_window.back().time < 1000000000ULL)
     {
         return 1.0;
     }
 
     // Run that through phi
-    double f = phi(((now - m_window.back()) - mean) / stdev);
+    double f = phi(((now - m_window.back().time) - mean) / stdev);
 
     if (f < 1.0)
     {

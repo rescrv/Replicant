@@ -2090,7 +2090,8 @@ daemon :: process_ping(const replicant::connection& conn,
                        e::unpacker up)
 {
     uint64_t version = 0;
-    up = up >> version;
+    uint64_t seqno = 0;
+    up = up >> version >> seqno;
     CHECK_UNPACK(PING, up);
 
     if (version < m_config_manager.stable().version())
@@ -2103,20 +2104,25 @@ daemon :: process_ping(const replicant::connection& conn,
         send(conn, inf);
     }
 
-    msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_PONG;
+    msg->clear();
+    msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_PONG << seqno;
     send(conn, msg);
 }
 
 void
 daemon :: process_pong(const replicant::connection& conn,
                        std::auto_ptr<e::buffer>,
-                       e::unpacker)
+                       e::unpacker up)
 {
+    uint64_t seqno = 0;
+    up = up >> seqno;
+    CHECK_UNPACK(PONG, up);
+
     failure_detector_map_t::iterator it = m_failure_detectors.find(conn.token);
 
     if (it != m_failure_detectors.end())
     {
-        it->second->heartbeat(monotonic_time());
+        it->second->heartbeat(seqno, monotonic_time());
     }
 }
 
@@ -2135,11 +2141,20 @@ daemon :: periodic_exchange(uint64_t now)
             continue;
         }
 
+        failure_detector_map_t::iterator it = m_failure_detectors.find(nodes[i].token);
+
+        if (it == m_failure_detectors.end())
+        {
+            continue;
+        }
+
+        uint64_t seqno = it->second->seqno();
         size_t sz = BUSYBEE_HEADER_SIZE
                   + pack_size(REPLNET_PING)
+                  + sizeof(uint64_t)
                   + sizeof(uint64_t);
         std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
-        msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_PING << version;
+        msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_PING << version << seqno;
         send_no_disruption(nodes[i].token, msg);
     }
 }
