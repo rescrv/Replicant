@@ -445,7 +445,6 @@ daemon :: run(bool daemonize,
     }
 
     LOG(INFO) << "resuming normal operation";
-    m_stable_version = m_config_manager.stable().version();
     post_reconfiguration_hooks();
 
     replicant::connection conn;
@@ -1886,7 +1885,7 @@ daemon :: process_heal_done(const replicant::connection& conn,
             m_stable_version < m_config_manager.stable().version())
         {
             m_stable_version = m_config_manager.stable().version();
-            LOG(INFO) << "reporting stability at " << m_stable_version;
+            LOG(INFO) << "command tail reporting stability at " << m_stable_version;
         }
     }
     else if (conn.is_prev)
@@ -1921,17 +1920,24 @@ daemon :: process_stable(const replicant::connection&,
     uint64_t stable;
     up = up >> stable;
     CHECK_UNPACK(HEAL_DONE, up);
+
+    if (m_stable_version < stable)
+    {
+        LOG(INFO) << "suffix of the chain (from us forward) reports stability at " << m_stable_version;
+    }
+
+    m_stable_version = std::max(m_stable_version, stable);
+
+    if (m_heal_next.state != heal_next::HEALTHY)
+    {
+        return;
+    }
+
     const chain_node* prev = m_config_manager.stable().prev(m_us.token);
 
     if (prev)
     {
         send(*prev, msg);
-    }
-
-    if (m_stable_version < stable)
-    {
-        m_stable_version = stable;
-        LOG(INFO) << "suffix of the chain (from us forward) reports stability at " << m_stable_version;
     }
 }
 
