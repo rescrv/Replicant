@@ -1339,17 +1339,15 @@ daemon :: periodic_maintain_cluster(uint64_t now)
 
     // promote people only once the config chain stabilizes
     if (m_config_manager.stable().version() == m_config_manager.latest().version() &&
-        m_config_manager.stable().version() == m_stable_version)
+        m_config_manager.stable().version() == m_stable_version &&
+        *m_config_manager.latest().head() == m_us &&
+        m_config_manager.latest().command_size() < m_config_manager.latest().config_size())
     {
-        while (*m_config_manager.latest().head() == m_us &&
-               m_config_manager.latest().command_size() < m_config_manager.latest().config_size())
-        {
-            configuration new_config(m_config_manager.latest());
-            LOG(INFO) << "growing command chain to include more of the config chain";
-            new_config.bump_version();
-            new_config.grow_command_chain();
-            propose_config(new_config);
-        }
+        configuration new_config(m_config_manager.latest());
+        LOG(INFO) << "growing command chain to include more of the config chain";
+        new_config.bump_version();
+        new_config.grow_command_chain();
+        propose_config(new_config);
     }
 }
 
