@@ -228,6 +228,7 @@ daemon :: run(bool daemonize,
             !generate_token(&this_token))
         {
             PLOG(ERROR) << "could not read random tokens from /dev/urandom";
+            m_fs.wipe();
             return EXIT_FAILURE;
         }
 
@@ -249,6 +250,7 @@ daemon :: run(bool daemonize,
 
         if (!request_response(existing, 5000, request, "bootstrapping off of ", &response))
         {
+            m_fs.wipe();
             return EXIT_FAILURE;
         }
 
@@ -262,6 +264,7 @@ daemon :: run(bool daemonize,
             !initial.validate())
         {
             LOG(ERROR) << "received invalid INFORM message from " << existing;
+            m_fs.wipe();
             return EXIT_FAILURE;
         }
 
@@ -271,6 +274,7 @@ daemon :: run(bool daemonize,
         if (!generate_token(&m_us.token))
         {
             PLOG(ERROR) << "could not read server_id from /dev/urandom";
+            m_fs.wipe();
             return EXIT_FAILURE;
         }
 
@@ -279,6 +283,8 @@ daemon :: run(bool daemonize,
             LOG(ERROR) << "by some freak coincidence, we've picked the same random number that someone else did previously";
             LOG(ERROR) << "since we are picking 64-bit numbers, this is extremely unlikely";
             LOG(ERROR) << "if you re-launch the daemon, we'll try picking a different number, but you will want to check for errors in your environment";
+            m_fs.wipe();
+            m_fs.wipe();
             return EXIT_FAILURE;
         }
 
@@ -292,6 +298,7 @@ daemon :: run(bool daemonize,
 
         if (!request_response(head->address, 5000, request, "registering with ", &response))
         {
+            m_fs.wipe();
             return EXIT_FAILURE;
         }
 
@@ -301,6 +308,7 @@ daemon :: run(bool daemonize,
         if (up.error())
         {
             LOG(ERROR) << "received corrupt response to registration request";
+            m_fs.wipe();
             return EXIT_FAILURE;
         }
 
@@ -309,6 +317,7 @@ daemon :: run(bool daemonize,
             LOG(ERROR) << "failed to register with the cluster";
             LOG(ERROR) << "check to make sure that no one else is using our token or address";
             LOG(ERROR) << "us=" << m_us;
+            m_fs.wipe();
             return EXIT_FAILURE;
         }
 
@@ -319,6 +328,7 @@ daemon :: run(bool daemonize,
             !initial.validate())
         {
             LOG(ERROR) << "received invalid INFORM message from " << *head;
+            m_fs.wipe();
             return EXIT_FAILURE;
         }
 

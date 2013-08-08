@@ -58,6 +58,7 @@ class fact_store
                   chain_node* saved_us,
                   configuration_manager* saved_config_manager);
         bool save(const chain_node& saved_us);
+        void wipe();
 
     // Manage configurations
     public:

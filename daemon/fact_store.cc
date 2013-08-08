@@ -549,6 +549,15 @@ fact_store :: save(const chain_node& us)
     return true;
 }
 
+void
+fact_store :: wipe()
+{
+    if (only_key_is_replicant_key())
+    {
+        delete_key("replicant", 9);
+    }
+}
+
 bool
 fact_store :: is_proposed_configuration(uint64_t proposal_id, uint64_t proposal_time)
 {
