@@ -76,9 +76,4 @@ settings :: settings()
 
 } // namespace replicant
 
-#undef SECONDS
-#undef MILLIS
-#undef MICROS
-#undef NANOS
-
 #endif // replicant_settings_h_

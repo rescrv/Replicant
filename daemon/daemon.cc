@@ -1220,6 +1220,7 @@ compare_suspicions(const suspicion& lhs, const suspicion& rhs)
 
 static void
 get_suspicions(uint64_t now,
+               const replicant::chain_node& us,
                const std::map<uint64_t, std::tr1::shared_ptr<replicant::failure_detector> >& fds,
                const replicant::configuration& config,
                std::vector<suspicion>* suspicions)
@@ -1233,7 +1234,7 @@ get_suspicions(uint64_t now,
         std::map<uint64_t, std::tr1::shared_ptr<failure_detector> >::const_iterator it;
         it = fds.find(nodes[i].token);
 
-        if (it == fds.end())
+        if (it == fds.end() || nodes[i].token == us.token)
         {
             continue;
         }
@@ -1276,77 +1277,195 @@ daemon :: periodic_maintain_cluster(uint64_t now)
     }
 
     trip_periodic(now + m_s.MAINTAIN_INTERVAL, &daemon::periodic_maintain_cluster);
+
     // compute the suspicion for all nodes
     std::vector<suspicion> suspicions;
-    get_suspicions(now, m_failure_detectors, m_config_manager.latest(), &suspicions);
+    get_suspicions(now, m_us, m_failure_detectors, m_config_manager.latest(), &suspicions);
 
-    for (ssize_t i = suspicions.size() - 1; i >= 0; --i)
+    // determine a cutoff point in the suspicions vector.
+    // for each suspicions[i]:
+    //      i < cutoff_suspicions
+    //      i >= cutoff_suspicions
+    size_t cutoff_suspicions = 0;
+
+    for (; cutoff_suspicions < suspicions.size(); ++cutoff_suspicions)
     {
-        double threshold = suspicions[i].mean + 3 * suspicions[i].stdev;
+        if (std::isinf(suspicions[cutoff_suspicions].suspicion))
+        {
+            break;
+        }
+
+        double threshold = suspicions[cutoff_suspicions].mean
+                         + 3 * suspicions[cutoff_suspicions].stdev;
         threshold = std::max(threshold, 10.0);
 
-        if (suspicions[i].in_chain &&
-            suspicions[i].suspicion > threshold)
+        if (suspicions[cutoff_suspicions].suspicion > threshold)
         {
-            configuration new_config(m_config_manager.latest());
-            new_config.remove_from_chain(suspicions[i].token);
-            new_config.bump_version();
-
-            if (*new_config.head() == m_us &&
-                new_config.validate() &&
-                m_config_manager.contains_quorum_of_all(new_config))
-            {
-                LOG(INFO) << "proposing new configuration to remove "
-                          << suspicions[i].token
-                          << " from the chain";
-                propose_config(new_config);
-            }
-            else if (*new_config.head() == m_us)
-            {
-                LOG_EVERY_N(INFO, 1000) << "cannot remove dead node without violating quorum/invariants";
-            }
+            break;
         }
     }
 
-    // add live nodes to the chain
-    if (*m_config_manager.latest().head() == m_us)
+    // separate the servers into sets of servers:
+    // stable_live:  servers that are in every config and not suspected
+    // stable_dead:  servers that are in every config and suspected
+    // unstable_live:  servers that are not in every config and not suspected
+    // unstable_dead:  servers that are not in every config and suspected
+    // removed_live:  servers that are not in any config and not suspected
+    // removed_dead:  servers that are not in any config and suspected
+    std::vector<uint64_t> stable_live_tokens;
+    std::vector<uint64_t> stable_dead_tokens;
+    std::vector<uint64_t> unstable_live_tokens;
+    std::vector<uint64_t> unstable_dead_tokens;
+    std::vector<uint64_t> removed_live_tokens;
+    std::vector<uint64_t> removed_dead_tokens;
+    stable_live_tokens.push_back(m_us.token);
+
+    for (size_t i = 0; i < cutoff_suspicions; ++i)
     {
-        // desired fault tolerance level
-        uint64_t f_d = m_s.FAULT_TOLERANCE;
-        // current fault tolerance level
-        uint64_t f_c = m_config_manager.latest().fault_tolerance();
-
-        for (size_t i = 0; f_c < f_d && i < suspicions.size(); ++i)
+        if (m_config_manager.all(&configuration::in_config_chain, suspicions[i].token))
         {
-            double threshold = suspicions[i].mean + suspicions[i].stdev;
-
-            if (!suspicions[i].in_chain &&
-                suspicions[i].suspicion <= threshold)
-            {
-                configuration new_config(m_config_manager.latest());
-                new_config.add_to_chain(suspicions[i].token);
-                new_config.bump_version();
-                assert(m_config_manager.contains_quorum_of_all(new_config));
-                assert(new_config.validate());
-                LOG(INFO) << "proposing new configuration to add "
-                          << suspicions[i].token
-                          << " to the chain";
-                propose_config(new_config);
-                f_c = m_config_manager.latest().fault_tolerance();
-            }
+            stable_live_tokens.push_back(suspicions[i].token);
+        }
+        else if (m_config_manager.any(&configuration::in_config_chain, suspicions[i].token))
+        {
+            unstable_live_tokens.push_back(suspicions[i].token);
+        }
+        else
+        {
+            removed_live_tokens.push_back(suspicions[i].token);
         }
     }
 
-    // promote people only once the config chain stabilizes
-    if (m_config_manager.stable().version() == m_config_manager.latest().version() &&
-        m_config_manager.stable().version() == m_stable_version &&
-        *m_config_manager.latest().head() == m_us &&
-        m_config_manager.latest().command_size() < m_config_manager.latest().config_size())
+    for (size_t i = cutoff_suspicions; i < suspicions.size(); ++i)
     {
-        configuration new_config(m_config_manager.latest());
-        LOG(INFO) << "growing command chain to include more of the config chain";
-        new_config.bump_version();
-        new_config.grow_command_chain();
+        if (m_config_manager.all(&configuration::in_config_chain, suspicions[i].token))
+        {
+            stable_dead_tokens.push_back(suspicions[i].token);
+        }
+        else if (m_config_manager.any(&configuration::in_config_chain, suspicions[i].token))
+        {
+            unstable_dead_tokens.push_back(suspicions[i].token);
+        }
+        else
+        {
+            removed_dead_tokens.push_back(suspicions[i].token);
+        }
+    }
+
+    assert(stable_live_tokens.size() + stable_dead_tokens.size() +
+           unstable_live_tokens.size() + unstable_dead_tokens.size() +
+           removed_live_tokens.size() + removed_dead_tokens.size()
+           == suspicions.size() + 1);
+
+    // Here we have a decision to make that balances safety from future failures
+    // with liveness now.  Dead nodes must be removed so that the system can
+    // make progress.  Every time a node is removed, the resulting configuration
+    // can tolerate fewer failures.  Our solution is to set a threshold that
+    // limits the number of nodes that may be removed.  If we cannot provide
+    // create a live chain within that threshold, we do nothing.
+    //
+    // Note that this calculation could be made faster by grouping or not
+    // computing some of the groups above.  rescrv explicitly chose to not do so
+    // for sake of clarity.  It's a small price to pay for comprehending this
+    // code.
+
+    if (stable_live_tokens.size() * 2 <= m_config_manager.smallest_config_chain())
+    {
+        LOG_EVERY_N(INFO, SECONDS / m_s.MAINTAIN_INTERVAL)
+            << "could not propose new configuration because only "
+            << stable_live_tokens.size() << " nodes are stable, which is not a quorum of "
+            << m_config_manager.smallest_config_chain();
+        return;
+    }
+
+    configuration new_config(m_config_manager.latest());
+
+    // remove the stable dead nodes
+    for (size_t i = 0; i < stable_dead_tokens.size(); ++i)
+    {
+        new_config.remove_from_chain(stable_dead_tokens[i]);
+    }
+
+    // remove the unstable dead nodes
+    for (size_t i = 0; i < unstable_dead_tokens.size(); ++i)
+    {
+        if (new_config.in_config_chain(unstable_dead_tokens[i]))
+        {
+            new_config.remove_from_chain(unstable_dead_tokens[i]);
+        }
+    }
+
+    // add nodes from the unstable/removed live nodes, preferring unstable,
+    // sorted by suspicion.  Note that because suspsicions was sorted by
+    // suspicion, and *_live_tokens were derived from it, the sort order is
+    // implicitly captured by a forward iteration.
+    uint64_t desired_size = 2 * m_s.FAULT_TOLERANCE + 1;
+
+    for (size_t i = 0; i < unstable_live_tokens.size(); ++i)
+    {
+        if (new_config.config_size() < desired_size &&
+            !new_config.in_config_chain(unstable_live_tokens[i]))
+        {
+            new_config.add_to_chain(unstable_live_tokens[i]);
+        }
+    }
+
+    for (size_t i = 0; i < removed_live_tokens.size(); ++i)
+    {
+        if (new_config.config_size() < desired_size &&
+            !new_config.in_config_chain(removed_live_tokens[i]))
+        {
+            new_config.add_to_chain(removed_live_tokens[i]);
+        }
+    }
+
+    if (*new_config.head() != m_us)
+    {
+        return;
+    }
+
+    if (new_config == m_config_manager.latest())
+    {
+        // promote people once the config chain stabilizes
+        if (m_config_manager.stable().version() == m_config_manager.latest().version() &&
+            m_config_manager.stable().version() == m_stable_version &&
+            // checked above ^ *m_config_manager.latest().head() == m_us &&
+            m_config_manager.latest().command_size() < m_config_manager.latest().config_size())
+        {
+            configuration grow_config(m_config_manager.latest());
+            LOG(INFO) << "growing command chain to include more of the config chain by promoting "
+                      << *m_config_manager.latest().next(m_config_manager.latest().command_tail()->token);
+            grow_config.bump_version();
+            grow_config.grow_command_chain();
+            propose_config(grow_config);
+        }
+
+        return;
+    }
+
+    new_config.bump_version();
+
+    if (!new_config.validate())
+    {
+        LOG_EVERY_N(INFO, SECONDS / m_s.MAINTAIN_INTERVAL)
+            << "cannot propose " << new_config << " because it is invalid";
+        return;
+    }
+
+    const configuration* no_quorum = NULL;
+
+    if (!m_config_manager.contains_quorum_of_all(new_config, &no_quorum))
+    {
+        LOG_EVERY_N(INFO, SECONDS / m_s.MAINTAIN_INTERVAL)
+            << "cannot propose " << new_config << " because it violates quorum invariants with "
+            << *no_quorum;
+        return;
+    }
+
+    if (*m_config_manager.stable().config_tail() != m_us ||
+        m_config_manager.stable().version() == m_stable_version)
+    {
+        LOG(INFO) << "proposing new configuration " << new_config;
         propose_config(new_config);
     }
 }
@@ -1766,8 +1885,10 @@ daemon :: periodic_describe_slots(uint64_t now)
               << " issued <=" << m_fs.next_slot_to_issue()
               << " | acked <=" << m_fs.next_slot_to_ack();
     LOG(INFO) << "our stable configuration is " << m_config_manager.stable();
+    LOG(INFO) << "the suffix of the chain stabilized through " << m_stable_version;
 
-    if (m_heal_next.state != heal_next::HEALTHY)
+    if (m_heal_next.state == heal_next::HEALING ||
+        m_heal_next.state == heal_next::HEALTHY_SENT)
     {
         LOG(INFO) << "we've transfered through " << m_heal_next.acknowledged
                   << " and have begun transfer up to " << m_heal_next.proposed;
@@ -1815,6 +1936,7 @@ daemon :: process_heal_req(const replicant::connection& conn,
         send(conn, resp);
         LOG(INFO) << "resetting healing process with our predecessor " << conn.token
                   << ": healing_id=" << token << " to_ack=" << to_ack;
+        maybe_send_stable();
     }
 }
 
@@ -1890,7 +2012,7 @@ daemon :: process_heal_done(const replicant::connection& conn,
             m_stable_version < m_config_manager.stable().version())
         {
             m_stable_version = m_config_manager.stable().version();
-            LOG(INFO) << "command tail reporting stability at " << m_stable_version;
+            LOG(INFO) << "command tail stabilizes at configuration " << m_stable_version;
         }
     }
     else if (conn.is_prev)
@@ -1900,26 +2022,12 @@ daemon :: process_heal_done(const replicant::connection& conn,
         LOG(INFO) << "the connection with the prev node is 100% healed";
     }
 
-    if (m_config_manager.stable().version() == m_stable_version)
-    {
-        size_t sz = BUSYBEE_HEADER_SIZE
-                  + pack_size(REPLNET_STABLE)
-                  + sizeof(uint64_t);
-        msg.reset(e::buffer::create(sz));
-        msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_STABLE
-                                          << m_stable_version;
-        const chain_node* prev = m_config_manager.stable().prev(m_us.token);
-
-        if (prev)
-        {
-            send(*prev, msg);
-        }
-    }
+    maybe_send_stable();
 }
 
 void
 daemon :: process_stable(const replicant::connection&,
-                         std::auto_ptr<e::buffer> msg,
+                         std::auto_ptr<e::buffer>,
                          e::unpacker up)
 {
     uint64_t stable;
@@ -1928,22 +2036,11 @@ daemon :: process_stable(const replicant::connection&,
 
     if (m_stable_version < stable)
     {
-        LOG(INFO) << "suffix of the chain (from us forward) reports stability at " << m_stable_version;
+        LOG(INFO) << "suffix of the chain (all nodes after us) stabilizes at configuration " << stable;
     }
 
     m_stable_version = std::max(m_stable_version, stable);
-
-    if (m_heal_next.state != heal_next::HEALTHY)
-    {
-        return;
-    }
-
-    const chain_node* prev = m_config_manager.stable().prev(m_us.token);
-
-    if (prev)
-    {
-        send(*prev, msg);
-    }
+    maybe_send_stable();
 }
 
 void
@@ -2011,6 +2108,7 @@ daemon :: transfer_more_state()
         {
             LOG(INFO) << "state transfer healing_id=" << m_heal_next.token << " complete; falling back to normal chain operation";
             m_heal_next.state = heal_next::HEALTHY_SENT;
+            maybe_send_stable();
         }
     }
 }
@@ -2030,8 +2128,10 @@ daemon :: periodic_heal_next(uint64_t now)
             m_stable_version < m_config_manager.stable().version())
         {
             m_stable_version = m_config_manager.stable().version();
-            LOG(INFO) << "reporting stability at " << m_stable_version;
+            LOG(INFO) << "command tail stabilizes at configuration " << m_stable_version;
         }
+
+        maybe_send_stable();
     }
 
     // keep running this function until we are healed
@@ -2082,6 +2182,28 @@ daemon :: reset_healing()
 {
     m_heal_next = heal_next();
     trip_periodic(0, &daemon::periodic_heal_next);
+}
+
+void
+daemon :: maybe_send_stable()
+{
+    if (m_heal_next.state < heal_next::HEALTHY_SENT)
+    {
+        return;
+    }
+
+    size_t sz = BUSYBEE_HEADER_SIZE
+              + pack_size(REPLNET_STABLE)
+              + sizeof(uint64_t);
+    std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
+    msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_STABLE
+                                      << m_stable_version;
+    const chain_node* prev = m_config_manager.stable().prev(m_us.token);
+
+    if (prev)
+    {
+        send(*prev, msg);
+    }
 }
 
 void
@@ -2348,6 +2470,8 @@ daemon :: handle_disruption_reset_healing(uint64_t token)
             reset_healing();
         }
     }
+
+    maybe_send_stable();
 }
 
 void

@@ -160,6 +160,7 @@ class daemon
         void transfer_more_state();
         void periodic_heal_next(uint64_t now);
         void reset_healing();
+        void maybe_send_stable();
 
     // Notify/wait-style conditions
     private:

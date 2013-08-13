@@ -25,6 +25,8 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
+#define __STDC_LIMIT_MACROS
+
 // STL
 #include <algorithm>
 
@@ -187,6 +189,21 @@ configuration_manager :: contains_quorum_of_all(const configuration& config,
 }
 
 bool
+configuration_manager :: all(bool (configuration::*func)(uint64_t) const, uint64_t token) const
+{
+    for (std::list<configuration>::const_iterator it = m_configs.begin();
+            it != m_configs.end(); ++it)
+    {
+        if (!((*it).*func)(token))
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+bool
 configuration_manager :: any(bool (configuration::*func)(uint64_t) const, uint64_t token) const
 {
     for (std::list<configuration>::const_iterator it = m_configs.begin();
@@ -214,6 +231,20 @@ configuration_manager :: contains(const configuration& config) const
     }
 
     return false;
+}
+
+uint64_t
+configuration_manager :: smallest_config_chain() const
+{
+    uint64_t smallest = UINT64_MAX;
+
+    for (std::list<configuration>::const_iterator it = m_configs.begin();
+            it != m_configs.end(); ++it)
+    {
+        smallest = std::min(it->config_size(), smallest);
+    }
+
+    return smallest;
 }
 
 void
