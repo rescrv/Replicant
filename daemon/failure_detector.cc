@@ -72,13 +72,18 @@ failure_detector :: seqno()
 }
 
 void
-failure_detector :: heartbeat(uint64_t seqno, uint64_t now)
+failure_detector :: heartbeat(uint64_t seq, uint64_t now)
 {
     if (m_window.empty() ||
-        (m_window.back().seqno < seqno &&
+        (m_window.back().seqno < seq &&
          m_window.back().time < now))
     {
-        m_window.push_back(ping(seqno, now));
+        m_window.push_back(ping(seq, now));
+    }
+    else if (m_window.back().seqno == seq &&
+             m_window.back().time < now)
+    {
+        m_window.back().time = now;
     }
 
     if (m_window.size() > m_window_sz)

@@ -52,7 +52,6 @@ class failure_detector
         class ping;
         std::deque<ping> m_window;
         uint64_t m_window_sz;
-        uint64_t m_seqno;
 };
 
 } // namespace replicant
