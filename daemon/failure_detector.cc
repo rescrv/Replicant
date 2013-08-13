@@ -74,7 +74,6 @@ failure_detector :: seqno()
 void
 failure_detector :: heartbeat(uint64_t seqno, uint64_t now)
 {
-
     if (m_window.empty() ||
         (m_window.back().seqno < seqno &&
          m_window.back().time < now))
@@ -115,9 +114,12 @@ phi(double x)
 double
 failure_detector :: suspicion(uint64_t now)
 {
-    if (m_window.empty())
+    if (m_window.empty() ||
+        m_window.size() < 10 ||
+        m_window.back().time - m_window.front().time <
+        1000ULL * 1000ULL * 1000ULL)
     {
-        return 1.0;
+        return HUGE_VAL;
     }
 
     // Calculate the mean and standard deviation
@@ -140,12 +142,6 @@ failure_detector :: suspicion(uint64_t now)
     }
 
     double stdev = sqrt(M2 / (n - 1));
-
-    // A hack to initialize the failure detector.
-    if (m_window.size() * 10 < m_window_sz && now - m_window.back().time < 1000000000ULL)
-    {
-        return 1.0;
-    }
 
     // Run that through phi
     double f = phi(((now - m_window.back().time) - mean) / stdev);
