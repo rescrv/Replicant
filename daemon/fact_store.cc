@@ -558,6 +558,13 @@ fact_store :: wipe()
     }
 }
 
+void
+fact_store :: warm_cache()
+{
+    next_slot_to_ack();
+    next_slot_to_issue();
+}
+
 bool
 fact_store :: is_proposed_configuration(uint64_t proposal_id, uint64_t proposal_time)
 {
@@ -912,8 +919,7 @@ fact_store :: clear_unacked_slots()
         --next_to_issue;
     }
 
-    m_cache_next_slot_issue = 0;
-    m_cache_next_slot_ack = 0;
+    m_cache_next_slot_issue = m_cache_next_slot_ack;
 }
 
 bool

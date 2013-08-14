@@ -444,6 +444,7 @@ daemon :: run(bool daemonize,
         }
     }
 
+    m_fs.warm_cache();
     LOG(INFO) << "resuming normal operation";
     post_reconfiguration_hooks();
 
