@@ -74,7 +74,6 @@ replicantexec_PROGRAMS += replicant-daemon
 lib_LTLIBRARIES += libreplicant-state-machine.la
 include_HEADERS += daemon/replicant_state_machine.h
 
-noinst_HEADERS += daemon/conditions_wrapper.h
 noinst_HEADERS += daemon/configuration_manager.h
 noinst_HEADERS += daemon/connection.h
 noinst_HEADERS += daemon/daemon.h

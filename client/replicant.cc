@@ -946,6 +946,10 @@ replicant_client :: handle_command_response(const chain_node& node,
             c->fail(REPLICANT_FUNC_NOT_FOUND);
             ERROR(FUNC_NOT_FOUND) << "state machine not doesn't contain the requested function";
             break;
+        case replicant::RESPONSE_CTOR_FAILED:
+            c->fail(REPLICANT_CTOR_FAILED);
+            ERROR(CTOR_FAILED) << "state machine's constructor failed";
+            break;
         case replicant::RESPONSE_MALFORMED:
             c->fail(REPLICANT_INTERNAL_ERROR);
             ERROR(INTERNAL_ERROR) << "server reports that request was malformed";
@@ -1035,6 +1039,7 @@ operator << (std::ostream& lhs, replicant_returncode rhs)
         STRINGIFY(REPLICANT_COND_NOT_FOUND);
         STRINGIFY(REPLICANT_COND_DESTROYED);
         STRINGIFY(REPLICANT_SERVER_ERROR);
+        STRINGIFY(REPLICANT_CTOR_FAILED);
         STRINGIFY(REPLICANT_BAD_LIBRARY);
         STRINGIFY(REPLICANT_TIMEOUT);
         STRINGIFY(REPLICANT_BACKOFF);

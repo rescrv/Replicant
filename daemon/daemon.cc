@@ -385,8 +385,8 @@ daemon :: run(bool daemonize,
             object == OBJECT_OBJ_DEL ||
             !IS_SPECIAL_OBJECT(object))
         {
-            m_object_manager.enqueue(slot, object, client, nonce, dat, &backing);
-            m_object_manager.throttle(object, 1000);
+            m_object_manager.enqueue(slot, object, client, nonce, dat);
+            m_object_manager.throttle(object, 16);
         }
     }
 
@@ -1372,7 +1372,7 @@ daemon :: periodic_maintain_cluster(uint64_t now)
 
     if (stable_live_tokens.size() * 2 <= m_config_manager.smallest_config_chain())
     {
-        LOG_EVERY_N(INFO, SECONDS / m_s.MAINTAIN_INTERVAL)
+        LOG_EVERY_N(INFO, static_cast<int64_t>(SECONDS / m_s.MAINTAIN_INTERVAL))
             << "could not propose new configuration because only "
             << stable_live_tokens.size() << " nodes are stable, which is not a quorum of "
             << m_config_manager.smallest_config_chain();
@@ -1448,7 +1448,7 @@ daemon :: periodic_maintain_cluster(uint64_t now)
 
     if (!new_config.validate())
     {
-        LOG_EVERY_N(INFO, SECONDS / m_s.MAINTAIN_INTERVAL)
+        LOG_EVERY_N(INFO, static_cast<int64_t>(SECONDS / m_s.MAINTAIN_INTERVAL))
             << "cannot propose " << new_config << " because it is invalid";
         return;
     }
@@ -1457,7 +1457,7 @@ daemon :: periodic_maintain_cluster(uint64_t now)
 
     if (!m_config_manager.contains_quorum_of_all(new_config, &no_quorum))
     {
-        LOG_EVERY_N(INFO, SECONDS / m_s.MAINTAIN_INTERVAL)
+        LOG_EVERY_N(INFO, static_cast<int64_t>(SECONDS / m_s.MAINTAIN_INTERVAL))
             << "cannot propose " << new_config << " because it violates quorum invariants with "
             << *no_quorum;
         return;
@@ -1858,7 +1858,7 @@ daemon :: acknowledge_command(uint64_t slot)
     }
     else
     {
-        m_object_manager.enqueue(slot, object, client, nonce, data, &backing);
+        m_object_manager.enqueue(slot, object, client, nonce, data);
     }
 }
 

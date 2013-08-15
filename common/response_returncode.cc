@@ -50,6 +50,7 @@ replicant :: operator << (std::ostream& lhs, response_returncode rhs)
         STRINGIFY(RESPONSE_NO_DTOR);
         STRINGIFY(RESPONSE_NO_SNAP);
         STRINGIFY(RESPONSE_NO_FUNC);
+        STRINGIFY(RESPONSE_CTOR_FAILED);
         STRINGIFY(RESPONSE_MALFORMED);
         default:
             lhs << "unknown returncode";

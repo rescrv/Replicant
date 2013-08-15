@@ -48,11 +48,19 @@
         e::unpack64be(cond_buf, &NUM); \
     } while (0)
 
-replicant_state_machine_context :: replicant_state_machine_context()
-    : object(0)
-    , client(0)
-    , output()
-    , conditions()
+replicant_state_machine_context :: replicant_state_machine_context(uint64_t s,
+                                                                   uint64_t o,
+                                                                   uint64_t c,
+                                                                   replicant::object_manager* om,
+                                                                   replicant::object_manager::object* ob)
+    : slot(s)
+    , object(o)
+    , client(c)
+    , log_output(NULL)
+    , log_output_sz(0)
+    , output(open_memstream(&log_output, &log_output_sz))
+    , obj_man(om)
+    , obj(ob)
     , response(NULL)
     , response_sz(0)
 {
@@ -60,6 +68,12 @@ replicant_state_machine_context :: replicant_state_machine_context()
 
 replicant_state_machine_context :: ~replicant_state_machine_context() throw ()
 {
+    fclose(output);
+
+    if (log_output)
+    {
+        free(log_output);
+    }
 }
 
 extern "C"
@@ -91,7 +105,7 @@ replicant_state_machine_condition_create(struct replicant_state_machine_context*
 {
     uint64_t _cond;
     COND_STR2NUM(cond, _cond);
-    return ctx->conditions.create(_cond);
+    return ctx->obj_man->condition_create(ctx->obj, _cond);
 }
 
 int
@@ -100,7 +114,7 @@ replicant_state_machine_condition_destroy(struct replicant_state_machine_context
 {
     uint64_t _cond;
     COND_STR2NUM(cond, _cond);
-    return ctx->conditions.destroy(_cond);
+    return ctx->obj_man->condition_destroy(ctx->obj, _cond);
 }
 
 int
@@ -110,7 +124,7 @@ replicant_state_machine_condition_broadcast(struct replicant_state_machine_conte
 {
     uint64_t _cond;
     COND_STR2NUM(cond, _cond);
-    return ctx->conditions.broadcast(_cond, state);
+    return ctx->obj_man->condition_broadcast(ctx->obj, _cond, state);
 }
 
 } // extern "C"

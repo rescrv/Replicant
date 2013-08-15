@@ -56,7 +56,6 @@
 #include "common/network_msgtype.h"
 #include "common/special_objects.h"
 #include "daemon/daemon.h"
-#include "daemon/conditions_wrapper.h"
 #include "daemon/object_manager.h"
 #include "daemon/replicant_state_machine.h"
 #include "daemon/replicant_state_machine_context.h"
@@ -66,23 +65,48 @@
 
 using replicant::object_manager;
 
+namespace
+{
+
+std::string
+obj_id_to_str(uint64_t obj_id)
+{
+    char buf[sizeof(uint64_t)];
+    e::pack64be(obj_id, buf);
+    size_t len = sizeof(uint64_t);
+
+    while (len > 0 && buf[len - 1] == '\0')
+    {
+        --len;
+    }
+
+    return std::string(buf, buf + len);
+}
+
+} // namespace
+
 ///////////////////////////////// Command Class ////////////////////////////////
 
 class object_manager::command
 {
     public:
-        command();
-        ~command() throw ();
+        enum type_t { NORMAL, WAIT, DELETE, SNAPSHOT, SHUTDOWN };
 
     public:
-        enum { NORMAL, WAIT, DELETE } type;
+        command();
+        command(const command&);
+
+    public:
+        command& operator = (const command&);
+
+    public:
+        type_t type;
         uint64_t slot;
         uint64_t client;
         uint64_t nonce;
         uint64_t cond;
         uint64_t state;
-        e::slice data;
-        std::string backing;
+        std::string data;
 };
 
 object_manager :: command :: command()
@@ -93,11 +117,17 @@ object_manager :: command :: command()
     , cond(0)
     , state(0)
     , data()
-    , backing()
 {
 }
 
-object_manager :: command :: ~command() throw ()
+object_manager :: command :: command(const command& other)
+    : type(other.type)
+    , slot(other.slot)
+    , client(other.client)
+    , nonce(other.nonce)
+    , cond(other.cond)
+    , state(other.state)
+    , data(other.data)
 {
 }
 
@@ -112,19 +142,33 @@ class object_manager::object
         object();
         ~object() throw ();
 
+    // enqueue commands on the thread
     public:
-        std::auto_ptr<po6::threads::thread> thread;
-        po6::threads::mutex mtx;
-        po6::threads::cond commands_avail;
-        po6::threads::cond command_consumed;
-        std::list<command> commands;
-        uint64_t slot;
+        void start_thread(object_manager* om, uint64_t obj_id, e::intrusive_ptr<object> obj);
+        // swaps backing to keep internals, so data remains valid
+        void enqueue(command::type_t,
+                     uint64_t slot,
+                     uint64_t client,
+                     uint64_t nonce,
+                     const e::slice& data);
+        void enqueue(command::type_t,
+                     uint64_t slot,
+                     uint64_t client,
+                     uint64_t nonce,
+                     uint64_t cond,
+                     uint64_t state);
+        void dequeue(std::list<command>* commands, bool* shutdown);
+        void throttle(size_t sz);
+
+    // the state machine
+    public:
         void* lib;
         replicant_state_machine* sym;
         void* rsm;
-        char* output;
-        size_t output_sz;
         std::map<uint64_t, condition> conditions;
+
+    public:
+        po6::threads::mutex* mtx() { return &m_mtx; }
 
     private:
         object(const object&);
@@ -135,22 +179,24 @@ class object_manager::object
         void inc() { __sync_add_and_fetch(&m_ref, 1); }
         void dec() { if (__sync_sub_and_fetch(&m_ref, 1) == 0) delete this; }
         size_t m_ref;
+        std::auto_ptr<po6::threads::thread> m_thread;
+        po6::threads::mutex m_mtx;
+        po6::threads::cond m_commands_avail;
+        po6::threads::cond m_command_consumed;
+        std::list<command> m_commands;
 };
 
 object_manager :: object :: object()
-    : thread()
-    , mtx()
-    , commands_avail(&mtx)
-    , command_consumed(&mtx)
-    , commands()
-    , slot(0)
-    , lib(NULL)
+    : lib(NULL)
     , sym(NULL)
     , rsm(NULL)
-    , output(NULL)
-    , output_sz(0)
     , conditions()
     , m_ref(0)
+    , m_thread()
+    , m_mtx()
+    , m_commands_avail(&m_mtx)
+    , m_command_consumed(&m_mtx)
+    , m_commands()
 {
 }
 
@@ -159,6 +205,87 @@ object_manager :: object :: ~object() throw ()
     if (lib)
     {
         dlclose(lib);
+    }
+}
+
+void
+object_manager :: object :: start_thread(object_manager* om, uint64_t obj_id, e::intrusive_ptr<object> obj)
+{
+    m_thread.reset(new po6::threads::thread(std::tr1::bind(&object_manager::worker_thread, om, obj_id, obj)));
+    m_thread->start();
+}
+
+void
+object_manager :: object :: enqueue(command::type_t type,
+                                    uint64_t slot,
+                                    uint64_t client,
+                                    uint64_t nonce,
+                                    const e::slice& data)
+{
+    // Allocate the command object
+    std::list<command> tmp;
+    tmp.push_back(command());
+    tmp.back().type = type;
+    tmp.back().slot = slot;
+    tmp.back().client = client;
+    tmp.back().nonce = nonce;
+    tmp.back().data = std::string(reinterpret_cast<const char*>(data.data()), data.size());
+    // Push it onto the object's queue
+    po6::threads::mutex::hold hold(&m_mtx);
+    m_commands.splice(m_commands.end(), tmp, tmp.begin());
+    m_commands_avail.signal();
+}
+
+void
+object_manager :: object :: enqueue(command::type_t type,
+                                    uint64_t slot,
+                                    uint64_t client,
+                                    uint64_t nonce,
+                                    uint64_t cond,
+                                    uint64_t state)
+{
+    // Allocate the command object
+    std::list<command> tmp;
+    tmp.push_back(command());
+    tmp.back().type = type;
+    tmp.back().slot = slot;
+    tmp.back().client = client;
+    tmp.back().nonce = nonce;
+    tmp.back().cond = cond;
+    tmp.back().state = state;
+    // Push it onto the object's queue
+    po6::threads::mutex::hold hold(&m_mtx);
+    m_commands.splice(m_commands.end(), tmp, tmp.begin());
+    m_commands_avail.signal();
+}
+
+void
+object_manager :: object :: dequeue(std::list<command>* commands, bool*)
+{
+    assert(commands->empty());
+    po6::threads::mutex::hold hold(&m_mtx);
+
+    while (m_commands.empty())
+    {
+        m_commands_avail.wait();
+    }
+
+    if (!m_commands.empty())
+    {
+        commands->splice(commands->begin(), m_commands);
+    }
+
+    m_command_consumed.signal();
+}
+
+void
+object_manager :: object :: throttle(size_t sz)
+{
+    po6::threads::mutex::hold hold(&m_mtx);
+
+    while (m_commands.size() > sz)
+    {
+        m_command_consumed.wait();
     }
 }
 
@@ -171,7 +298,6 @@ class object_manager::object::condition
 
     public:
         condition();
-        ~condition() throw ();
 
     public:
         uint64_t count;
@@ -184,10 +310,6 @@ object_manager :: object :: condition :: condition()
 {
 }
 
-object_manager :: object :: condition :: ~condition() throw ()
-{
-}
-
 ///////////////////////////////// Waiter Class /////////////////////////////////
 
 class object_manager::object::condition::waiter
@@ -195,7 +317,6 @@ class object_manager::object::condition::waiter
     public:
         waiter();
         waiter(uint64_t wait_for, uint64_t client, uint64_t nonce);
-        ~waiter() throw ();
 
     public:
         bool operator < (const waiter& rhs) const;
@@ -218,10 +339,6 @@ object_manager :: object :: condition :: waiter :: waiter(uint64_t w, uint64_t c
     : wait_for(w)
     , client(c)
     , nonce(n)
-{
-}
-
-object_manager :: object :: condition :: waiter :: ~waiter() throw ()
 {
 }
 
@@ -262,9 +379,6 @@ object_manager :: object_manager()
     , m_command_cb()
     , m_notify_cb()
     , m_objects()
-    , m_cleanup_protect()
-    , m_cleanup_queued()
-    , m_cleanup_ready()
 {
 }
 
@@ -284,10 +398,11 @@ object_manager :: set_callback(daemon* d, void (daemon::*command_cb)(uint64_t sl
 void
 object_manager :: enqueue(uint64_t slot, uint64_t obj_id,
                           uint64_t client, uint64_t nonce,
-                          const e::slice& data, std::string* backing)
+                          const e::slice& data)
 {
     if (obj_id == OBJECT_OBJ_NEW)
     {
+        // determine the object id
         e::slice lib;
 
         if (data.size() < sizeof(uint64_t))
@@ -298,15 +413,8 @@ object_manager :: enqueue(uint64_t slot, uint64_t obj_id,
         e::unpack64be(data.data(), &obj_id);
         lib = data;
         lib.advance(sizeof(uint64_t));
-        object_map_t::iterator it = m_objects.find(obj_id);
 
-        if (it != m_objects.end())
-        {
-            return command_send_error_response(slot, client, nonce, RESPONSE_OBJ_EXIST);
-        }
-
-        e::intrusive_ptr<object> obj = new object();
-        po6::threads::mutex::hold hold(&obj->mtx);
+        // write out the library
         char buf[43 /*strlen("./libreplicant-slot<slot \lt 2**64>.so\x00")*/];
         sprintf(buf, "./libreplicant-slot%lu.so", slot);
         po6::io::fd tmplib(open(buf, O_WRONLY|O_CREAT|O_EXCL, S_IRWXU));
@@ -323,20 +431,17 @@ object_manager :: enqueue(uint64_t slot, uint64_t obj_id,
             abort();
         }
 
-        obj->slot = slot;
-        obj->lib = dlopen(buf, RTLD_NOW|RTLD_LOCAL);
+        // create a new object, if none exists
+        e::intrusive_ptr<object> obj = get_object(obj_id);
 
-        if (unlink(buf) < 0)
+        if (obj)
         {
-            PLOG(ERROR) << "could not unlink temporary ibrary for slot " << slot;
-            abort();
+            return command_send_error_response(slot, client, nonce, RESPONSE_OBJ_EXIST);
         }
 
-        // At this point, any unexpected failures are user error.  We should not
-        // fail the server
-        obj->thread.reset(new po6::threads::thread(std::tr1::bind(&object_manager::worker_thread, this, obj_id, obj)));
-        obj->thread->start();
-        m_objects.insert(std::make_pair(obj_id, obj));
+        obj = new object();
+        po6::threads::mutex::hold hold(obj->mtx());
+        obj->lib = dlopen(buf, RTLD_NOW|RTLD_LOCAL);
 
         if (!obj->lib)
         {
@@ -344,6 +449,12 @@ object_manager :: enqueue(uint64_t slot, uint64_t obj_id,
             LOG(ERROR) << "could not load library for slot " << slot
                        << ": " << err << "; delete the object and try again";
             return command_send_error_msg_response(slot, client, nonce, RESPONSE_DLOPEN_FAIL, err);
+        }
+
+        if (unlink(buf) < 0)
+        {
+            PLOG(ERROR) << "could not unlink temporary library " << buf;
+            abort();
         }
 
         obj->sym = static_cast<replicant_state_machine*>(dlsym(obj->lib, "rsm"));
@@ -371,7 +482,7 @@ object_manager :: enqueue(uint64_t slot, uint64_t obj_id,
 
         if (!obj->sym->dtor)
         {
-            LOG(WARNING) << "library for slot " << slot << " does not specify a deconstructor; delete the object and try again";
+            LOG(WARNING) << "library for slot " << slot << " does not specify a destructor; delete the object and try again";
             return command_send_error_response(slot, client, nonce, RESPONSE_NO_DTOR);
         }
 
@@ -381,18 +492,18 @@ object_manager :: enqueue(uint64_t slot, uint64_t obj_id,
             return command_send_error_response(slot, client, nonce, RESPONSE_NO_SNAP);
         }
 
-        replicant_state_machine_context ctx;
-        ctx.object = obj_id;
-        ctx.client = client;
-        ctx.output = open_memstream(&obj->output, &obj->output_sz);
-        conditions_wrapper cw(this, obj.get());
-        ctx.conditions = cw;
-        ctx.response = NULL;
-        ctx.response_sz = 0;
-        obj->rsm = obj->sym->ctor(&ctx); // XXX if NULL, consider object failed
-        fclose(ctx.output);
-        ctx.output = NULL;
-        log_messages(obj_id, obj, slot, "the constructor");
+        replicant_state_machine_context ctx(slot, obj_id, client, this, obj.get());
+        obj->rsm = obj->sym->ctor(&ctx);
+
+        if (!obj->rsm)
+        {
+            LOG(WARNING) << "constructor for " << obj_id << " @ "  << slot << " failed; delete the object and try again";
+            return command_send_error_response(slot, client, nonce, RESPONSE_CTOR_FAILED);
+        }
+
+        log_messages(obj_id, ctx, "ctor");
+        obj->start_thread(this, obj_id, obj);
+        m_objects.insert(std::make_pair(obj_id, obj));
         return command_send_response(slot, client, nonce, RESPONSE_SUCCESS, e::slice());
     }
     else if (obj_id == OBJECT_OBJ_DEL)
@@ -403,52 +514,25 @@ object_manager :: enqueue(uint64_t slot, uint64_t obj_id,
         }
 
         e::unpack64be(data.data(), &obj_id);
-        object_map_t::iterator it = m_objects.find(obj_id);
+        e::intrusive_ptr<object> obj = del_object(obj_id);
 
-        if (it == m_objects.end())
+        if (!obj)
         {
             return command_send_error_response(slot, client, nonce, RESPONSE_OBJ_NOT_EXIST);
         }
 
-        e::intrusive_ptr<object> obj = it->second;
-        m_objects.erase(it);
-        // Allocate the command object
-        std::list<command> tmp;
-        tmp.push_back(command());
-        tmp.back().type = command::DELETE;
-        tmp.back().slot = slot;
-        tmp.back().client = client;
-        tmp.back().nonce = nonce;
-        tmp.back().data = data;
-        tmp.back().backing.swap(*backing);
-        po6::threads::mutex::hold hold(&obj->mtx);
-        obj->commands.splice(obj->commands.end(), tmp, tmp.begin());
-        obj->commands_avail.signal();
-        return command_send_response(slot, client, nonce, RESPONSE_SUCCESS, e::slice());
+        obj->enqueue(command::DELETE, slot, client, nonce, data);
     }
     else if (!IS_SPECIAL_OBJECT(obj_id))
     {
-        object_map_t::iterator it = m_objects.find(obj_id);
+        e::intrusive_ptr<object> obj = get_object(obj_id);
 
-        if (it == m_objects.end())
+        if (!obj)
         {
             return command_send_error_response(slot, client, nonce, RESPONSE_OBJ_NOT_EXIST);
         }
 
-        e::intrusive_ptr<object> obj = it->second;
-        // Allocate the command object
-        std::list<command> tmp;
-        tmp.push_back(command());
-        tmp.back().type = command::NORMAL;
-        tmp.back().slot = slot;
-        tmp.back().client = client;
-        tmp.back().nonce = nonce;
-        tmp.back().data = data;
-        tmp.back().backing.swap(*backing);
-        // Push it onto the object's queue
-        po6::threads::mutex::hold hold(&obj->mtx);
-        obj->commands.splice(obj->commands.end(), tmp, tmp.begin());
-        obj->commands_avail.signal();
+        obj->enqueue(command::NORMAL, slot, client, nonce, data);
     }
     else
     {
@@ -468,12 +552,7 @@ object_manager :: throttle(uint64_t obj_id, size_t sz)
     }
 
     e::intrusive_ptr<object> obj = it->second;
-    po6::threads::mutex::hold hold(&obj->mtx);
-
-    while (obj->commands.size() > sz)
-    {
-        obj->command_consumed.wait();
-    }
+    obj->throttle(sz);
 }
 
 void
@@ -489,18 +568,7 @@ object_manager :: wait(uint64_t obj_id, uint64_t client, uint64_t nonce, uint64_
         }
 
         e::intrusive_ptr<object> obj = it->second;
-        // Allocate the command object
-        std::list<command> tmp;
-        tmp.push_back(command());
-        tmp.back().type = command::WAIT;
-        tmp.back().client = client;
-        tmp.back().nonce = nonce;
-        tmp.back().cond = cond;
-        tmp.back().state = state;
-        // Push it onto the object's queue
-        po6::threads::mutex::hold hold(&obj->mtx);
-        obj->commands.splice(obj->commands.end(), tmp, tmp.begin());
-        obj->commands_avail.signal();
+        obj->enqueue(command::WAIT, 0/*XXX*/, client, nonce, cond, state);
     }
     else
     {
@@ -533,11 +601,13 @@ object_manager :: condition_destroy(object* obj, uint64_t cond)
         return -1;
     }
 
-    while (!it->second.waiters.empty())
+    std::set<object::condition::waiter>& waiters(it->second.waiters);
+
+    while (!waiters.empty())
     {
-        const object::condition::waiter& w(*it->second.waiters.begin());
+        const object::condition::waiter& w(*waiters.begin());
         notify_send_response(w.client, w.nonce, RESPONSE_COND_DESTROYED, e::slice("", 0));
-        it->second.waiters.erase(it->second.waiters.begin());
+        waiters.erase(waiters.begin());
     }
 
     obj->conditions.erase(it);
@@ -561,15 +631,45 @@ object_manager :: condition_broadcast(object* obj, uint64_t cond, uint64_t* stat
         *state = it->second.count;
     }
 
-    while (!it->second.waiters.empty() &&
-           it->second.waiters.begin()->wait_for < it->second.count)
+    std::set<object::condition::waiter>& waiters(it->second.waiters);
+
+    while (!waiters.empty() &&
+           waiters.begin()->wait_for < it->second.count)
     {
-        const object::condition::waiter& w(*it->second.waiters.begin());
+        const object::condition::waiter& w(*waiters.begin());
         notify_send_response(w.client, w.nonce, RESPONSE_SUCCESS, e::slice("", 0));
-        it->second.waiters.erase(it->second.waiters.begin());
+        waiters.erase(waiters.begin());
     }
 
     return 0;
+}
+
+e::intrusive_ptr<object_manager::object>
+object_manager :: get_object(uint64_t obj_id)
+{
+    object_map_t::iterator it = m_objects.find(obj_id);
+
+    if (it == m_objects.end())
+    {
+        return NULL;
+    }
+
+    return it->second;
+}
+
+e::intrusive_ptr<object_manager::object>
+object_manager :: del_object(uint64_t obj_id)
+{
+    object_map_t::iterator it = m_objects.find(obj_id);
+
+    if (it == m_objects.end())
+    {
+        return NULL;
+    }
+
+    e::intrusive_ptr<object> obj = it->second;
+    m_objects.erase(it);
+    return obj;
 }
 
 void
@@ -595,13 +695,6 @@ void
 object_manager :: notify_send_error_response(uint64_t client, uint64_t nonce, response_returncode rc)
 {
     ((*m_daemon).*m_notify_cb)(client, nonce, rc, e::slice("", 0));
-}
-
-void
-object_manager :: notify_send_error_msg_response(uint64_t client, uint64_t nonce, response_returncode rc, const char* resp)
-{
-    size_t resp_sz = strlen(resp) + 1;
-    ((*m_daemon).*m_notify_cb)(client, nonce, rc, e::slice(resp, resp_sz));
 }
 
 void
@@ -636,24 +729,9 @@ object_manager :: worker_thread(uint64_t obj_id, e::intrusive_ptr<object> obj)
     while (!shutdown)
     {
         std::list<command> commands;
+        obj->dequeue(&commands, &shutdown);
 
-        {
-            po6::threads::mutex::hold hold(&obj->mtx);
-
-            while (obj->commands.empty())
-            {
-                obj->commands_avail.wait();
-            }
-
-            if (!obj->commands.empty())
-            {
-                commands.splice(commands.begin(), obj->commands);
-            }
-
-            obj->command_consumed.signal();
-        }
-
-        while (!commands.empty())
+        while (!commands.empty() && !shutdown)
         {
             dispatch_command(obj_id, obj, commands.front(), &shutdown);
             commands.pop_front();
@@ -664,139 +742,161 @@ object_manager :: worker_thread(uint64_t obj_id, e::intrusive_ptr<object> obj)
 }
 
 void
-object_manager :: log_messages(uint64_t obj_id, e::intrusive_ptr<object> obj, uint64_t slot, const char* func)
+object_manager :: log_messages(uint64_t obj_id, const replicant_state_machine_context& ctx, const char* func)
 {
-    char* ptr = obj->output;
-    char* end = obj->output + obj->output_sz;
+    std::string obj_str = obj_id_to_str(obj_id);
+    const char* ptr = ctx.log_output;
+    const char* end = ctx.log_output + ctx.log_output_sz;
 
     while (ptr < end)
     {
-        void* ptr_nl = memchr(ptr, '\n', end - ptr);
-        void* ptr_0  = memchr(ptr, 0, end - ptr);
-        char* eol = end;
+        const void* ptr_nl = memchr(ptr, '\n', end - ptr);
+        const void* ptr_0  = memchr(ptr, '\0', end - ptr);
+        const char* eol = end;
 
         if (ptr_nl && ptr_0 && ptr_0 <= ptr_nl)
         {
-            eol = static_cast<char*>(ptr_0);
+            eol = static_cast<const char*>(ptr_0);
         }
         else if (ptr_nl)
         {
-            eol = static_cast<char*>(ptr_nl);
+            eol = static_cast<const char*>(ptr_nl);
         }
         else if (ptr_0)
         {
-            eol = static_cast<char*>(ptr_0);
+            eol = static_cast<const char*>(ptr_0);
         }
 
-        LOG(INFO) << "object=" << obj_id << " slot=" << slot << " func=\"" << func << "\": " << std::string(ptr, eol);
+        LOG(INFO) << obj_str << ":" << func << " @ " << ctx.slot << ": " << std::string(ptr, eol);
         ptr = eol + 1;
     }
-
-    free(obj->output);
-    obj->output = NULL;
-    obj->output_sz = 0;
 }
 
 void
-object_manager :: dispatch_command(uint64_t obj_id, e::intrusive_ptr<object> obj, const command& cmd, bool* shutdown)
+object_manager :: dispatch_command(uint64_t obj_id,
+                                   e::intrusive_ptr<object> obj,
+                                   const command& cmd,
+                                   bool* shutdown)
 {
-    if (cmd.type == command::NORMAL)
+    switch (cmd.type)
     {
-        const char* func = reinterpret_cast<const char*>(cmd.data.data());
-        size_t func_sz = strnlen(func, cmd.data.size());
+        case command::NORMAL:
+            return dispatch_command_normal(obj_id, obj, cmd, shutdown);
+        case command::WAIT:
+            return dispatch_command_wait(obj_id, obj, cmd, shutdown);
+        case command::DELETE:
+            return dispatch_command_delete(obj_id, obj, cmd, shutdown);
+        //case command::SNAPSHOT:
+        //    return dispatch_command_snapshot(obj_id, obj, cmd, shutdown);
+        case command::SHUTDOWN:
+            return dispatch_command_shutdown(obj_id, obj, cmd, shutdown);
+        default:
+            LOG(ERROR) << "unknown command type " << static_cast<unsigned>(cmd.type);
+    }
+}
 
-        if (func_sz >= cmd.data.size())
+void
+object_manager :: dispatch_command_normal(uint64_t obj_id,
+                                          e::intrusive_ptr<object> obj,
+                                          const command& cmd,
+                                          bool*)
+{
+    const char* func = reinterpret_cast<const char*>(cmd.data.data());
+    size_t func_sz = strnlen(func, cmd.data.size());
+
+    if (func_sz >= cmd.data.size())
+    {
+        command_send_error_response(cmd.slot, cmd.client, cmd.nonce, RESPONSE_MALFORMED);
+        return;
+    }
+
+    replicant_state_machine_step* syms = obj->sym->steps;
+    replicant_state_machine_step* sym = NULL;
+
+    while (syms->name)
+    {
+        if (strcmp(func, syms->name) == 0)
         {
-            command_send_error_response(cmd.slot, cmd.client, cmd.nonce, RESPONSE_MALFORMED);
-            return;
+            sym = syms;
+            break;
         }
 
-        replicant_state_machine_step* rsms = obj->sym ? obj->sym->steps : NULL;
-        replicant_state_machine_step* trans = NULL;
+        ++syms;
+    }
 
-        while (rsms && rsms->name)
+    if (sym)
+    {
+        replicant_state_machine_context ctx(cmd.slot, obj_id, cmd.client, this, obj.get());
+        const char* data = func + func_sz + 1;
+        size_t data_sz = cmd.data.size() - func_sz - 1;
+        sym->func(&ctx, obj->rsm, data, data_sz);
+        log_messages(obj_id, ctx, func);
+
+        if (!ctx.response)
         {
-            if (strcmp(func, rsms->name) == 0)
-            {
-                trans = rsms;
-                break;
-            }
-
-            ++rsms;
+            ctx.response = "";
+            ctx.response_sz = 0;
         }
 
-        if (trans)
+        command_send_response(cmd.slot, cmd.client, cmd.nonce, RESPONSE_SUCCESS, e::slice(ctx.response, ctx.response_sz));
+    }
+    else
+    {
+        command_send_error_response(cmd.slot, cmd.client, cmd.nonce, RESPONSE_NO_FUNC);
+    }
+}
+
+void
+object_manager :: dispatch_command_wait(uint64_t,
+                                        e::intrusive_ptr<object> obj,
+                                        const command& cmd,
+                                        bool*)
+{
+    std::map<uint64_t, object::condition>::iterator it = obj->conditions.find(cmd.cond);
+
+    if (it == obj->conditions.end())
+    {
+        notify_send_error_response(cmd.client, cmd.nonce, RESPONSE_COND_NOT_EXIST);
+    }
+    else
+    {
+        if (cmd.state < it->second.count)
         {
-            replicant_state_machine_context ctx;
-            ctx.object = obj_id;
-            ctx.client = cmd.client;
-            ctx.output = open_memstream(&obj->output, &obj->output_sz);
-            conditions_wrapper cw(this, obj.get());
-            ctx.conditions = cw;
-            const char* data = func + func_sz + 1;
-            size_t data_sz = cmd.data.size() - func_sz - 1;
-            trans->func(&ctx, obj->rsm, data, data_sz);
-            fclose(ctx.output);
-            ctx.output = NULL;
-            log_messages(obj_id, obj, cmd.slot, func);
-
-            if (!ctx.response)
-            {
-                ctx.response = "";
-                ctx.response_sz = 0;
-            }
-
-            command_send_response(cmd.slot, cmd.client, cmd.nonce, RESPONSE_SUCCESS, e::slice(ctx.response, ctx.response_sz));
+            notify_send_response(cmd.client, cmd.nonce, RESPONSE_SUCCESS, e::slice("", 0));
         }
         else
         {
-            command_send_error_response(cmd.slot, cmd.client, cmd.nonce, RESPONSE_NO_FUNC);
+            it->second.waiters.insert(object::condition::waiter(cmd.state, cmd.client, cmd.nonce));
         }
     }
-    else if (cmd.type == command::WAIT)
+}
+
+void
+object_manager :: dispatch_command_delete(uint64_t obj_id,
+                                          e::intrusive_ptr<object> obj,
+                                          const command& cmd,
+                                          bool* shutdown)
+{
+    *shutdown = true;
+    replicant_state_machine_context ctx(cmd.slot, obj_id, cmd.client, this, obj.get());
+    obj->sym->dtor(&ctx, obj->rsm);
+    log_messages(obj_id, ctx, "dtor");
+
+    while (!obj->conditions.empty())
     {
-        std::map<uint64_t, object::condition>::iterator it = obj->conditions.find(cmd.cond);
-
-        if (it == obj->conditions.end())
-        {
-            notify_send_error_response(cmd.client, cmd.nonce, RESPONSE_COND_NOT_EXIST);
-        }
-        else
-        {
-            if (cmd.state < it->second.count)
-            {
-                notify_send_response(cmd.client, cmd.nonce, RESPONSE_SUCCESS, e::slice("", 0));
-            }
-            else
-            {
-                it->second.waiters.insert(object::condition::waiter(cmd.state, cmd.client, cmd.nonce));
-            }
-        }
+        condition_destroy(obj.get(), obj->conditions.begin()->first);
     }
-    else if (cmd.type == command::DELETE)
-    {
-        *shutdown = true;
-        replicant_state_machine_context ctx;
-        ctx.object = obj_id;
-        ctx.client = cmd.client;
-        ctx.output = open_memstream(&obj->output, &obj->output_sz);
-        conditions_wrapper cw(this, obj.get());
-        ctx.conditions = cw;
-        ctx.response = NULL;
-        ctx.response_sz = 0;
 
-        if (obj->sym && obj->sym->dtor)
-        {
-            obj->sym->dtor(&ctx, obj->rsm);
-        }
+    command_send_response(cmd.slot, cmd.client, cmd.nonce, RESPONSE_SUCCESS, e::slice("", 0));
+}
 
-        fclose(ctx.output);
-        ctx.output = NULL;
-        log_messages(obj_id, obj, cmd.slot, "the destructor");
-
-        while (!obj->conditions.empty())
-        {
-            condition_destroy(obj.get(), obj->conditions.begin()->first);
-        }
-    }
+void
+object_manager :: dispatch_command_shutdown(uint64_t,
+                                            e::intrusive_ptr<object>,
+                                            const command&,
+                                            bool* shutdown)
+{
+    *shutdown = true;
+    // intentionally leak the object for faster shutdown
+    // we only enter this function if replicant is shutting down anyway
 }

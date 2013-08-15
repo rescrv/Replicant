@@ -64,6 +64,7 @@ enum replicant_returncode
     REPLICANT_OBJ_EXIST         = 4932,
     REPLICANT_OBJ_NOT_FOUND     = 4933,
     REPLICANT_SERVER_ERROR      = 4934,
+    REPLICANT_CTOR_FAILED       = 4935,
     /* predictable uninitialized value */
     REPLICANT_GARBAGE   = 5119
 };

@@ -53,6 +53,7 @@ enum response_returncode
     RESPONSE_NO_DTOR,
     RESPONSE_NO_SNAP,
     RESPONSE_NO_FUNC,
+    RESPONSE_CTOR_FAILED,
     RESPONSE_MALFORMED
 };
 
