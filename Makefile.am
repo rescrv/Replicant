@@ -44,11 +44,14 @@ lib_LTLIBRARIES =
 
 bin_PROGRAMS =
 noinst_PROGRAMS =
+check_PROGRAMS =
 
 replicantexec_PROGRAMS =
 replicantexec_LTLIBRARIES =
 
 pkgconfig_DATA =
+
+TESTS =
 
 ################################################################################
 #################################### Common ####################################
@@ -182,6 +185,8 @@ replicantexec_LTLIBRARIES += libreplicant-example-counter.la
 replicantexec_LTLIBRARIES += libreplicant-example-echo.la
 replicantexec_LTLIBRARIES += libreplicant-example-log.la
 replicantexec_LTLIBRARIES += libreplicant-example-nop.la
+TESTS += test/sh/example-state-machines
+EXTRA_DIST += test/sh/example-state-machines
 endif
 
 libreplicant_example_condition_la_SOURCES = examples/condition.c

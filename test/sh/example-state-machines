@@ -1,0 +1,7 @@
+#!/bin/sh
+
+python test/runner.py -- replicant new-object -h {HOST} -p {PORT} cond {PATH}/.libs/libreplicant-example-condition.so || exit 1
+python test/runner.py -- replicant new-object -h {HOST} -p {PORT} counter {PATH}/.libs/libreplicant-example-counter.so || exit 1
+python test/runner.py -- replicant new-object -h {HOST} -p {PORT} echo {PATH}/.libs/libreplicant-example-echo.so || exit 1
+python test/runner.py -- replicant new-object -h {HOST} -p {PORT} log {PATH}/.libs/libreplicant-example-log.so || exit 1
+python test/runner.py -- replicant new-object -h {HOST} -p {PORT} nop {PATH}/.libs/libreplicant-example-nop.so || exit 1
