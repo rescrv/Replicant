@@ -59,6 +59,7 @@
 #include "daemon/object_manager.h"
 #include "daemon/replicant_state_machine.h"
 #include "daemon/replicant_state_machine_context.h"
+#include "daemon/snapshot.h"
 #if defined __APPLE__
 #include "daemon/memstream.h"
 #endif
@@ -139,7 +140,7 @@ class object_manager::object
         class condition;
 
     public:
-        object();
+        object(uint64_t created_at_slot);
         ~object() throw ();
 
     // enqueue commands on the thread
@@ -166,6 +167,7 @@ class object_manager::object
         replicant_state_machine* sym;
         void* rsm;
         std::map<uint64_t, condition> conditions;
+        const uint64_t created_at_slot;
 
     public:
         po6::threads::mutex* mtx() { return &m_mtx; }
@@ -186,11 +188,12 @@ class object_manager::object
         std::list<command> m_commands;
 };
 
-object_manager :: object :: object()
+object_manager :: object :: object(uint64_t slot)
     : lib(NULL)
     , sym(NULL)
     , rsm(NULL)
     , conditions()
+    , created_at_slot(slot)
     , m_ref(0)
     , m_thread()
     , m_mtx()
@@ -298,6 +301,7 @@ class object_manager::object::condition
 
     public:
         condition();
+        condition(uint64_t state);
 
     public:
         uint64_t count;
@@ -306,6 +310,12 @@ class object_manager::object::condition
 
 object_manager :: object :: condition :: condition()
     : count(0)
+    , waiters()
+{
+}
+
+object_manager :: object :: condition :: condition(uint64_t state)
+    : count(state)
     , waiters()
 {
 }
@@ -378,6 +388,7 @@ object_manager :: object_manager()
     : m_daemon()
     , m_command_cb()
     , m_notify_cb()
+    , m_snapshot_cb()
     , m_objects()
 {
 }
@@ -388,11 +399,13 @@ object_manager :: ~object_manager() throw ()
 
 void
 object_manager :: set_callback(daemon* d, void (daemon::*command_cb)(uint64_t slot, uint64_t client, uint64_t nonce, response_returncode rc, const e::slice& data),
-                                          void (daemon::*notify_cb)(uint64_t client, uint64_t nonce, response_returncode rc, const e::slice& data))
+                                          void (daemon::*notify_cb)(uint64_t client, uint64_t nonce, response_returncode rc, const e::slice& data),
+                                          void (daemon::*snapshot_cb)(std::auto_ptr<snapshot>))
 {
     m_daemon = d;
     m_command_cb = command_cb;
     m_notify_cb = notify_cb;
+    m_snapshot_cb = snapshot_cb;
 }
 
 void
@@ -402,98 +415,27 @@ object_manager :: enqueue(uint64_t slot, uint64_t obj_id,
 {
     if (obj_id == OBJECT_OBJ_NEW)
     {
-        // determine the object id
         e::slice lib;
+        e::unpacker up(data.data(), data.size());
+        up = up >> obj_id >> lib;
 
-        if (data.size() < sizeof(uint64_t))
+        if (up.error())
         {
-            return command_send_error_response(slot, client, nonce, RESPONSE_MALFORMED);
+            command_send_error_response(slot, client, nonce, RESPONSE_MALFORMED);
+            return;
         }
 
-        e::unpack64be(data.data(), &obj_id);
-        lib = data;
-        lib.advance(sizeof(uint64_t));
+        e::intrusive_ptr<object> obj;
+        obj = common_object_initialize(slot, client, nonce, lib, &obj_id);
 
-        // write out the library
-        char buf[43 /*strlen("./libreplicant-slot<slot \lt 2**64>.so\x00")*/];
-        sprintf(buf, "./libreplicant-slot%lu.so", slot);
-        po6::io::fd tmplib(open(buf, O_WRONLY|O_CREAT|O_EXCL, S_IRWXU));
-
-        if (tmplib.get() < 0)
+        if (!obj)
         {
-            PLOG(ERROR) << "could not open temporary library for slot " << slot;
-            abort();
-        }
-
-        if (tmplib.xwrite(lib.data(), lib.size()) != static_cast<ssize_t>(lib.size()))
-        {
-            PLOG(ERROR) << "could not write temporary ibrary for slot " << slot;
-            abort();
-        }
-
-        // create a new object, if none exists
-        e::intrusive_ptr<object> obj = get_object(obj_id);
-
-        if (obj)
-        {
-            return command_send_error_response(slot, client, nonce, RESPONSE_OBJ_EXIST);
-        }
-
-        obj = new object();
-        po6::threads::mutex::hold hold(obj->mtx());
-        obj->lib = dlopen(buf, RTLD_NOW|RTLD_LOCAL);
-
-        if (!obj->lib)
-        {
-            const char* err = dlerror();
-            LOG(ERROR) << "could not load library for slot " << slot
-                       << ": " << err << "; delete the object and try again";
-            return command_send_error_msg_response(slot, client, nonce, RESPONSE_DLOPEN_FAIL, err);
-        }
-
-        if (unlink(buf) < 0)
-        {
-            PLOG(ERROR) << "could not unlink temporary library " << buf;
-            abort();
-        }
-
-        obj->sym = static_cast<replicant_state_machine*>(dlsym(obj->lib, "rsm"));
-
-        if (!obj->sym)
-        {
-            const char* err = dlerror();
-            LOG(ERROR) << "could not find \"rsm\" symbol in library for slot "
-                       << slot << ": " << err
-                       << "; delete the object and try again";
-            return command_send_error_msg_response(slot, client, nonce, RESPONSE_DLSYM_FAIL, err);
-        }
-
-        if (!obj->sym->ctor)
-        {
-            LOG(WARNING) << "library for slot " << slot << " does not specify a constructor; delete the object and try again";
-            return command_send_error_response(slot, client, nonce, RESPONSE_NO_CTOR);
-        }
-
-        if (!obj->sym->rtor)
-        {
-            LOG(WARNING) << "library for slot " << slot << " does not specify a reconstructor; delete the object and try again";
-            return command_send_error_response(slot, client, nonce, RESPONSE_NO_RTOR);
-        }
-
-        if (!obj->sym->dtor)
-        {
-            LOG(WARNING) << "library for slot " << slot << " does not specify a destructor; delete the object and try again";
-            return command_send_error_response(slot, client, nonce, RESPONSE_NO_DTOR);
-        }
-
-        if (!obj->sym->snap)
-        {
-            LOG(WARNING) << "library for slot " << slot << " does not specify a snapshot function; delete the object and try again";
-            return command_send_error_response(slot, client, nonce, RESPONSE_NO_SNAP);
+            return;
         }
 
         replicant_state_machine_context ctx(slot, obj_id, client, this, obj.get());
         obj->rsm = obj->sym->ctor(&ctx);
+        log_messages(obj_id, &ctx, "ctor");
 
         if (!obj->rsm)
         {
@@ -501,7 +443,6 @@ object_manager :: enqueue(uint64_t slot, uint64_t obj_id,
             return command_send_error_response(slot, client, nonce, RESPONSE_CTOR_FAILED);
         }
 
-        log_messages(obj_id, ctx, "ctor");
         obj->start_thread(this, obj_id, obj);
         m_objects.insert(std::make_pair(obj_id, obj));
         return command_send_response(slot, client, nonce, RESPONSE_SUCCESS, e::slice());
@@ -522,6 +463,76 @@ object_manager :: enqueue(uint64_t slot, uint64_t obj_id,
         }
 
         obj->enqueue(command::DELETE, slot, client, nonce, data);
+    }
+    else if (obj_id == OBJECT_OBJ_SNAPSHOT)
+    {
+        if (data.size() < sizeof(uint64_t))
+        {
+            return command_send_error_response(slot, client, nonce, RESPONSE_MALFORMED);
+        }
+
+        e::unpack64be(data.data(), &obj_id);
+        e::intrusive_ptr<object> obj = get_object(obj_id);
+
+        if (!obj)
+        {
+            return command_send_error_response(slot, client, nonce, RESPONSE_OBJ_NOT_EXIST);
+        }
+
+        obj->enqueue(command::SNAPSHOT, slot, client, nonce, data);
+    }
+    else if (obj_id == OBJECT_OBJ_RESTORE)
+    {
+        e::slice lib;
+        e::slice back;
+        e::unpacker up(data.data(), data.size());
+        up = up >> obj_id >> lib >> back;
+
+        if (up.error())
+        {
+            command_send_error_response(slot, client, nonce, RESPONSE_MALFORMED);
+            return;
+        }
+
+        e::intrusive_ptr<object> obj;
+        obj = common_object_initialize(slot, client, nonce, lib, &obj_id);
+
+        if (!obj)
+        {
+            return;
+        }
+
+        e::slice rtor;
+        up = e::unpacker(back.data(), back.size());
+        up = up >> rtor;
+
+        while (!up.error() && !up.empty())
+        {
+            uint64_t cond = 0;
+            uint64_t state = 0;
+            up = up >> cond >> state;
+            obj->conditions.insert(std::make_pair(cond, object::condition(state)));
+        }
+
+        if (up.error())
+        {
+            command_send_error_response(slot, client, nonce, RESPONSE_MALFORMED);
+            return;
+        }
+
+        replicant_state_machine_context ctx(slot, obj_id, client, this, obj.get());
+        obj->rsm = obj->sym->rtor(&ctx, reinterpret_cast<const char*>(rtor.data()), rtor.size());
+        log_messages(obj_id, &ctx, "rtor");
+
+        if (!obj->rsm)
+        {
+            LOG(WARNING) << "reconstructor for " << obj_id << " @ "  << slot << " failed; delete the object and try again";
+            return command_send_error_response(slot, client, nonce, RESPONSE_CTOR_FAILED);
+        }
+
+        obj->start_thread(this, obj_id, obj);
+        m_objects.insert(std::make_pair(obj_id, obj));
+        return command_send_response(slot, client, nonce, RESPONSE_SUCCESS, e::slice());
     }
     else if (!IS_SPECIAL_OBJECT(obj_id))
     {
@@ -645,6 +656,101 @@ object_manager :: condition_broadcast(object* obj, uint64_t cond, uint64_t* stat
 }
 
 e::intrusive_ptr<object_manager::object>
+object_manager :: common_object_initialize(uint64_t slot,
+                                           uint64_t client,
+                                           uint64_t nonce,
+                                           const e::slice& lib,
+                                           uint64_t* obj_id)
+{
+    // write out the library
+    char buf[43 /*strlen("./libreplicant-slot<slot \lt 2**64>.so\x00")*/];
+    sprintf(buf, "./libreplicant-slot%lu.so", slot);
+    po6::io::fd tmplib(open(buf, O_WRONLY|O_CREAT|O_EXCL, S_IRWXU));
+
+    if (tmplib.get() < 0)
+    {
+        PLOG(ERROR) << "could not open temporary library for slot " << slot;
+        abort();
+    }
+
+    if (tmplib.xwrite(lib.data(), lib.size()) != static_cast<ssize_t>(lib.size()))
+    {
+        PLOG(ERROR) << "could not write temporary ibrary for slot " << slot;
+        abort();
+    }
+
+    // create a new object, if none exists
+    e::intrusive_ptr<object> obj = get_object(*obj_id);
+
+    if (obj)
+    {
+        command_send_error_response(slot, client, nonce, RESPONSE_OBJ_EXIST);
+        return NULL;
+    }
+
+    obj = new object(slot);
+    po6::threads::mutex::hold hold(obj->mtx());
+    obj->lib = dlopen(buf, RTLD_NOW|RTLD_LOCAL);
+
+    if (!obj->lib)
+    {
+        const char* err = dlerror();
+        LOG(ERROR) << "could not load library for slot " << slot
+                   << ": " << err << "; delete the object and try again";
+        command_send_error_msg_response(slot, client, nonce, RESPONSE_DLOPEN_FAIL, err);
+        return NULL;
+    }
+
+    if (unlink(buf) < 0)
+    {
+        PLOG(ERROR) << "could not unlink temporary library " << buf;
+        abort();
+    }
+
+    obj->sym = static_cast<replicant_state_machine*>(dlsym(obj->lib, "rsm"));
+
+    if (!obj->sym)
+    {
+        const char* err = dlerror();
+        LOG(ERROR) << "could not find \"rsm\" symbol in library for slot "
+                   << slot << ": " << err
+                   << "; delete the object and try again";
+        command_send_error_msg_response(slot, client, nonce, RESPONSE_DLSYM_FAIL, err);
+        return NULL;
+    }
+
+    if (!obj->sym->ctor)
+    {
+        LOG(WARNING) << "library for slot " << slot << " does not specify a constructor; delete the object and try again";
+        command_send_error_response(slot, client, nonce, RESPONSE_NO_CTOR);
+        return NULL;
+    }
+
+    if (!obj->sym->rtor)
+    {
+        LOG(WARNING) << "library for slot " << slot << " does not specify a reconstructor; delete the object and try again";
+        command_send_error_response(slot, client, nonce, RESPONSE_NO_RTOR);
+        return NULL;
+    }
+
+    if (!obj->sym->dtor)
+    {
+        LOG(WARNING) << "library for slot " << slot << " does not specify a destructor; delete the object and try again";
+        command_send_error_response(slot, client, nonce, RESPONSE_NO_DTOR);
+        return NULL;
+    }
+
+    if (!obj->sym->snap)
+    {
+        LOG(WARNING) << "library for slot " << slot << " does not specify a snapshot function; delete the object and try again";
+        command_send_error_response(slot, client, nonce, RESPONSE_NO_SNAP);
+        return NULL;
+    }
+
+    return obj;
+}
+
+e::intrusive_ptr<object_manager::object>
 object_manager :: get_object(uint64_t obj_id)
 {
     object_map_t::iterator it = m_objects.find(obj_id);
@@ -742,11 +848,12 @@ object_manager :: worker_thread(uint64_t obj_id, e::intrusive_ptr<object> obj)
 }
 
 void
-object_manager :: log_messages(uint64_t obj_id, const replicant_state_machine_context& ctx, const char* func)
+object_manager :: log_messages(uint64_t obj_id, replicant_state_machine_context* ctx, const char* func)
 {
+    ctx->close_log_output();
     std::string obj_str = obj_id_to_str(obj_id);
-    const char* ptr = ctx.log_output;
-    const char* end = ctx.log_output + ctx.log_output_sz;
+    const char* ptr = ctx->log_output;
+    const char* end = ctx->log_output + ctx->log_output_sz;
 
     while (ptr < end)
     {
@@ -767,7 +874,7 @@ object_manager :: log_messages(uint64_t obj_id, const replicant_state_machine_co
             eol = static_cast<const char*>(ptr_0);
         }
 
-        LOG(INFO) << obj_str << ":" << func << " @ " << ctx.slot << ": " << std::string(ptr, eol);
+        LOG(INFO) << obj_str << ":" << func << " @ " << ctx->slot << ": " << std::string(ptr, eol);
         ptr = eol + 1;
     }
 }
@@ -786,8 +893,8 @@ object_manager :: dispatch_command(uint64_t obj_id,
             return dispatch_command_wait(obj_id, obj, cmd, shutdown);
         case command::DELETE:
             return dispatch_command_delete(obj_id, obj, cmd, shutdown);
-        //case command::SNAPSHOT:
-        //    return dispatch_command_snapshot(obj_id, obj, cmd, shutdown);
+        case command::SNAPSHOT:
+            return dispatch_command_snapshot(obj_id, obj, cmd, shutdown);
         case command::SHUTDOWN:
             return dispatch_command_shutdown(obj_id, obj, cmd, shutdown);
         default:
@@ -830,7 +937,7 @@ object_manager :: dispatch_command_normal(uint64_t obj_id,
         const char* data = func + func_sz + 1;
         size_t data_sz = cmd.data.size() - func_sz - 1;
         sym->func(&ctx, obj->rsm, data, data_sz);
-        log_messages(obj_id, ctx, func);
+        log_messages(obj_id, &ctx, func);
 
         if (!ctx.response)
         {
@@ -880,7 +987,7 @@ object_manager :: dispatch_command_delete(uint64_t obj_id,
     *shutdown = true;
     replicant_state_machine_context ctx(cmd.slot, obj_id, cmd.client, this, obj.get());
     obj->sym->dtor(&ctx, obj->rsm);
-    log_messages(obj_id, ctx, "dtor");
+    log_messages(obj_id, &ctx, "dtor");
 
     while (!obj->conditions.empty())
     {
@@ -888,6 +995,55 @@ object_manager :: dispatch_command_delete(uint64_t obj_id,
     }
 
     command_send_response(cmd.slot, cmd.client, cmd.nonce, RESPONSE_SUCCESS, e::slice("", 0));
+}
+
+void
+object_manager :: dispatch_command_snapshot(uint64_t obj_id,
+                                            e::intrusive_ptr<object> obj,
+                                            const command& cmd,
+                                            bool*)
+{
+    std::auto_ptr<snapshot> snap(new snapshot());
+    snap->object_created_at_slot = obj->created_at_slot;
+    replicant_state_machine_context ctx(cmd.slot, obj_id, cmd.client, this, obj.get());
+    obj->sym->snap(&ctx, obj->rsm, &snap->data, &snap->data_sz);
+    log_messages(obj_id, &ctx, "snap");
+
+    if (!snap->data)
+    {
+        PLOG(ERROR) << "Out of memory?";
+        abort();
+    }
+
+    // serialize the conditions
+    snap->conditions.reserve(obj->conditions.size());
+
+    for (std::map<uint64_t, object::condition>::iterator it = obj->conditions.begin();
+            it != obj->conditions.end(); ++it)
+    {
+        snap->conditions.push_back(std::make_pair(it->first, it->second.count));
+    }
+
+    if (cmd.client == 0)
+    {
+        ((*m_daemon).*m_snapshot_cb)(snap);
+    }
+    else
+    {
+        size_t sz = sizeof(uint32_t) + snap->data_sz
+                  + snap->conditions.size() * 2 * sizeof(uint64_t);
+        std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
+        e::buffer::packer pa = msg->pack_at(0);
+        pa = pa << e::slice(snap->data, snap->data_sz);
+
+        for (size_t i = 0; i < snap->conditions.size(); ++i)
+        {
+            pa = pa << snap->conditions[i].first
+                    << snap->conditions[i].second;
+        }
+
+        command_send_response(cmd.slot, cmd.client, cmd.nonce, RESPONSE_SUCCESS, msg->as_slice());
+    }
 }
 
 void

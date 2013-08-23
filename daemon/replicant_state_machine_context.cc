@@ -68,12 +68,26 @@ replicant_state_machine_context :: replicant_state_machine_context(uint64_t s,
 
 replicant_state_machine_context :: ~replicant_state_machine_context() throw ()
 {
-    fclose(output);
+    if (output)
+    {
+        fclose(output);
+    }
 
     if (log_output)
     {
         free(log_output);
     }
+}
+
+void
+replicant_state_machine_context :: close_log_output()
+{
+    if (output)
+    {
+        fclose(output);
+    }
+
+    output = NULL;
 }
 
 extern "C"
@@ -88,6 +102,7 @@ replicant_state_machine_get_client(struct replicant_state_machine_context* ctx)
 FILE*
 replicant_state_machine_log_stream(struct replicant_state_machine_context* ctx)
 {
+    assert(ctx->output);
     return ctx->output;
 }
 

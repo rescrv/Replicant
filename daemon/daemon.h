@@ -169,6 +169,10 @@ class daemon
                                     e::unpacker up);
         void send_notify(uint64_t client, uint64_t nonce, replicant::response_returncode rc, const e::slice& data);
 
+    // Snapshot backup/restore
+    private:
+        void handle_snapshot(std::auto_ptr<snapshot>);
+
     // Check for faults
     private:
         void process_ping(const replicant::connection& conn,

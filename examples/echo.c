@@ -54,8 +54,8 @@ echo_snapshot(struct replicant_state_machine_context* ctx,
               void* obj,
               const char** data, size_t* sz)
 {
-    *data = NULL;
-    *sz = 0;
+    *data = malloc(sizeof(int));
+    *sz = sizeof(int);
 }
 
 void

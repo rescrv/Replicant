@@ -118,7 +118,9 @@ daemon :: daemon()
     , m_disrupted_retry_scheduled(false)
     , m_fs()
 {
-    m_object_manager.set_callback(this, &daemon::record_execution, &daemon::send_notify);
+    m_object_manager.set_callback(this, &daemon::record_execution,
+                                        &daemon::send_notify,
+                                        &daemon::handle_snapshot);
     trip_periodic(0, &daemon::periodic_describe_slots);
     trip_periodic(0, &daemon::periodic_exchange);
 }
@@ -383,6 +385,8 @@ daemon :: run(bool daemonize,
 
         if (object == OBJECT_OBJ_NEW ||
             object == OBJECT_OBJ_DEL ||
+            object == OBJECT_OBJ_SNAPSHOT ||
+            object == OBJECT_OBJ_RESTORE ||
             !IS_SPECIAL_OBJECT(object))
         {
             m_object_manager.enqueue(slot, object, client, nonce, dat);
@@ -1595,6 +1599,7 @@ daemon :: process_command_submit(const replicant::connection& conn,
 
     // Check for special objects that a client tries to affect directly
     if (object != OBJECT_OBJ_NEW && object != OBJECT_OBJ_DEL &&
+        object != OBJECT_OBJ_SNAPSHOT && object != OBJECT_OBJ_RESTORE &&
         IS_SPECIAL_OBJECT(object) && !conn.is_cluster_member)
     {
         LOG(INFO) << "dropping \"COMMAND_SUBMIT\" for special object that "
@@ -2220,6 +2225,11 @@ daemon :: send_notify(uint64_t client, uint64_t nonce, replicant::response_retur
     pa = pa << REPLNET_CONDITION_NOTIFY << nonce << rc;
     pa = pa.copy(data);
     send_no_disruption(client, msg);
+}
+
+void
+daemon :: handle_snapshot(std::auto_ptr<snapshot> snap)
+{
 }
 
 void

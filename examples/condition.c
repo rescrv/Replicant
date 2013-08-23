@@ -37,19 +37,19 @@
 void*
 condition_create(struct replicant_state_machine_context* ctx)
 {
-    if (replicant_state_machine_condition_create(ctx, "cond") < 0)
+    if (replicant_state_machine_condition_create(ctx, "wakeup") < 0)
     {
         return NULL;
     }
 
-    return malloc(1);
+    return malloc(sizeof(int));
 }
 
 void*
 condition_recreate(struct replicant_state_machine_context* ctx,
                    const char* data, size_t data_sz)
 {
-    return malloc(1);
+    return malloc(sizeof(int));
 }
 
 void
@@ -63,15 +63,15 @@ void
 condition_snapshot(struct replicant_state_machine_context* ctx,
                    void* obj, const char** data, size_t* data_sz)
 {
-    *data = NULL;
-    *data_sz = 0;
+    *data = malloc(sizeof(int));
+    *data_sz = sizeof(int);
 }
 
 void
 condition_wakeup(struct replicant_state_machine_context* ctx,
                  void* obj, const char* data, size_t data_sz)
 {
-    replicant_state_machine_condition_broadcast(ctx, "cond", NULL);
+    replicant_state_machine_condition_broadcast(ctx, "wakeup", NULL);
 }
 
 struct replicant_state_machine rsm = {

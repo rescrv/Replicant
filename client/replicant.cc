@@ -166,8 +166,8 @@ replicant_client :: new_object(const char* obj,
     std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
     e::buffer::packer pa = msg->pack_at(BUSYBEE_HEADER_SIZE);
     pa = pa << REPLNET_COMMAND_SUBMIT << uint64_t(OBJECT_OBJ_NEW)
-            << m_token << nonce << object;
-    pa = pa.copy(e::slice(&lib[0], lib.size()));
+            << m_token << nonce << object
+            << e::slice(&lib[0], lib.size());
     // Create the command object
     e::intrusive_ptr<command> cmd = new command(status, nonce, msg, errmsg, errmsg_sz);
     return send_to_preferred_chain_position(cmd, status);
@@ -194,6 +194,118 @@ replicant_client :: del_object(const char* obj,
     std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
     msg->pack_at(BUSYBEE_HEADER_SIZE)
         << REPLNET_COMMAND_SUBMIT << uint64_t(OBJECT_OBJ_DEL) << m_token << nonce << object;
+    // Create the command object
+    e::intrusive_ptr<command> cmd = new command(status, nonce, msg, errmsg, errmsg_sz);
+    return send_to_preferred_chain_position(cmd, status);
+}
+
+int64_t
+replicant_client :: backup_object(const char* obj,
+                                  replicant_returncode* status,
+                                  const char** output, size_t* output_sz)
+{
+    int64_t ret = maintain_connection(status);
+
+    if (ret < 0)
+    {
+        return ret;
+    }
+
+    // Pack the message to send
+    uint64_t nonce = m_nonce;
+    ++m_nonce;
+    uint64_t object;
+    OBJ_STR2NUM(obj, object);
+    size_t sz = COMMAND_HEADER_SIZE + sizeof(uint64_t);
+    std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
+    msg->pack_at(BUSYBEE_HEADER_SIZE)
+        << REPLNET_COMMAND_SUBMIT << uint64_t(OBJECT_OBJ_SNAPSHOT) << m_token << nonce << object;
+    // Create the command object
+    e::intrusive_ptr<command> cmd = new command(status, nonce, msg, output, output_sz);
+    return send_to_preferred_chain_position(cmd, status);
+}
+
+int64_t
+replicant_client :: restore_object(const char* obj,
+                                   const char* path,
+                                   const char* backup,
+                                   replicant_returncode* status,
+                                   const char** errmsg, size_t* errmsg_sz)
+{
+    int64_t ret = maintain_connection(status);
+
+    if (ret < 0)
+    {
+        return ret;
+    }
+
+    char buf[4096];
+    ssize_t amt = 0;
+
+    // Read the library
+    std::vector<char> lib;
+    po6::io::fd fdlib(open(path, O_RDONLY));
+
+    if (fdlib.get() < 0)
+    {
+        ERROR(BAD_LIBRARY) << "could not open library: " << e::error::strerror(errno);
+        return -1;
+    }
+
+    while ((amt = fdlib.xread(buf, 4096)) > 0)
+    {
+        size_t tmp = lib.size();
+        lib.resize(tmp + amt);
+        memmove(&lib[tmp], buf, amt);
+    }
+
+    if (amt < 0)
+    {
+        ERROR(BAD_LIBRARY) << "could not open library: " << e::error::strerror(errno);
+        return -1;
+    }
+
+    // Read the backup
+    std::vector<char> back;
+    po6::io::fd fdback(open(backup, O_RDONLY));
+
+    if (fdback.get() < 0)
+    {
+        ERROR(BAD_LIBRARY) << "could not open backup: " << e::error::strerror(errno);
+        return -1;
+    }
+
+    amt = 0;
+
+    while ((amt = fdback.xread(buf, 4096)) > 0)
+    {
+        size_t tmp = back.size();
+        back.resize(tmp + amt);
+        memmove(&back[tmp], buf, amt);
+    }
+
+    if (amt < 0)
+    {
+        ERROR(BAD_LIBRARY) << "could not open backup: " << e::error::strerror(errno);
+        return -1;
+    }
+
+    // Pack the message to send
+    uint64_t nonce = m_nonce;
+    ++m_nonce;
+    uint64_t object;
+    OBJ_STR2NUM(obj, object);
+    size_t sz = COMMAND_HEADER_SIZE
+              + sizeof(uint64_t)
+              + 2 * sizeof(uint32_t)
+              + lib.size()
+              + back.size();
+    std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
+    e::buffer::packer pa = msg->pack_at(BUSYBEE_HEADER_SIZE);
+    pa = pa << REPLNET_COMMAND_SUBMIT << uint64_t(OBJECT_OBJ_RESTORE)
+            << m_token << nonce << object
+            << e::slice(&lib[0], lib.size())
+            << e::slice(&back[0], back.size());
     // Create the command object
     e::intrusive_ptr<command> cmd = new command(status, nonce, msg, errmsg, errmsg_sz);
     return send_to_preferred_chain_position(cmd, status);

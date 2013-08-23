@@ -42,6 +42,8 @@ main(int argc, const char* argv[])
     cmds.push_back(e::subcommand("daemon",            "Start a new Replicant daemon"));
     cmds.push_back(e::subcommand("new-object",        "Create a new replicated object\n"));
     cmds.push_back(e::subcommand("del-object",        "Destroy an existing replicated object\n"));
+    cmds.push_back(e::subcommand("backup-object",     "Create a backup of a replicated object\n"));
+    cmds.push_back(e::subcommand("restore-object",    "Restore a replicated object from backup\n"));
     cmds.push_back(e::subcommand("repair",            "Repair a Relicant daemon's data directory\n"));
     return dispatch_to_subcommands(argc, argv,
                                    "replicant", "Replicant",

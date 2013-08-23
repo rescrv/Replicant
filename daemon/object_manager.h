@@ -33,6 +33,7 @@
 
 // STL
 #include <map>
+#include <memory>
 #include <set>
 
 // po6
@@ -44,6 +45,7 @@
 
 // Replicant
 #include "common/response_returncode.h"
+#include "daemon/snapshot.h"
 
 class replicant_state_machine_context;
 namespace replicant
@@ -61,7 +63,8 @@ class object_manager
 
     public:
         void set_callback(daemon* d, void (daemon::*command_cb)(uint64_t slot, uint64_t client, uint64_t nonce, response_returncode rc, const e::slice& data),
-                                     void (daemon::*notify_cb)(uint64_t client, uint64_t nonce, response_returncode rc, const e::slice& data));
+                                     void (daemon::*notify_cb)(uint64_t client, uint64_t nonce, response_returncode rc, const e::slice& data),
+                                     void (daemon::*snapshot_cb)(std::auto_ptr<snapshot>));
         void enqueue(uint64_t slot, uint64_t object,
                      uint64_t client, uint64_t nonce,
                      const e::slice& data);
@@ -79,7 +82,13 @@ class object_manager
         typedef std::set<e::intrusive_ptr<object> > object_set_t;
 
     private:
+        e::intrusive_ptr<object> common_object_initialize(uint64_t slot,
+                                                          uint64_t client,
+                                                          uint64_t nonce,
+                                                          const e::slice& lib,
+                                                          uint64_t* obj_id);
         e::intrusive_ptr<object> get_object(uint64_t obj_id);
+        // del from m_objects and return the obj
         e::intrusive_ptr<object> del_object(uint64_t obj_id);
         void command_send_error_response(uint64_t slot, uint64_t client, uint64_t nonce, response_returncode rc);
         void command_send_error_msg_response(uint64_t slot, uint64_t client, uint64_t nonce, response_returncode rc, const char* resp);
@@ -87,7 +96,7 @@ class object_manager
         void notify_send_error_response(uint64_t client, uint64_t nonce, response_returncode rc);
         void notify_send_response(uint64_t client, uint64_t nonce, response_returncode rc, const e::slice& resp);
         void worker_thread(uint64_t obj_id, e::intrusive_ptr<object> obj);
-        void log_messages(uint64_t obj_id, const replicant_state_machine_context& ctx, const char* func);
+        void log_messages(uint64_t obj_id, replicant_state_machine_context* ctx, const char* func);
         void dispatch_command(uint64_t obj_id, e::intrusive_ptr<object> obj, const command& cmd, bool* shutdown);
         void dispatch_command_normal(uint64_t obj_id, e::intrusive_ptr<object> obj, const command& cmd, bool* shutdown);
         void dispatch_command_wait(uint64_t obj_id, e::intrusive_ptr<object> obj, const command& cmd, bool* shutdown);
@@ -103,7 +112,9 @@ class object_manager
         daemon* m_daemon;
         void (daemon::*m_command_cb)(uint64_t slot, uint64_t client, uint64_t nonce, response_returncode rc, const e::slice& data);
         void (daemon::*m_notify_cb)(uint64_t client, uint64_t nonce, response_returncode rc, const e::slice& data);
+        void (daemon::*m_snapshot_cb)(std::auto_ptr<snapshot>);
         object_map_t m_objects;
+
 };
 
 } // namespace replicant

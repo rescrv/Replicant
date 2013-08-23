@@ -94,6 +94,14 @@ class replicant_client
         int64_t del_object(const char* object,
                            replicant_returncode* status,
                            const char** errmsg, size_t* errmsg_sz);
+        int64_t backup_object(const char* object,
+                              replicant_returncode* status,
+                              const char** output, size_t* output_sz);
+        int64_t restore_object(const char* object,
+                               const char* path,
+                               const char* backup,
+                               replicant_returncode* status,
+                               const char** errmsg, size_t* errmsg_sz);
         int64_t send(const char* object,
                      const char* func,
                      const char* data, size_t data_sz,

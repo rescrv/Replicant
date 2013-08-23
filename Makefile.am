@@ -107,6 +107,7 @@ replicant_daemon_SOURCES += daemon/heal_next.cc
 replicant_daemon_SOURCES += daemon/main.cc
 replicant_daemon_SOURCES += daemon/object_manager.cc
 replicant_daemon_SOURCES += daemon/settings.cc
+replicant_daemon_SOURCES += daemon/snapshot.cc
 replicant_daemon_LDADD =
 replicant_daemon_LDADD += $(E_LIBS)
 replicant_daemon_LDADD += $(BUSYBEE_LIBS)
@@ -149,6 +150,8 @@ noinst_PROGRAMS += replicant-block
 noinst_PROGRAMS += replicant-cli
 replicantexec_PROGRAMS += replicant-new-object
 replicantexec_PROGRAMS += replicant-del-object
+replicantexec_PROGRAMS += replicant-backup-object
+replicantexec_PROGRAMS += replicant-restore-object
 replicantexec_PROGRAMS += replicant-debug-dump
 replicantexec_PROGRAMS += replicant-integrity-check
 
@@ -168,6 +171,12 @@ replicant_new_object_LDADD = libreplicant.la
 
 replicant_del_object_SOURCES = tools/del-object.cc
 replicant_del_object_LDADD = libreplicant.la
+
+replicant_backup_object_SOURCES = tools/backup-object.cc
+replicant_backup_object_LDADD = libreplicant.la
+
+replicant_restore_object_SOURCES = tools/restore-object.cc
+replicant_restore_object_LDADD = libreplicant.la
 
 replicant_integrity_check_SOURCES = tools/integrity-check.cc common/chain_node.cc common/configuration.cc common/packing.cc common/response_returncode.cc daemon/configuration_manager.cc daemon/fact_store.cc
 replicant_integrity_check_LDADD = $(E_LIBS) $(HYPERLEVELDB_LIBS) -lglog

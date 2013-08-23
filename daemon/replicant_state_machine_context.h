@@ -41,6 +41,9 @@ struct replicant_state_machine_context
         ~replicant_state_machine_context() throw ();
 
     public:
+        void close_log_output();
+
+    public:
         uint64_t slot;
         uint64_t object;
         uint64_t client;

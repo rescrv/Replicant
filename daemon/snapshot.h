@@ -1,4 +1,4 @@
-// Copyright (c) 2012, Robert Escriva
+// Copyright (c) 2013, Robert Escriva
 // All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
@@ -25,22 +25,36 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
-#ifndef replicant_special_objects_h_
-#define replicant_special_objects_h_
+#ifndef replicant_daemon_snapshot_h_
+#define replicant_daemon_snapshot_h_
 
-#define IS_SPECIAL_OBJECT(X) ((X & 0xff00000000000000ULL) == 0x5f00000000000000ULL)
+// C
+#include <cstdlib>
+#include <stdint.h>
 
-// Here's some Python to generate the numbers:
-//
-// >>> print '0x%sULL' % ''.join(['%02x' % ord(c) for c in '_clients'])
-// 0x5f636c69656e7473ULL
+// STL
+#include <vector>
 
-// Special objects
-#define OBJECT_CLI_REG 0x5f636c695f726567ULL /*_cli_reg*/
-#define OBJECT_CLI_DIE 0x5f636c695f646965ULL /*_cli_die*/
-#define OBJECT_OBJ_NEW 0x5f6f626a5f6e6577ULL /*_obj_new*/
-#define OBJECT_OBJ_DEL 0x5f6f626a5f64656cULL /*_obj_del*/
-#define OBJECT_OBJ_SNAPSHOT 0x5f6f626a5f736e61ULL /*_obj_sna*/
-#define OBJECT_OBJ_RESTORE 0x5f6f626a5f726573ULL /*_obj_res*/
+namespace replicant
+{
 
-#endif // replicant_special_objects_h_
+class snapshot
+{
+    public:
+        snapshot();
+        ~snapshot() throw ();
+
+    public:
+        uint64_t object_created_at_slot;
+        const char* data;
+        size_t data_sz;
+        std::vector<std::pair<uint64_t, uint64_t> > conditions;
+
+    private:
+        snapshot(const snapshot&);
+        snapshot& operator = (const snapshot&);
+};
+
+} // namespace replicant
+
+#endif // replicant_daemon_snapshot_h_
