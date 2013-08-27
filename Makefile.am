@@ -89,6 +89,7 @@ noinst_HEADERS += daemon/replicant_state_machine_context.h
 noinst_HEADERS += daemon/replicant_state_machine.h
 noinst_HEADERS += daemon/request_response.h
 noinst_HEADERS += daemon/settings.h
+noinst_HEADERS += daemon/snapshot.h
 
 replicant_daemon_SOURCES =
 replicant_daemon_SOURCES += common/bootstrap.cc
