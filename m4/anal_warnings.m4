@@ -72,7 +72,7 @@ AC_DEFUN([ANAL_WARNINGS],
         AX_CHECK_COMPILE_FLAG([-Wmissing-field-initializers],[WANAL_CFLAGS="${WANAL_CFLAGS} -Wmissing-field-initializers"],,)
         AX_CHECK_COMPILE_FLAG([-Wmissing-format-attribute],[WANAL_CFLAGS="${WANAL_CFLAGS} -Wmissing-format-attribute"],,)
         AX_CHECK_COMPILE_FLAG([-Wmissing-include-dirs],[WANAL_CFLAGS="${WANAL_CFLAGS} -Wmissing-include-dirs"],,)
-        AX_CHECK_COMPILE_FLAG([-Wmissing-noreturn],[WANAL_CFLAGS="${WANAL_CFLAGS} -Wmissing-noreturn"],,)
+        dnl AX_CHECK_COMPILE_FLAG([-Wmissing-noreturn],[WANAL_CFLAGS="${WANAL_CFLAGS} -Wmissing-noreturn"],,)
         AX_CHECK_COMPILE_FLAG([-Wno-long-long],[WANAL_CFLAGS="${WANAL_CFLAGS} -Wno-long-long"],,)
         AX_CHECK_COMPILE_FLAG([-Wnon-virtual-dtor],[WANAL_CXXFLAGS="${WANAL_CXXFLAGS} -Wnon-virtual-dtor"],,)
         #AX_CHECK_COMPILE_FLAG([-Wold-style-cast],[WANAL_CXXFLAGS="${WANAL_CXXFLAGS} -Wold-style-cast"],,)
