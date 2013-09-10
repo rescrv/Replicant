@@ -1143,6 +1143,11 @@ fact_store :: initialize(std::ostream& ostr, bool* restored, chain_node* us)
             return false;
         }
     }
+    else
+    {
+        ostr << "could not read \"replicant\" key from LevelDB: " << st.ToString();
+        return false;
+    }
 
     *restored = !first_time;
     return true;
