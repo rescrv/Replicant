@@ -400,7 +400,7 @@ daemon :: run(bool daemonize,
         assert(init_lib);
         assert(m_fs.next_slot_to_issue() == 1);
         assert(m_fs.next_slot_to_ack() == 1);
-        std::vector<char> lib(sizeof(uint64_t));
+        std::vector<char> lib(sizeof(uint64_t) + sizeof(uint32_t));
 
         // Encode the object name
         assert(strlen(init_obj) <= sizeof(uint64_t));
@@ -434,6 +434,8 @@ daemon :: run(bool daemonize,
             return EXIT_FAILURE;
         }
 
+        e::pack32be(lib.size() - sizeof(uint64_t) - sizeof(uint32_t),
+                    &lib[sizeof(uint64_t)]);
         e::slice lib_slice(&lib[0], lib.size());
         issue_command(1, OBJECT_OBJ_NEW, 0, 0, lib_slice);
         LOG(INFO) << "initializing " << init_obj << " with " << init_lib;
