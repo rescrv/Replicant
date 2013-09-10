@@ -1482,6 +1482,13 @@ fact_store :: integrity_check(int tries_remaining, bool output, bool destructive
 
     for (size_t i = 0; i < slots_issued.size(); ++i)
     {
+        if (slots_issued[i].number < 3 &&
+            slots_issued[i].client == 0 &&
+            slots_issued[i].nonce == 0)
+        {
+            continue;
+        }
+
         slot_mapping sm;
         sm.client = slots_issued[i].client;
         sm.nonce = slots_issued[i].nonce;
