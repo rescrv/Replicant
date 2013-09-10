@@ -421,6 +421,7 @@ object_manager :: enqueue(uint64_t slot, uint64_t obj_id,
 
         if (up.error())
         {
+            LOG(WARNING) << "could not unpack " << obj_id << " @ " << slot;
             command_send_error_response(slot, client, nonce, RESPONSE_MALFORMED);
             return;
         }
