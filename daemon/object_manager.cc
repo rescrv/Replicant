@@ -951,6 +951,8 @@ object_manager :: dispatch_command_normal(uint64_t obj_id,
     else
     {
         command_send_error_response(cmd.slot, cmd.client, cmd.nonce, RESPONSE_NO_FUNC);
+        std::string obj_str = obj_id_to_str(obj_id);
+        LOG(INFO) << obj_str << ": no such call \"" << func << "\" @ " << cmd.slot;
     }
 }
 
