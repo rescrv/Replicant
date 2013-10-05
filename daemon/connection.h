@@ -49,6 +49,7 @@ class connection
         bool is_prev;
         bool is_next;
         uint64_t token;
+        po6::net::location addr;
 };
 
 } // namespace replicant

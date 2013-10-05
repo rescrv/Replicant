@@ -564,7 +564,8 @@ daemon :: process_bootstrap(const replicant::connection& conn,
                             std::auto_ptr<e::buffer>,
                             e::unpacker)
 {
-    LOG(INFO) << "providing configuration to " << conn.token
+    LOG(INFO) << "providing configuration to "
+              << conn.token << "/" << conn.addr
               << " as part of the bootstrap process";
     send(conn, create_inform_message());
 }
@@ -617,7 +618,7 @@ daemon :: process_server_register(const replicant::connection& conn,
     up = up >> sender;
     CHECK_UNPACK(SERVER_REGISTER, up);
     LOG(INFO) << "received \"SERVER_REGISTER\" message from "
-              << conn.token << " as " << sender;
+              << conn.token << "/" << conn.addr << " as " << sender;
 
     bool success = true;
 
@@ -2334,6 +2335,11 @@ daemon :: recv(replicant::connection* conn, std::auto_ptr<e::buffer>* msg)
             default:
                 LOG(ERROR) << "BusyBee returned " << rc << " during a \"recv\" call";
                 return false;
+        }
+
+        if (m_busybee->get_addr(conn->token, &conn->addr) != BUSYBEE_SUCCESS)
+        {
+            conn->addr = po6::net::location();
         }
 
         const configuration& config(m_config_manager.stable());
