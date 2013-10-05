@@ -646,7 +646,7 @@ object_manager :: condition_broadcast(object* obj, uint64_t cond, uint64_t* stat
     std::set<object::condition::waiter>& waiters(it->second.waiters);
 
     while (!waiters.empty() &&
-           waiters.begin()->wait_for < it->second.count)
+           waiters.begin()->wait_for <= it->second.count)
     {
         const object::condition::waiter& w(*waiters.begin());
         notify_send_response(w.client, w.nonce, RESPONSE_SUCCESS, e::slice("", 0));
@@ -970,7 +970,7 @@ object_manager :: dispatch_command_wait(uint64_t,
     }
     else
     {
-        if (cmd.state < it->second.count)
+        if (cmd.state <= it->second.count)
         {
             notify_send_response(cmd.client, cmd.nonce, RESPONSE_SUCCESS, e::slice("", 0));
         }

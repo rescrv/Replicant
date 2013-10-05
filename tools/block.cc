@@ -106,7 +106,7 @@ main(int argc, const char* argv[])
                 return EXIT_FAILURE;
             }
 
-            std::cout << "counter exceeds " << state << std::endl;
+            std::cout << "counter >= " << state << std::endl;
         }
 
         return EXIT_SUCCESS;
