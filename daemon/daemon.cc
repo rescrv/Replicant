@@ -2233,7 +2233,7 @@ daemon :: send_notify(uint64_t client, uint64_t nonce, replicant::response_retur
 }
 
 void
-daemon :: handle_snapshot(std::auto_ptr<snapshot> snap)
+daemon :: handle_snapshot(std::auto_ptr<snapshot>)
 {
 }
 
