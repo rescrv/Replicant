@@ -439,7 +439,7 @@ daemon :: run(bool daemonize,
         e::pack32be(lib.size() - sizeof(uint64_t) - sizeof(uint32_t),
                     &lib[sizeof(uint64_t)]);
         e::slice lib_slice(&lib[0], lib.size());
-        issue_command(1, OBJECT_OBJ_NEW, 0, 0, lib_slice);
+        issue_command(1, OBJECT_OBJ_NEW, 0, 1, lib_slice);
         LOG(INFO) << "initializing " << init_obj << " with " << init_lib;
 
         if (init_str)
@@ -448,7 +448,7 @@ daemon :: run(bool daemonize,
             memmove(&init_buf[0], "init\x00", 5);
             memmove(&init_buf[5], init_str, strlen(init_str) + 1);
             e::slice init_slice(&init_buf[0], init_buf.size());
-            issue_command(2, obj, 0, 0, init_slice);
+            issue_command(2, obj, 0, 2, init_slice);
         }
     }
 
@@ -2331,7 +2331,7 @@ daemon :: issue_alarm(uint64_t obj_id, const char* func)
 
     e::slice data(func, strlen(func) + 1);
     uint64_t slot = m_fs.next_slot_to_issue();
-    issue_command(slot, obj_id, 0, 0, data);
+    issue_command(slot, obj_id, 0, slot, data);
     return;
 }
 
