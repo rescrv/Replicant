@@ -120,9 +120,11 @@ daemon :: daemon()
 {
     m_object_manager.set_callback(this, &daemon::record_execution,
                                         &daemon::send_notify,
-                                        &daemon::handle_snapshot);
+                                        &daemon::handle_snapshot,
+                                        &daemon::issue_alarm);
     trip_periodic(0, &daemon::periodic_describe_slots);
     trip_periodic(0, &daemon::periodic_exchange);
+    trip_periodic(0, &daemon::periodic_alarm);
 }
 
 static bool
@@ -2308,6 +2310,29 @@ daemon :: periodic_exchange(uint64_t now)
         msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_PING << version << seqno;
         send_no_disruption(nodes[i].token, msg);
     }
+}
+
+void
+daemon :: periodic_alarm(uint64_t now)
+{
+    m_object_manager.periodic(now);
+    uint64_t billion = 1000ULL * 1000ULL * 1000ULL;
+    now = now + billion - (now % billion);
+    trip_periodic(now, &daemon::periodic_alarm);
+}
+
+void
+daemon :: issue_alarm(uint64_t obj_id, const char* func)
+{
+    if (*m_config_manager.stable().head() != m_us)
+    {
+        return;
+    }
+
+    e::slice data(func, strlen(func) + 1);
+    uint64_t slot = m_fs.next_slot_to_issue();
+    issue_command(slot, obj_id, 0, 0, data);
+    return;
 }
 
 bool

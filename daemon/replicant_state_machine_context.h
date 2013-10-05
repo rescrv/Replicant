@@ -54,6 +54,8 @@ struct replicant_state_machine_context
         replicant::object_manager::object* obj;
         const char* response;
         size_t response_sz;
+        const char* alarm_func;
+        uint64_t alarm_when;
 
     private:
         replicant_state_machine_context(const replicant_state_machine_context&);

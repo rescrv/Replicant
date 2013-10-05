@@ -30,6 +30,7 @@
 
 // e
 #include <e/endian.h>
+#include <e/time.h>
 
 // Replicant
 #include "daemon/replicant_state_machine.h"
@@ -63,6 +64,8 @@ replicant_state_machine_context :: replicant_state_machine_context(uint64_t s,
     , obj(ob)
     , response(NULL)
     , response_sz(0)
+    , alarm_func("")
+    , alarm_when(0)
 {
 }
 
@@ -140,6 +143,14 @@ replicant_state_machine_condition_broadcast(struct replicant_state_machine_conte
     uint64_t _cond;
     COND_STR2NUM(cond, _cond);
     return ctx->obj_man->condition_broadcast(ctx->obj, _cond, state);
+}
+
+void
+replicant_state_machine_alarm(struct replicant_state_machine_context* ctx,
+                              const char* func, uint64_t seconds)
+{
+    ctx->alarm_func = func;
+    ctx->alarm_when = seconds;
 }
 
 } // extern "C"

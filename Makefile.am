@@ -190,6 +190,7 @@ replicant_debug_dump_LDADD = $(E_LIBS) $(HYPERLEVELDB_LIBS) -lglog
 ################################################################################
 
 if ENABLE_EXAMPLES
+replicantexec_LTLIBRARIES += libreplicant-example-alarm.la
 replicantexec_LTLIBRARIES += libreplicant-example-condition.la
 replicantexec_LTLIBRARIES += libreplicant-example-counter.la
 replicantexec_LTLIBRARIES += libreplicant-example-echo.la
@@ -198,6 +199,9 @@ replicantexec_LTLIBRARIES += libreplicant-example-nop.la
 TESTS += test/sh/example-state-machines
 EXTRA_DIST += test/sh/example-state-machines
 endif
+
+libreplicant_example_alarm_la_SOURCES = examples/alarm.c
+libreplicant_example_alarm_la_CPPFLAGS = -I$(abs_top_srcdir)/daemon/ $(AM_CPPFLAGS) $(CPPFLAGS)
 
 libreplicant_example_condition_la_SOURCES = examples/condition.c
 libreplicant_example_condition_la_CPPFLAGS = -I$(abs_top_srcdir)/daemon/ $(AM_CPPFLAGS) $(CPPFLAGS)

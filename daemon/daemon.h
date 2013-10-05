@@ -183,6 +183,11 @@ class daemon
                           e::unpacker up);
         void periodic_exchange(uint64_t now);
 
+    // alarms
+    private:
+        void periodic_alarm(uint64_t now);
+        void issue_alarm(uint64_t obj_id, const char* func);
+
     // Manage communication
     private:
         bool recv(replicant::connection* conn, std::auto_ptr<e::buffer>* msg);

@@ -64,12 +64,14 @@ class object_manager
     public:
         void set_callback(daemon* d, void (daemon::*command_cb)(uint64_t slot, uint64_t client, uint64_t nonce, response_returncode rc, const e::slice& data),
                                      void (daemon::*notify_cb)(uint64_t client, uint64_t nonce, response_returncode rc, const e::slice& data),
-                                     void (daemon::*snapshot_cb)(std::auto_ptr<snapshot>));
+                                     void (daemon::*snapshot_cb)(std::auto_ptr<snapshot>),
+                                     void (daemon::*alarm_cb)(uint64_t obj_id, const char* func));
         void enqueue(uint64_t slot, uint64_t object,
                      uint64_t client, uint64_t nonce,
                      const e::slice& data);
         void throttle(uint64_t object, size_t sz);
         void wait(uint64_t object, uint64_t client, uint64_t nonce, uint64_t cond, uint64_t state);
+        void periodic(uint64_t now);
 
     public:
         int condition_create(object* o, uint64_t cond);
@@ -102,6 +104,7 @@ class object_manager
         void dispatch_command_wait(uint64_t obj_id, e::intrusive_ptr<object> obj, const command& cmd, bool* shutdown);
         void dispatch_command_delete(uint64_t obj_id, e::intrusive_ptr<object> obj, const command& cmd, bool* shutdown);
         void dispatch_command_snapshot(uint64_t obj_id, e::intrusive_ptr<object> obj, const command& cmd, bool* shutdown);
+        void dispatch_command_alarm(uint64_t obj_id, e::intrusive_ptr<object> obj, const command& cmd, bool* shutdown);
         void dispatch_command_shutdown(uint64_t obj_id, e::intrusive_ptr<object> obj, const command& cmd, bool* shutdown);
 
     private:
@@ -113,6 +116,7 @@ class object_manager
         void (daemon::*m_command_cb)(uint64_t slot, uint64_t client, uint64_t nonce, response_returncode rc, const e::slice& data);
         void (daemon::*m_notify_cb)(uint64_t client, uint64_t nonce, response_returncode rc, const e::slice& data);
         void (daemon::*m_snapshot_cb)(std::auto_ptr<snapshot>);
+        void (daemon::*m_alarm_cb)(uint64_t obj_id, const char* func);
         object_map_t m_objects;
 
 };

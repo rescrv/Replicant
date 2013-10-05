@@ -48,6 +48,7 @@
 // e
 #include <e/buffer.h>
 #include <e/endian.h>
+#include <e/time.h>
 
 // BusyBee
 #include <busybee_constants.h>
@@ -91,7 +92,7 @@ obj_id_to_str(uint64_t obj_id)
 class object_manager::command
 {
     public:
-        enum type_t { NORMAL, WAIT, DELETE, SNAPSHOT, SHUTDOWN };
+        enum type_t { NORMAL, WAIT, DELETE, SNAPSHOT, ALARM, SHUTDOWN };
 
     public:
         command();
@@ -158,6 +159,8 @@ class object_manager::object
                      uint64_t nonce,
                      uint64_t cond,
                      uint64_t state);
+        void enqueue(command::type_t,
+                     uint64_t state);
         void dequeue(std::list<command>* commands, bool* shutdown);
         void throttle(size_t sz);
 
@@ -167,6 +170,8 @@ class object_manager::object
         replicant_state_machine* sym;
         void* rsm;
         std::map<uint64_t, condition> conditions;
+        const char* alarm_func;
+        uint64_t alarm_when;
         const uint64_t created_at_slot;
 
     public:
@@ -193,6 +198,8 @@ object_manager :: object :: object(uint64_t slot)
     , sym(NULL)
     , rsm(NULL)
     , conditions()
+    , alarm_func("")
+    , alarm_when(0)
     , created_at_slot(slot)
     , m_ref(0)
     , m_thread()
@@ -255,6 +262,21 @@ object_manager :: object :: enqueue(command::type_t type,
     tmp.back().client = client;
     tmp.back().nonce = nonce;
     tmp.back().cond = cond;
+    tmp.back().state = state;
+    // Push it onto the object's queue
+    po6::threads::mutex::hold hold(&m_mtx);
+    m_commands.splice(m_commands.end(), tmp, tmp.begin());
+    m_commands_avail.signal();
+}
+
+void
+object_manager :: object :: enqueue(command::type_t type,
+                                    uint64_t state)
+{
+    // Allocate the command object
+    std::list<command> tmp;
+    tmp.push_back(command());
+    tmp.back().type = type;
     tmp.back().state = state;
     // Push it onto the object's queue
     po6::threads::mutex::hold hold(&m_mtx);
@@ -389,6 +411,7 @@ object_manager :: object_manager()
     , m_command_cb()
     , m_notify_cb()
     , m_snapshot_cb()
+    , m_alarm_cb()
     , m_objects()
 {
 }
@@ -400,12 +423,14 @@ object_manager :: ~object_manager() throw ()
 void
 object_manager :: set_callback(daemon* d, void (daemon::*command_cb)(uint64_t slot, uint64_t client, uint64_t nonce, response_returncode rc, const e::slice& data),
                                           void (daemon::*notify_cb)(uint64_t client, uint64_t nonce, response_returncode rc, const e::slice& data),
-                                          void (daemon::*snapshot_cb)(std::auto_ptr<snapshot>))
+                                          void (daemon::*snapshot_cb)(std::auto_ptr<snapshot>),
+                                          void (daemon::*alarm_cb)(uint64_t obj_id, const char* func))
 {
     m_daemon = d;
     m_command_cb = command_cb;
     m_notify_cb = notify_cb;
     m_snapshot_cb = snapshot_cb;
+    m_alarm_cb = alarm_cb;
 }
 
 void
@@ -442,6 +467,12 @@ object_manager :: enqueue(uint64_t slot, uint64_t obj_id,
         {
             LOG(WARNING) << "constructor for " << obj_id << " @ "  << slot << " failed; delete the object and try again";
             return command_send_error_response(slot, client, nonce, RESPONSE_CTOR_FAILED);
+        }
+
+        if (ctx.alarm_when > 0)
+        {
+            obj->alarm_func = ctx.alarm_func;
+            obj->alarm_when = e::time() + 1000ULL * 1000ULL * 1000ULL * ctx.alarm_when;
         }
 
         obj->start_thread(this, obj_id, obj);
@@ -531,6 +562,12 @@ object_manager :: enqueue(uint64_t slot, uint64_t obj_id,
             return command_send_error_response(slot, client, nonce, RESPONSE_CTOR_FAILED);
         }
 
+        if (ctx.alarm_when > 0)
+        {
+            obj->alarm_func = ctx.alarm_func;
+            obj->alarm_when = e::time() + 1000ULL * 1000ULL * 1000ULL * ctx.alarm_when;
+        }
+
         obj->start_thread(this, obj_id, obj);
         m_objects.insert(std::make_pair(obj_id, obj));
         return command_send_response(slot, client, nonce, RESPONSE_SUCCESS, e::slice());
@@ -586,6 +623,16 @@ object_manager :: wait(uint64_t obj_id, uint64_t client, uint64_t nonce, uint64_
     {
         LOG(ERROR) << "object_manager asked to work on special object " << obj_id;
         return notify_send_error_response(client, nonce, RESPONSE_SERVER_ERROR);
+    }
+}
+
+void
+object_manager :: periodic(uint64_t now)
+{
+    for (object_map_t::iterator it = m_objects.begin();
+            it != m_objects.end(); ++it)
+    {
+        it->second->enqueue(command::ALARM, now);
     }
 }
 
@@ -896,6 +943,8 @@ object_manager :: dispatch_command(uint64_t obj_id,
             return dispatch_command_delete(obj_id, obj, cmd, shutdown);
         case command::SNAPSHOT:
             return dispatch_command_snapshot(obj_id, obj, cmd, shutdown);
+        case command::ALARM:
+            return dispatch_command_alarm(obj_id, obj, cmd, shutdown);
         case command::SHUTDOWN:
             return dispatch_command_shutdown(obj_id, obj, cmd, shutdown);
         default:
@@ -939,6 +988,12 @@ object_manager :: dispatch_command_normal(uint64_t obj_id,
         size_t data_sz = cmd.data.size() - func_sz - 1;
         sym->func(&ctx, obj->rsm, data, data_sz);
         log_messages(obj_id, &ctx, func);
+
+        if (ctx.alarm_when > 0)
+        {
+            obj->alarm_func = ctx.alarm_func;
+            obj->alarm_when = e::time() + 1000ULL * 1000ULL * 1000ULL * ctx.alarm_when;
+        }
 
         if (!ctx.response)
         {
@@ -1018,6 +1073,12 @@ object_manager :: dispatch_command_snapshot(uint64_t obj_id,
         abort();
     }
 
+    if (ctx.alarm_when > 0)
+    {
+        obj->alarm_func = ctx.alarm_func;
+        obj->alarm_when = e::time() + 1000ULL * 1000ULL * 1000ULL * ctx.alarm_when;
+    }
+
     // serialize the conditions
     snap->conditions.reserve(obj->conditions.size());
 
@@ -1046,6 +1107,20 @@ object_manager :: dispatch_command_snapshot(uint64_t obj_id,
         }
 
         command_send_response(cmd.slot, cmd.client, cmd.nonce, RESPONSE_SUCCESS, msg->as_slice());
+    }
+}
+
+void
+object_manager :: dispatch_command_alarm(uint64_t obj_id,
+                                         e::intrusive_ptr<object> obj,
+                                         const command& cmd,
+                                         bool*)
+{
+    if (cmd.state >= obj->alarm_when && obj->alarm_when > 0)
+    {
+        ((*m_daemon).*m_alarm_cb)(obj_id, obj->alarm_func);
+        obj->alarm_func = "";
+        obj->alarm_when = 0;
     }
 }
 

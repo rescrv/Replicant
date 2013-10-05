@@ -59,6 +59,10 @@ replicant_state_machine_condition_broadcast(struct replicant_state_machine_conte
                                             const char* cond,
                                             uint64_t* state);
 
+void
+replicant_state_machine_alarm(struct replicant_state_machine_context* ctx,
+                              const char* func, uint64_t seconds);
+
 struct replicant_state_machine_step
 {
     const char* name;
