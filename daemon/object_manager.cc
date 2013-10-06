@@ -163,6 +163,7 @@ class object_manager::object
                      uint64_t state);
         void dequeue(std::list<command>* commands, bool* shutdown);
         void throttle(size_t sz);
+        void set_alarm(const char* func, uint64_t seconds);
 
     // the state machine
     public:
@@ -312,6 +313,14 @@ object_manager :: object :: throttle(size_t sz)
     {
         m_command_consumed.wait();
     }
+}
+
+void
+object_manager :: object :: set_alarm(const char* func, uint64_t when)
+{
+    alarm_func = func;
+    uint64_t billion = 1000ULL * 1000ULL * 1000ULL;
+    alarm_when = e::time() + billion * when;
 }
 
 //////////////////////////////// Condition Class ///////////////////////////////
@@ -471,8 +480,7 @@ object_manager :: enqueue(uint64_t slot, uint64_t obj_id,
 
         if (ctx.alarm_when > 0)
         {
-            obj->alarm_func = ctx.alarm_func;
-            obj->alarm_when = e::time() + 1000ULL * 1000ULL * 1000ULL * ctx.alarm_when;
+            obj->set_alarm(ctx.alarm_func, ctx.alarm_when);
         }
 
         obj->start_thread(this, obj_id, obj);
@@ -564,8 +572,7 @@ object_manager :: enqueue(uint64_t slot, uint64_t obj_id,
 
         if (ctx.alarm_when > 0)
         {
-            obj->alarm_func = ctx.alarm_func;
-            obj->alarm_when = e::time() + 1000ULL * 1000ULL * 1000ULL * ctx.alarm_when;
+            obj->set_alarm(ctx.alarm_func, ctx.alarm_when);
         }
 
         obj->start_thread(this, obj_id, obj);
@@ -991,8 +998,7 @@ object_manager :: dispatch_command_normal(uint64_t obj_id,
 
         if (ctx.alarm_when > 0)
         {
-            obj->alarm_func = ctx.alarm_func;
-            obj->alarm_when = e::time() + 1000ULL * 1000ULL * 1000ULL * ctx.alarm_when;
+            obj->set_alarm(ctx.alarm_func, ctx.alarm_when);
         }
 
         if (!ctx.response)
@@ -1075,8 +1081,7 @@ object_manager :: dispatch_command_snapshot(uint64_t obj_id,
 
     if (ctx.alarm_when > 0)
     {
-        obj->alarm_func = ctx.alarm_func;
-        obj->alarm_when = e::time() + 1000ULL * 1000ULL * 1000ULL * ctx.alarm_when;
+        obj->set_alarm(ctx.alarm_func, ctx.alarm_when);
     }
 
     // serialize the conditions

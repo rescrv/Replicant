@@ -2316,9 +2316,9 @@ void
 daemon :: periodic_alarm(uint64_t now)
 {
     m_object_manager.periodic(now);
-    uint64_t billion = 1000ULL * 1000ULL * 1000ULL;
-    now = now + billion - (now % billion);
-    trip_periodic(now, &daemon::periodic_alarm);
+    uint64_t ms250 = 250ULL * 1000ULL * 1000ULL;
+    uint64_t when = now + ms250 - (now % ms250);
+    trip_periodic(when, &daemon::periodic_alarm);
 }
 
 void
