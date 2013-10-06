@@ -1498,7 +1498,7 @@ daemon :: process_condition_wait(const replicant::connection& conn,
         size_t sz = BUSYBEE_HEADER_SIZE + pack_size(REPLNET_CLIENT_UNKNOWN);
         std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
         msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_CLIENT_UNKNOWN;
-        LOG(INFO) << "SENT " << send_no_disruption(conn.token, msg);
+        send_no_disruption(conn.token, msg);
         return;
     }
 
@@ -1619,6 +1619,7 @@ daemon :: process_command_submit(const replicant::connection& conn,
         size_t sz = BUSYBEE_HEADER_SIZE + pack_size(REPLNET_CLIENT_UNKNOWN);
         msg.reset(e::buffer::create(sz));
         msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_CLIENT_UNKNOWN;
+        send_no_disruption(conn.token, msg);
         return;
     }
 
@@ -1629,6 +1630,7 @@ daemon :: process_command_submit(const replicant::connection& conn,
         size_t sz = BUSYBEE_HEADER_SIZE + pack_size(REPLNET_CLIENT_UNKNOWN);
         msg.reset(e::buffer::create(sz));
         msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_CLIENT_UNKNOWN;
+        send_no_disruption(conn.token, msg);
         return;
     }
 

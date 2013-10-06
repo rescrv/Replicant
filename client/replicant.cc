@@ -106,11 +106,13 @@ replicant_client :: replicant_client(const char* host, in_port_t port)
     , m_bootstrap(host, port)
     , m_token(0x4141414141414141ULL)
     , m_nonce(1)
+    , m_cluster(0)
     , m_state(REPLCL_DISCONNECTED)
     , m_commands()
     , m_complete()
     , m_resend()
     , m_last_error()
+    , m_cluster_jump(false)
 {
 }
 
