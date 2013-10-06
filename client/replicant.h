@@ -56,6 +56,7 @@ enum replicant_returncode
     REPLICANT_MISBEHAVING_SERVER    = 4915,
     REPLICANT_NEED_BOOTSTRAP        = 4916,
     REPLICANT_TIMEOUT               = 4917,
+    REPLICANT_CLUSTER_JUMP          = 4918,
     /* command-specific values */
     REPLICANT_BAD_LIBRARY       = 4928,
     REPLICANT_COND_DESTROYED    = 4929,
@@ -140,6 +141,7 @@ class replicant_client
                               e::unpacker up,
                               replicant_returncode* status);
         // Send commands and receive responses
+        int64_t send_bootstrap(replicant_returncode* status);
         int64_t send_to_chain_head(std::auto_ptr<e::buffer> msg,
                                    replicant_returncode* status);
         int64_t send_to_preferred_chain_position(e::intrusive_ptr<command> cmd,
@@ -150,9 +152,12 @@ class replicant_client
                                         std::auto_ptr<e::buffer> msg,
                                         e::unpacker up,
                                         replicant_returncode* status);
+        // Cluster jumps
+        int64_t report_cluster_jump(replicant_returncode* status);
         // Utilities
         uint64_t generate_token();
         void reset_to_disconnected();
+        void killall(replicant_returncode status, e::error err);
 
     private:
         replicant_client& operator = (const replicant_client& rhs);
@@ -164,12 +169,14 @@ class replicant_client
         po6::net::hostname m_bootstrap;
         uint64_t m_token;
         uint64_t m_nonce;
+        uint64_t m_cluster;
         enum { REPLCL_DISCONNECTED, REPLCL_BOOTSTRAPPED,
                REPLCL_REGISTER_SENT, REPLCL_REGISTERED } m_state;
         command_map m_commands;
         command_map m_complete;
         command_map m_resend;
         e::error m_last_error;
+        bool m_cluster_jump;
 };
 
 std::ostream&

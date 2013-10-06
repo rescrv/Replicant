@@ -496,6 +496,11 @@ replicant_client :: poll_fd()
 int64_t
 replicant_client :: inner_loop(replicant_returncode* status)
 {
+    if (m_cluster_jump)
+    {
+        return -1;
+    }
+
     int64_t ret = maintain_connection(status);
 
     if (ret != 0)
@@ -587,8 +592,7 @@ replicant_client :: inner_loop(replicant_returncode* status)
             }
             break;
         case REPLNET_CLIENT_UNKNOWN:
-            reset_to_disconnected();
-            break;
+            return report_cluster_jump(status);
         UNEXPECTED_MESSAGE_CASE(*node, NOP);
         UNEXPECTED_MESSAGE_CASE(*node, BOOTSTRAP);
         UNEXPECTED_MESSAGE_CASE(*node, SERVER_REGISTER);
@@ -667,6 +671,14 @@ replicant_client :: perform_bootstrap(replicant_returncode* status)
         case replicant::BOOTSTRAP_SUCCESS:
             m_state = REPLCL_BOOTSTRAPPED;
             *m_config = initial;
+
+            if (m_cluster > 0 && m_cluster != initial.cluster())
+            {
+                return report_cluster_jump(status);
+            }
+
+            m_cluster = initial.cluster();
+            m_cluster_jump = false;
             return 0;
         case replicant::BOOTSTRAP_SEE_ERRNO:
             ERROR(NEED_BOOTSTRAP) << "cannot connect to cluster: " << e::error::strerror(errno);
@@ -832,6 +844,14 @@ replicant_client :: handle_inform(const chain_node& node,
         return -1;
     }
 
+    if (m_cluster > 0 && m_cluster != new_config.cluster())
+    {
+        return report_cluster_jump(status);
+    }
+
+    m_cluster = new_config.cluster();
+    m_cluster_jump = false;
+
     if (m_config->version() < new_config.version())
     {
         *m_config = new_config;
@@ -854,6 +874,14 @@ replicant_client :: handle_inform(const chain_node& node,
     }
 
     return 0;
+}
+
+int64_t
+replicant_client :: send_bootstrap(replicant_returncode* status)
+{
+    std::auto_ptr<e::buffer> msg(e::buffer::create(BUSYBEE_HEADER_SIZE + pack_size(REPLNET_BOOTSTRAP)));
+    msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_BOOTSTRAP;
+    return send_to_chain_head(msg, status);
 }
 
 int64_t
@@ -1082,6 +1110,14 @@ replicant_client :: handle_command_response(const chain_node& node,
     return 0;
 }
 
+int64_t
+replicant_client :: report_cluster_jump(replicant_returncode* status)
+{
+    m_cluster_jump = true;
+    ERROR(CLUSTER_JUMP) << "jumped to another cluster";
+    return -1;
+}
+
 uint64_t
 replicant_client :: generate_token()
 {
@@ -1118,12 +1154,19 @@ replicant_client :: reset_to_disconnected()
     m_token = 0x4141414141414141ULL;
     // leave m_nonce
     m_state = REPLCL_DISCONNECTED;
+    killall(REPLICANT_NEED_BOOTSTRAP, m_last_error);
+    // Don't touch the error items
+    // Don't touch m_cluster
+}
 
+void
+replicant_client :: killall(replicant_returncode status, e::error err)
+{
     while (!m_commands.empty())
     {
         e::intrusive_ptr<command> cmd = m_commands.begin()->second;
-        cmd->fail(REPLICANT_NEED_BOOTSTRAP);
-        cmd->set_error(m_last_error);
+        cmd->fail(status);
+        cmd->set_error(err);
         m_complete.insert(*m_commands.begin());
         m_commands.erase(m_commands.begin());
     }
@@ -1131,13 +1174,11 @@ replicant_client :: reset_to_disconnected()
     while (!m_resend.empty())
     {
         e::intrusive_ptr<command> cmd = m_commands.begin()->second;
-        cmd->fail(REPLICANT_NEED_BOOTSTRAP);
-        cmd->set_error(m_last_error);
+        cmd->fail(status);
+        cmd->set_error(err);
         m_complete.insert(*m_resend.begin());
         m_resend.erase(m_resend.begin());
     }
-
-    // Don't touch the error items
 }
 
 std::ostream&
@@ -1154,6 +1195,7 @@ operator << (std::ostream& lhs, replicant_returncode rhs)
         STRINGIFY(REPLICANT_COND_DESTROYED);
         STRINGIFY(REPLICANT_SERVER_ERROR);
         STRINGIFY(REPLICANT_CTOR_FAILED);
+        STRINGIFY(REPLICANT_CLUSTER_JUMP);
         STRINGIFY(REPLICANT_BAD_LIBRARY);
         STRINGIFY(REPLICANT_TIMEOUT);
         STRINGIFY(REPLICANT_BACKOFF);
