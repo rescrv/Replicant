@@ -164,6 +164,7 @@ class object_manager::object
         void dequeue(std::list<command>* commands, bool* shutdown);
         void throttle(size_t sz);
         void set_alarm(const char* func, uint64_t seconds);
+        bool trip_alarm(uint64_t now, const char** func);
 
     // the state machine
     public:
@@ -171,8 +172,6 @@ class object_manager::object
         replicant_state_machine* sym;
         void* rsm;
         std::map<uint64_t, condition> conditions;
-        const char* alarm_func;
-        uint64_t alarm_when;
         const uint64_t created_at_slot;
 
     public:
@@ -192,6 +191,8 @@ class object_manager::object
         po6::threads::cond m_commands_avail;
         po6::threads::cond m_command_consumed;
         std::list<command> m_commands;
+        const char* m_alarm_func;
+        uint64_t m_alarm_when;
 };
 
 object_manager :: object :: object(uint64_t slot)
@@ -199,8 +200,6 @@ object_manager :: object :: object(uint64_t slot)
     , sym(NULL)
     , rsm(NULL)
     , conditions()
-    , alarm_func("")
-    , alarm_when(0)
     , created_at_slot(slot)
     , m_ref(0)
     , m_thread()
@@ -208,6 +207,8 @@ object_manager :: object :: object(uint64_t slot)
     , m_commands_avail(&m_mtx)
     , m_command_consumed(&m_mtx)
     , m_commands()
+    , m_alarm_func("")
+    , m_alarm_when(0)
 {
 }
 
@@ -318,9 +319,28 @@ object_manager :: object :: throttle(size_t sz)
 void
 object_manager :: object :: set_alarm(const char* func, uint64_t when)
 {
-    alarm_func = func;
+    po6::threads::mutex::hold hold(&m_mtx);
+    m_alarm_func = func;
     uint64_t billion = 1000ULL * 1000ULL * 1000ULL;
-    alarm_when = e::time() + billion * when;
+    m_alarm_when = e::time() + billion * when;
+}
+
+bool
+object_manager :: object :: trip_alarm(uint64_t now, const char** func)
+{
+    po6::threads::mutex::hold hold(&m_mtx);
+
+    if (now >= m_alarm_when && m_alarm_when > 0)
+    {
+        *func = m_alarm_func;
+        m_alarm_func = "";
+        m_alarm_when = 0;
+        return true;
+    }
+    else
+    {
+        return false;
+    }
 }
 
 //////////////////////////////// Condition Class ///////////////////////////////
@@ -1121,11 +1141,11 @@ object_manager :: dispatch_command_alarm(uint64_t obj_id,
                                          const command& cmd,
                                          bool*)
 {
-    if (cmd.state >= obj->alarm_when && obj->alarm_when > 0)
+    const char* alarm_func = "";
+
+    if (obj->trip_alarm(cmd.state, &alarm_func))
     {
-        ((*m_daemon).*m_alarm_cb)(obj_id, obj->alarm_func);
-        obj->alarm_func = "";
-        obj->alarm_when = 0;
+        ((*m_daemon).*m_alarm_cb)(obj_id, alarm_func);
     }
 }
 

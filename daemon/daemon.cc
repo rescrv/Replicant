@@ -2317,6 +2317,11 @@ daemon :: periodic_exchange(uint64_t now)
 void
 daemon :: periodic_alarm(uint64_t now)
 {
+    if (*m_config_manager.stable().head() != m_us)
+    {
+        return;
+    }
+
     m_object_manager.periodic(now);
     uint64_t ms250 = 250ULL * 1000ULL * 1000ULL;
     uint64_t when = now + ms250 - (now % ms250);
@@ -2328,6 +2333,7 @@ daemon :: issue_alarm(uint64_t obj_id, const char* func)
 {
     if (*m_config_manager.stable().head() != m_us)
     {
+        LOG(ERROR) << "alarm lost (should not happen)";
         return;
     }
 
