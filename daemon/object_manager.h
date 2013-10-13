@@ -62,6 +62,7 @@ class object_manager
         ~object_manager() throw ();
 
     public:
+        void enable_logging() { m_logging_enabled = true; }
         void set_callback(daemon* d, void (daemon::*command_cb)(uint64_t slot, uint64_t client, uint64_t nonce, response_returncode rc, const e::slice& data),
                                      void (daemon::*notify_cb)(uint64_t client, uint64_t nonce, response_returncode rc, const e::slice& data),
                                      void (daemon::*snapshot_cb)(std::auto_ptr<snapshot>),
@@ -118,7 +119,7 @@ class object_manager
         void (daemon::*m_snapshot_cb)(std::auto_ptr<snapshot>);
         void (daemon::*m_alarm_cb)(uint64_t obj_id, const char* func);
         object_map_t m_objects;
-
+        bool m_logging_enabled;
 };
 
 } // namespace replicant

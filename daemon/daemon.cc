@@ -396,6 +396,8 @@ daemon :: run(bool daemonize,
         }
     }
 
+    m_object_manager.enable_logging();
+
     if (init)
     {
         assert(init_obj);

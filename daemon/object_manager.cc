@@ -442,6 +442,7 @@ object_manager :: object_manager()
     , m_snapshot_cb()
     , m_alarm_cb()
     , m_objects()
+    , m_logging_enabled(false)
 {
 }
 
@@ -926,6 +927,12 @@ void
 object_manager :: log_messages(uint64_t obj_id, replicant_state_machine_context* ctx, const char* func)
 {
     ctx->close_log_output();
+
+    if (!m_logging_enabled)
+    {
+        return;
+    }
+
     std::string obj_str = obj_id_to_str(obj_id);
     const char* ptr = ctx->log_output;
     const char* end = ctx->log_output + ctx->log_output_sz;
