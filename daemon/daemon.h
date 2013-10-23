@@ -67,6 +67,7 @@ class daemon
     public:
         int run(bool daemonize,
                 po6::pathname data,
+                po6::pathname log,
                 bool set_bind_to,
                 po6::net::location bind_to,
                 bool set_existing,

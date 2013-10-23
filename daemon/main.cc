@@ -53,6 +53,7 @@ main(int argc, const char* argv[])
 
     bool daemonize = true;
     const char* data = ".";
+    const char* log = NULL;
     bool listen = false;
     const char* listen_host = "auto";
     long listen_port = 1982;
@@ -75,6 +76,9 @@ main(int argc, const char* argv[])
     ap.arg().name('D', "data")
             .description("store persistent state in this directory (default: .)")
             .metavar("dir").as_string(&data);
+    ap.arg().name('L', "log")
+            .description("store logs in this directory (default: --data)")
+            .metavar("dir").as_string(&log);
     ap.arg().name('l', "listen")
             .description("listen on a specific IP address (default: auto)")
             .metavar("IP").as_string(&listen_host).set_true(&listen);
@@ -177,6 +181,7 @@ main(int argc, const char* argv[])
         replicant::daemon d;
         return d.run(daemonize,
                      po6::pathname(data),
+                     po6::pathname(log ? log : data),
                      listen, bind_to,
                      connect, po6::net::hostname(connect_host, connect_port),
                      init_obj, init_lib, init_str);
