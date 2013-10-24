@@ -167,6 +167,12 @@ main(int argc, const char* argv[])
         return EXIT_FAILURE;
     }
 
+    if (bind_to.address == po6::net::ipaddr("0.0.0.0"))
+    {
+        std::cerr << "cannot bind to " << bind_to << " because it is not routable" << std::endl;
+        return EXIT_FAILURE;
+    }
+
     if (init && (init_obj == NULL || init_lib == NULL))
     {
         std::cerr << "object and library must be either omitted or presented as a pair" << std::endl;
