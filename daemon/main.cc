@@ -64,6 +64,7 @@ main(int argc, const char* argv[])
     const char* init_obj = NULL;
     const char* init_lib = NULL;
     const char* init_str = NULL;
+    const char* init_rst = NULL;
 
     e::argparser ap;
     ap.autohelp();
@@ -100,6 +101,9 @@ main(int argc, const char* argv[])
     ap.arg().long_name("init-string")
             .description("initialize a new cluster by calling \"init\" on the object")
             .metavar("library").as_string(&init_str).hidden();
+    ap.arg().long_name("restore")
+            .description("initialize a new cluster by restoring object/library with this backup")
+            .metavar("restore").as_string(&init_rst).hidden();
 
     if (!ap.parse(argc, argv))
     {
@@ -190,7 +194,7 @@ main(int argc, const char* argv[])
                      po6::pathname(log ? log : data),
                      listen, bind_to,
                      connect, po6::net::hostname(connect_host, connect_port),
-                     init_obj, init_lib, init_str);
+                     init_obj, init_lib, init_str, init_rst);
     }
     catch (std::exception& e)
     {

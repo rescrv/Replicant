@@ -52,6 +52,7 @@
 // e
 #include <e/endian.h>
 #include <e/envconfig.h>
+#include <e/strescape.h>
 #include <e/time.h>
 
 // BusyBee
@@ -147,7 +148,8 @@ daemon :: run(bool daemonize,
               po6::net::hostname existing,
               const char* init_obj,
               const char* init_lib,
-              const char* init_str)
+              const char* init_str,
+              const char* init_rst)
 {
     if (!install_signal_handler(SIGHUP))
     {
@@ -354,6 +356,17 @@ daemon :: run(bool daemonize,
         }
     }
 
+    if (!init && init_rst)
+    {
+        LOG(INFO) << "asked to restore from \"" << e::strescape(init_rst) << "\" "
+                  << "but we are not initializing a new cluster";
+        LOG(INFO) << "the restore operations only have an effect when "
+                  << "starting a fresh cluster";
+        LOG(INFO) << "this likely means you'll want to start with a new data-dir "
+                  << "and omit any options for connecting to an existing cluster";
+        return EXIT_FAILURE;
+    }
+
     m_busybee.reset(new busybee_mta(&m_busybee_mapper, m_us.address, m_us.token, 0/*we don't use pause/unpause*/));
     m_busybee->set_timeout(1);
 
@@ -440,19 +453,57 @@ daemon :: run(bool daemonize,
             return EXIT_FAILURE;
         }
 
-        e::pack32be(lib.size() - sizeof(uint64_t) - sizeof(uint32_t),
-                    &lib[sizeof(uint64_t)]);
-        e::slice lib_slice(&lib[0], lib.size());
-        issue_command(1, OBJECT_OBJ_NEW, 0, 1, lib_slice);
-        LOG(INFO) << "initializing " << init_obj << " with " << init_lib;
-
-        if (init_str)
+        // if this is a restore
+        if (init_rst)
         {
-            std::vector<char> init_buf(5 + strlen(init_str) + 1);
-            memmove(&init_buf[0], "init\x00", 5);
-            memmove(&init_buf[5], init_str, strlen(init_str) + 1);
-            e::slice init_slice(&init_buf[0], init_buf.size());
-            issue_command(2, obj, 0, 2, init_slice);
+            size_t offset = lib.size();
+            lib.resize(offset + sizeof(uint32_t));
+            fd = open(init_rst, O_RDONLY);
+
+            if (fd.get() < 0)
+            {
+                PLOG(ERROR) << "could not open restore file";
+                return EXIT_FAILURE;
+            }
+
+            while ((amt = fd.xread(buf, 4096)) > 0)
+            {
+                size_t tmp = lib.size();
+                lib.resize(tmp + amt);
+                memmove(&lib[tmp], buf, amt);
+            }
+
+            if (amt < 0)
+            {
+                PLOG(ERROR) << "could not read restore file";
+                return EXIT_FAILURE;
+            }
+
+            uint32_t lib_sz = offset - sizeof(uint64_t) - sizeof(uint32_t);
+            uint32_t rst_sz = lib.size() - offset - sizeof(uint32_t);
+            e::pack32be(lib_sz, &lib[sizeof(uint64_t)]);
+            e::pack32be(rst_sz, &lib[offset]);
+            e::slice cmd_slice(&lib[0], lib.size());
+            issue_command(1, OBJECT_OBJ_RESTORE, 0, 1, cmd_slice);
+            LOG(INFO) << "restoring " << init_obj << " from \"" << e::strescape(init_rst) << "\"";
+        }
+        // else this is an initialization
+        else
+        {
+            e::pack32be(lib.size() - sizeof(uint64_t) - sizeof(uint32_t),
+                        &lib[sizeof(uint64_t)]);
+            e::slice cmd_slice(&lib[0], lib.size());
+            issue_command(1, OBJECT_OBJ_NEW, 0, 1, cmd_slice);
+            LOG(INFO) << "initializing " << init_obj << " with \"" << e::strescape(init_lib) << "\"";
+
+            if (init_str)
+            {
+                std::vector<char> init_buf(5 + strlen(init_str) + 1);
+                memmove(&init_buf[0], "init\x00", 5);
+                memmove(&init_buf[5], init_str, strlen(init_str) + 1);
+                e::slice init_slice(&init_buf[0], init_buf.size());
+                issue_command(2, obj, 0, 2, init_slice);
+            }
         }
     }
 

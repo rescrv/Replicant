@@ -74,7 +74,8 @@ class daemon
                 po6::net::hostname existing,
                 const char* init_obj,
                 const char* init_lib,
-                const char* init_str);
+                const char* init_str,
+                const char* init_rst);
 
     // Configure the chain membership via (re)configuration
     private:
