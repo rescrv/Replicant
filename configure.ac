@@ -101,5 +101,6 @@ AM_CONDITIONAL([ENABLE_EXAMPLES], [test x"${example_state_machines}" = xyes])
 AC_CHECK_FUNCS([clock_gettime mach_absolute_time])
 
 AC_CONFIG_FILES([Makefile
-                 replicant.pc])
+                 replicant.pc
+                 replicant.upack])
 AC_OUTPUT
