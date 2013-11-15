@@ -1,0 +1,69 @@
+package replicant
+| debian source="replicant"
+| debian section="net"
+| version="@VERSION@"
+| release="1"
+| license="BSD"
+| copyright="2012-2013 Cornell University"
+| homepage="http://hyperdex.org"
+| tarball="http://hyperdex.org/src/replicant-{version}.tar.gz"
+| configure="--disable-static"
+| summary="A replicated state machine service"
+| debian build-requires="pkg-config, libpo6-dev, libe-dev, libbusybee-dev"
+| fedora build-requires="pkgconfig libpo6-devel libe-devel libbusybee-devel"
+| requires="replicant-daemon replicant-tools"
+'''Replicant replicates state machines.'''
+
+subpackage replicant-common
+| summary="The \"replicant\" command"
++ {bindir}/replicant
+'''{summary}'''
+
+subpackage replicant-daemon
+| summary="The daemon for replicant"
+| requires="replicant-common"
++ {libexecdir}/{version}/replicant-daemon
+'''{summary}'''
+
+subpackage replicant-tools
+| summary="Tools for managing a replicant cluster"
+| requires="replicant-common"
++ {libexecdir}/{version}/replicant-integrity-check
++ {libexecdir}/{version}/replicant-debug-dump
++ {libexecdir}/{version}/replicant-new-object
++ {libexecdir}/{version}/replicant-del-object
++ {libexecdir}/{version}/replicant-restore-object
++ {libexecdir}/{version}/replicant-backup-object
+'''{summary}'''
+
+subpackage libreplicant
+| debian name="libreplicant1"
+| summary="Client bindings for replicant"
++ {libdir}/libreplicant.so.1
++ {libdir}/libreplicant.so.1.0.0
+'''{summary}'''
+
+subpackage libreplicant-devel
+| debian name="libreplicant-dev"
+| summary="Client bindings for replicant (development files)"
++ {includedir}/replicant.h
++ {libdir}/libreplicant.so
++ {libdir}/pkgconfig/replicant.pc
+'''{summary}'''
+
+subpackage libreplicant-state-machine
+| debian name="libreplicant-state-machine1"
+| summary="Library for building state machines"
++ {libdir}/libreplicant-state-machine.so.1
++ {libdir}/libreplicant-state-machine.so.1.0.0
+'''{summary}'''
+
+subpackage libreplicant-state-machine-devel
+| debian name="libreplicant-state-machine-dev"
+| summary="Library for building state machines (development files)"
++ {includedir}/replicant_state_machine.h
++ {libdir}/libreplicant-state-machine.so
+'''{summary}'''
+
+exclude {libdir}/libreplicant.la
+exclude {libdir}/libreplicant-state-machine.la

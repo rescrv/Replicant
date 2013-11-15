@@ -117,6 +117,7 @@ replicant_daemon_LDADD += libreplicant-state-machine.la
 replicant_daemon_LDADD += -lglog -ldl -lpthread
 
 libreplicant_state_machine_la_SOURCES = daemon/replicant_state_machine_context.cc
+libreplicant_state_machine_la_LDFLAGS = -version-info 1:0:0
 
 ################################################################################
 #################################### Client ####################################
@@ -141,6 +142,7 @@ libreplicant_la_SOURCES += client/command.cc
 libreplicant_la_SOURCES += client/replicant.cc
 libreplicant_la_CXXFLAGS = $(CXXFLAGS) $(AM_CXXFLAGS)
 libreplicant_la_LIBADD = $(E_LIBS) $(BUSYBEE_LIBS)
+libreplicant_la_LDFLAGS = -version-info 1:0:0
 
 ################################################################################
 ##################################### Tools ####################################
