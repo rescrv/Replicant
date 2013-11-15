@@ -1,5 +1,5 @@
 package replicant
-| debian source="replicant"
+| source="replicant"
 | debian section="net"
 | version="@VERSION@"
 | release="1"
