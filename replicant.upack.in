@@ -9,7 +9,7 @@ package replicant
 | tarball="http://hyperdex.org/src/replicant-{version}.tar.gz"
 | configure="--disable-static"
 | summary="A replicated state machine service"
-| debian build-requires="pkg-config, libpo6-dev, libe-dev, libbusybee-dev, libpopt-dev, libhyperleveldb0, libgoogle-glog-dev"
+| debian build-requires="pkg-config, libpo6-dev, libe-dev, libbusybee-dev, libpopt-dev, libhyperleveldb-dev, libgoogle-glog-dev"
 | fedora build-requires="pkgconfig libpo6-devel libe-devel libbusybee-devel popt-devel hyperleveldb-devel glog-devel"
 | requires="replicant-daemon replicant-tools"
 '''Replicant replicates state machines.'''
