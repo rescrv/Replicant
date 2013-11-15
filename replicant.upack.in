@@ -22,18 +22,18 @@ subpackage replicant-common
 subpackage replicant-daemon
 | summary="The daemon for replicant"
 | requires="replicant-common"
-+ {libexecdir}/{version}/replicant-daemon
++ {libexecdir}/replicant-{version}/replicant-daemon
 '''{summary}'''
 
 subpackage replicant-tools
 | summary="Tools for managing a replicant cluster"
 | requires="replicant-common"
-+ {libexecdir}/{version}/replicant-integrity-check
-+ {libexecdir}/{version}/replicant-debug-dump
-+ {libexecdir}/{version}/replicant-new-object
-+ {libexecdir}/{version}/replicant-del-object
-+ {libexecdir}/{version}/replicant-restore-object
-+ {libexecdir}/{version}/replicant-backup-object
++ {libexecdir}/replicant-{version}/replicant-integrity-check
++ {libexecdir}/replicant-{version}/replicant-debug-dump
++ {libexecdir}/replicant-{version}/replicant-new-object
++ {libexecdir}/replicant-{version}/replicant-del-object
++ {libexecdir}/replicant-{version}/replicant-restore-object
++ {libexecdir}/replicant-{version}/replicant-backup-object
 '''{summary}'''
 
 subpackage libreplicant
