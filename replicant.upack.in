@@ -45,6 +45,8 @@ subpackage libreplicant
 
 subpackage libreplicant-devel
 | debian name="libreplicant-dev"
+| debian requires="libreplicant0"
+| fedora requires="libreplicant"
 | summary="Client bindings for replicant (development files)"
 + {includedir}/replicant.h
 + {libdir}/libreplicant.so
@@ -60,6 +62,8 @@ subpackage libreplicant-state-machine
 
 subpackage libreplicant-state-machine-devel
 | debian name="libreplicant-state-machine-dev"
+| debian requires="libreplicant-state-machine0"
+| fedora requires="libreplicant-state-machine"
 | summary="Library for building state machines (development files)"
 + {includedir}/replicant_state_machine.h
 + {libdir}/libreplicant-state-machine.so
