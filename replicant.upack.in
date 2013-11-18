@@ -38,6 +38,7 @@ subpackage replicant-tools
 
 subpackage libreplicant
 | debian name="libreplicant1"
+| debian section="libs"
 | summary="Client bindings for replicant"
 + {libdir}/libreplicant.so.1
 + {libdir}/libreplicant.so.1.0.0
@@ -45,6 +46,7 @@ subpackage libreplicant
 
 subpackage libreplicant-devel
 | debian name="libreplicant-dev"
+| debian section="libdevel"
 | debian requires="libreplicant1"
 | fedora requires="libreplicant"
 | summary="Client bindings for replicant (development files)"
@@ -55,6 +57,7 @@ subpackage libreplicant-devel
 
 subpackage libreplicant-state-machine
 | debian name="libreplicant-state-machine1"
+| debian section="libs"
 | summary="Library for building state machines"
 + {libdir}/libreplicant-state-machine.so.1
 + {libdir}/libreplicant-state-machine.so.1.0.0
@@ -62,6 +65,7 @@ subpackage libreplicant-state-machine
 
 subpackage libreplicant-state-machine-devel
 | debian name="libreplicant-state-machine-dev"
+| debian section="libdevel"
 | debian requires="libreplicant-state-machine1"
 | fedora requires="libreplicant-state-machine"
 | summary="Library for building state machines (development files)"
