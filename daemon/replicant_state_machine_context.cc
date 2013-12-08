@@ -33,6 +33,9 @@
 #include <e/time.h>
 
 // Replicant
+#ifndef HAVE_OPEN_MEMSTREAM
+#include "daemon/memstream.h"
+#endif
 #include "daemon/replicant_state_machine.h"
 #include "daemon/replicant_state_machine_context.h"
 
