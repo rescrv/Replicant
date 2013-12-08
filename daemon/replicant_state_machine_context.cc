@@ -25,6 +25,10 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
+#if HAVE_CONFIG_H
+#include "config.h"
+#endif
+
 // Google Log
 #include <glog/logging.h>
 
@@ -33,7 +37,7 @@
 #include <e/time.h>
 
 // Replicant
-#ifndef HAVE_OPEN_MEMSTREAM
+#if !HAVE_DECL_OPEN_MEMSTREAM
 #include "daemon/memstream.h"
 #endif
 #include "daemon/replicant_state_machine.h"

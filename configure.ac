@@ -98,7 +98,8 @@ AC_ARG_ENABLE([example_state_machines], [AS_HELP_STRING([--enable-example-state-
               [example_state_machines=${enableval}], [example_state_machines=no])
 AM_CONDITIONAL([ENABLE_EXAMPLES], [test x"${example_state_machines}" = xyes])
 
-AC_CHECK_FUNCS([clock_gettime open_memstream mach_absolute_time])
+AC_CHECK_FUNCS([clock_gettime mach_absolute_time])
+AC_CHECK_DECLS([open_memstream])
 
 AC_CONFIG_FILES([Makefile
                  replicant.pc
