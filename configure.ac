@@ -61,7 +61,7 @@ fi
 PKG_CHECK_MODULES([PO6], [libpo6 >= 0.3.1])
 PKG_CHECK_MODULES([E], [libe >= 0.3.2])
 PKG_CHECK_MODULES([BUSYBEE], [busybee >= 0.3.0])
-PKG_CHECK_MODULES([HYPERLEVELDB], [libhyperleveldb >= 1.0.0])
+PKG_CHECK_MODULES([HYPERLEVELDB], [libhyperleveldb >= 1.0])
 
 # Checks for header files.
 AC_CHECK_HEADER([popt.h],,[AC_MSG_ERROR([
@@ -99,6 +99,7 @@ AC_ARG_ENABLE([example_state_machines], [AS_HELP_STRING([--enable-example-state-
 AM_CONDITIONAL([ENABLE_EXAMPLES], [test x"${example_state_machines}" = xyes])
 
 AC_CHECK_FUNCS([clock_gettime mach_absolute_time])
+AC_CHECK_DECLS([open_memstream])
 
 AC_CONFIG_FILES([Makefile
                  replicant.pc
