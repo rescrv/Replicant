@@ -47,10 +47,11 @@
 #include "common/chain_node.h"
 #include "common/configuration.h"
 #include "common/mapper.h"
+#include "daemon/client_manager.h"
 #include "daemon/configuration_manager.h"
 #include "daemon/connection.h"
 #include "daemon/fact_store.h"
-#include "daemon/failure_detector.h"
+#include "daemon/failure_manager.h"
 #include "daemon/heal_next.h"
 #include "daemon/object_manager.h"
 #include "daemon/settings.h"
@@ -76,6 +77,9 @@ class daemon
                 const char* init_lib,
                 const char* init_str,
                 const char* init_rst);
+
+    private:
+        class deferred_command;
 
     // Configure the chain membership via (re)configuration
     private:
@@ -123,6 +127,9 @@ class daemon
         void process_client_disconnect(const replicant::connection& conn,
                                        std::auto_ptr<e::buffer> msg,
                                        e::unpacker up);
+        void process_client_timeout(const replicant::connection& conn,
+                                    std::auto_ptr<e::buffer> msg,
+                                    e::unpacker up);
 
     // Normal-case chain-replication-related goodness.
     private:
@@ -138,9 +145,23 @@ class daemon
         void issue_command(uint64_t slot, uint64_t object,
                            uint64_t client, uint64_t nonce,
                            const e::slice& data);
+        void defer_command(uint64_t object,
+                           uint64_t client,
+                           const e::slice& data);
+        void defer_command(uint64_t object,
+                           uint64_t client, uint64_t nonce,
+                           const e::slice& data);
+        void submit_command(uint64_t object,
+                            uint64_t client, uint64_t nonce,
+                            const e::slice& data);
         void acknowledge_command(uint64_t slot);
-        void record_execution(uint64_t slot, uint64_t client, uint64_t nonce, replicant::response_returncode rc, const e::slice& data);
+        void record_execution(uint64_t slot,
+                              uint64_t client,
+                              uint64_t nonce,
+                              replicant::response_returncode rc,
+                              const e::slice& data);
         void periodic_describe_slots(uint64_t now);
+        void periodic_execute_deferred(uint64_t now);
 
     // Error-case chain functions
     private:
@@ -169,7 +190,10 @@ class daemon
         void process_condition_wait(const replicant::connection& conn,
                                     std::auto_ptr<e::buffer> msg,
                                     e::unpacker up);
-        void send_notify(uint64_t client, uint64_t nonce, replicant::response_returncode rc, const e::slice& data);
+        void send_notify(uint64_t client,
+                         uint64_t nonce,
+                         replicant::response_returncode rc,
+                         const e::slice& data);
 
     // Snapshot backup/restore
     private:
@@ -184,6 +208,10 @@ class daemon
                           std::auto_ptr<e::buffer> msg,
                           e::unpacker up);
         void periodic_exchange(uint64_t now);
+        void periodic_suspect_clients(uint64_t now);
+        void periodic_disconnect_clients(uint64_t now);
+        void update_failure_detectors();
+        void issue_suspect_callback(uint64_t obj_id, uint64_t cb_id, const e::slice& data);
 
     // alarms
     private:
@@ -217,17 +245,18 @@ class daemon
         bool generate_token(uint64_t* token);
 
     private:
-        typedef std::map<uint64_t, std::tr1::shared_ptr<failure_detector> > failure_detector_map_t;
-
-    private:
         settings m_s;
         replicant::mapper m_busybee_mapper;
         std::auto_ptr<busybee_mta> m_busybee;
         chain_node m_us;
         configuration_manager m_config_manager;
         replicant::object_manager m_object_manager;
-        failure_detector_map_t m_failure_detectors;
+        failure_manager m_failure_manager;
+        client_manager m_client_manager;
+        po6::threads::mutex m_periodic_mtx;
         std::vector<periodic> m_periodic;
+        po6::threads::mutex m_deferred_mtx;
+        std::queue<deferred_command> m_deferred;
         std::map<uint64_t, uint64_t> m_temporary_servers;
         uint64_t m_heal_token;
         heal_next m_heal_next;

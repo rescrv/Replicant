@@ -76,6 +76,7 @@ class configuration
         bool in_config_chain(uint64_t token) const;
         uint64_t command_size() const;
         uint64_t config_size() const;
+        uint64_t index(uint64_t token) const;
 
     // iterators
     public:

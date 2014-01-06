@@ -50,6 +50,7 @@ class configuration_manager
     public:
         const configuration& stable() const;
         const configuration& latest() const;
+        void get_all_nodes(std::vector<uint64_t>* nodes) const;
         void get_all_nodes(std::vector<chain_node>* nodes) const;
         void get_config_chain(std::vector<configuration>* config_chain) const;
         bool get_proposal(uint64_t proposal_id,

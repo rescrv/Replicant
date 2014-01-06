@@ -140,11 +140,19 @@ class replicant_client
                               std::auto_ptr<e::buffer> msg,
                               e::unpacker up,
                               replicant_returncode* status);
+        int64_t handle_ping(const replicant::chain_node& node,
+                            std::auto_ptr<e::buffer> msg,
+                            e::unpacker up,
+                            replicant_returncode* status);
         // Send commands and receive responses
+        int64_t send_to_specific_node(const replicant::chain_node* node,
+                                      std::auto_ptr<e::buffer> msg,
+                                      replicant_returncode* status);
         int64_t send_to_chain_head(std::auto_ptr<e::buffer> msg,
                                    replicant_returncode* status);
         int64_t send_to_preferred_chain_position(e::intrusive_ptr<command> cmd,
                                                  replicant_returncode* status);
+        int64_t send_nops_to_preferred_quorum(replicant_returncode* status);
         void handle_disruption(const replicant::chain_node& node,
                                replicant_returncode* status);
         int64_t handle_command_response(const replicant::chain_node& node,

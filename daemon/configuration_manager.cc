@@ -67,6 +67,23 @@ configuration_manager :: latest() const
 }
 
 void
+configuration_manager :: get_all_nodes(std::vector<uint64_t>* nodes) const
+{
+    for (std::list<configuration>::const_iterator c = m_configs.begin();
+            c != m_configs.end(); ++c)
+    {
+        for (const chain_node* n = c->members_begin(); n != c->members_end(); ++n)
+        {
+            nodes->push_back(n->token);
+        }
+    }
+
+    std::sort(nodes->begin(), nodes->end());
+    std::vector<uint64_t>::iterator it = std::unique(nodes->begin(), nodes->end());
+    nodes->resize(it - nodes->begin());
+}
+
+void
 configuration_manager :: get_all_nodes(std::vector<chain_node>* nodes) const
 {
     for (std::list<configuration>::const_iterator c = m_configs.begin();

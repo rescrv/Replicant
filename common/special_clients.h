@@ -1,4 +1,4 @@
-// Copyright (c) 2012, Robert Escriva
+// Copyright (c) 2013, Robert Escriva
 // All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
@@ -25,43 +25,13 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
-#ifndef replicant_state_machine_context_h_
-#define replicant_state_machine_context_h_
+#ifndef replicant_special_clients_h_
+#define replicant_special_clients_h_
 
-// Replicant
-#include "daemon/object_manager.h"
-#include "daemon/replicant_state_machine.h"
+// C
+#include <stdint.h>
 
-struct replicant_state_machine_context
-{
-    public:
-        replicant_state_machine_context(uint64_t slot, uint64_t object, uint64_t client,
-                                        replicant::object_manager* om,
-                                        replicant::object_manager::object* ob);
-        ~replicant_state_machine_context() throw ();
+#define CLIENT_ALARM 0
+#define CLIENT_SUSPECT UINT64_MAX
 
-    public:
-        void close_log_output();
-
-    public:
-        uint64_t slot;
-        uint64_t object;
-        uint64_t client;
-        char* log_output;
-        size_t log_output_sz;
-        FILE* output;
-        replicant::object_manager* obj_man;
-        replicant::object_manager::object* obj;
-        const char* response;
-        size_t response_sz;
-        const char* alarm_func;
-        uint64_t alarm_when;
-        uint64_t suspect_client;
-        std::auto_ptr<e::buffer> suspect_callback;
-
-    private:
-        replicant_state_machine_context(const replicant_state_machine_context&);
-        replicant_state_machine_context& operator = (const replicant_state_machine_context&);
-};
-
-#endif // replicant_state_machine_context_h_
+#endif // replicant_special_clients_h_

@@ -77,11 +77,13 @@ replicantexec_PROGRAMS += replicant-daemon
 lib_LTLIBRARIES += libreplicant-state-machine.la
 include_HEADERS += daemon/replicant_state_machine.h
 
+noinst_HEADERS += daemon/client_manager.h
 noinst_HEADERS += daemon/configuration_manager.h
 noinst_HEADERS += daemon/connection.h
 noinst_HEADERS += daemon/daemon.h
 noinst_HEADERS += daemon/fact_store.h
 noinst_HEADERS += daemon/failure_detector.h
+noinst_HEADERS += daemon/failure_manager.h
 noinst_HEADERS += daemon/heal_next.h
 noinst_HEADERS += daemon/memstream.h
 noinst_HEADERS += daemon/object_manager.h
@@ -99,11 +101,13 @@ replicant_daemon_SOURCES += common/mapper.cc
 replicant_daemon_SOURCES += common/network_msgtype.cc
 replicant_daemon_SOURCES += common/packing.cc
 replicant_daemon_SOURCES += common/response_returncode.cc
+replicant_daemon_SOURCES += daemon/client_manager.cc
 replicant_daemon_SOURCES += daemon/configuration_manager.cc
 replicant_daemon_SOURCES += daemon/connection.cc
 replicant_daemon_SOURCES += daemon/daemon.cc
 replicant_daemon_SOURCES += daemon/fact_store.cc
 replicant_daemon_SOURCES += daemon/failure_detector.cc
+replicant_daemon_SOURCES += daemon/failure_manager.cc
 replicant_daemon_SOURCES += daemon/heal_next.cc
 replicant_daemon_SOURCES += daemon/main.cc
 replicant_daemon_SOURCES += daemon/object_manager.cc
@@ -198,6 +202,7 @@ replicantexec_LTLIBRARIES += libreplicant-example-counter.la
 replicantexec_LTLIBRARIES += libreplicant-example-echo.la
 replicantexec_LTLIBRARIES += libreplicant-example-log.la
 replicantexec_LTLIBRARIES += libreplicant-example-nop.la
+replicantexec_LTLIBRARIES += libreplicant-example-suspect.la
 TESTS += test/sh/example-state-machines
 EXTRA_DIST += test/sh/example-state-machines
 endif
@@ -219,3 +224,6 @@ libreplicant_example_log_la_CPPFLAGS = -I$(abs_top_srcdir)/daemon/ $(AM_CPPFLAGS
 
 libreplicant_example_nop_la_SOURCES = examples/nop.c
 libreplicant_example_nop_la_CPPFLAGS = -I$(abs_top_srcdir)/daemon/ $(AM_CPPFLAGS) $(CPPFLAGS)
+
+libreplicant_example_suspect_la_SOURCES = examples/suspect.c
+libreplicant_example_suspect_la_CPPFLAGS = -I$(abs_top_srcdir)/daemon/ $(AM_CPPFLAGS) $(CPPFLAGS)

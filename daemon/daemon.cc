@@ -64,6 +64,7 @@
 #include "common/bootstrap.h"
 #include "common/macros.h"
 #include "common/network_msgtype.h"
+#include "common/special_clients.h"
 #include "common/special_objects.h"
 #include "daemon/daemon.h"
 #include "daemon/heal_next.h"
@@ -98,6 +99,45 @@ monotonic_time()
     return e::time();
 }
 
+struct daemon::deferred_command
+{
+    deferred_command() : object(), client(), has_nonce(), nonce(), data() {}
+    deferred_command(uint64_t o, uint64_t c,
+                     std::tr1::shared_ptr<e::buffer> d)
+        : object(o), client(c), has_nonce(false), nonce(0), data(d) {}
+    deferred_command(uint64_t o, uint64_t c, uint64_t n,
+                     std::tr1::shared_ptr<e::buffer> d)
+        : object(o), client(c), has_nonce(true), nonce(n), data(d) {}
+    deferred_command(const deferred_command& other)
+        : object(other.object)
+        , client(other.client)
+        , has_nonce(other.has_nonce)
+        , nonce(other.nonce)
+        , data(other.data)
+    {
+    }
+    ~deferred_command() throw () {}
+    deferred_command& operator = (const deferred_command& rhs)
+    {
+        if (this != &rhs)
+        {
+            object = rhs.object;
+            client = rhs.client;
+            has_nonce = rhs.has_nonce;
+            nonce = rhs.nonce;
+            data = rhs.data;
+        }
+
+        return *this;
+    }
+
+    uint64_t object;
+    uint64_t client;
+    bool has_nonce; // else it's the slot
+    uint64_t nonce;
+    std::tr1::shared_ptr<e::buffer> data;
+};
+
 daemon :: ~daemon() throw ()
 {
 }
@@ -109,8 +149,12 @@ daemon :: daemon()
     , m_us()
     , m_config_manager()
     , m_object_manager()
-    , m_failure_detectors()
+    , m_failure_manager()
+    , m_client_manager()
+    , m_periodic_mtx()
     , m_periodic()
+    , m_deferred_mtx()
+    , m_deferred()
     , m_temporary_servers()
     , m_heal_token(0)
     , m_heal_next()
@@ -119,12 +163,21 @@ daemon :: daemon()
     , m_disrupted_retry_scheduled(false)
     , m_fs()
 {
+    m_periodic_mtx.lock();
+    m_periodic.empty();
+    m_periodic_mtx.unlock();
+    m_deferred_mtx.lock();
+    m_deferred.empty();
+    m_deferred_mtx.unlock();
     m_object_manager.set_callback(this, &daemon::record_execution,
                                         &daemon::send_notify,
                                         &daemon::handle_snapshot,
-                                        &daemon::issue_alarm);
+                                        &daemon::issue_alarm,
+                                        &daemon::issue_suspect_callback);
     trip_periodic(0, &daemon::periodic_describe_slots);
     trip_periodic(0, &daemon::periodic_exchange);
+    trip_periodic(0, &daemon::periodic_suspect_clients);
+    trip_periodic(0, &daemon::periodic_disconnect_clients);
     trip_periodic(0, &daemon::periodic_alarm);
 }
 
@@ -409,6 +462,14 @@ daemon :: run(bool daemonize,
             m_object_manager.enqueue(slot, object, client, nonce, dat);
             m_object_manager.throttle(object, 16);
         }
+        else if (object == OBJECT_CLI_REG)
+        {
+            m_client_manager.register_client(client);
+        }
+        else if (object == OBJECT_CLI_DIE)
+        {
+            m_client_manager.deregister_client(client);
+        }
     }
 
     m_object_manager.enable_logging();
@@ -551,6 +612,9 @@ daemon :: run(bool daemonize,
                 break;
             case REPLNET_CLIENT_DISCONNECT:
                 process_client_disconnect(conn, msg, up);
+                break;
+            case REPLNET_CLIENT_TIMEOUT:
+                process_client_timeout(conn, msg, up);
                 break;
             case REPLNET_CLIENT_UNKNOWN:
                 LOG(WARNING) << "dropping \"CLIENT_UNKNOWN\" received by server";
@@ -1163,7 +1227,7 @@ daemon :: post_reconfiguration_hooks()
 
     // Inform all clients
     std::vector<uint64_t> clients;
-    m_fs.get_all_clients(&clients);
+    m_client_manager.list_clients(&clients);
 
     for (size_t i = 0; i < clients.size(); ++i)
     {
@@ -1212,40 +1276,8 @@ daemon :: post_reconfiguration_hooks()
     }
 
     // Update the failure manager with full cluster membership
-    std::vector<chain_node> _nodes;
-    m_config_manager.get_all_nodes(&_nodes);
-    std::vector<uint64_t> nodes;
-
-    for (size_t i = 0; i < _nodes.size(); ++i)
-    {
-        nodes.push_back(_nodes[i].token);
-    }
-
-    std::sort(nodes.begin(), nodes.end());
-
-    for (size_t i = 0; i < nodes.size(); ++i)
-    {
-        if (m_failure_detectors.find(nodes[i]) == m_failure_detectors.end())
-        {
-            std::tr1::shared_ptr<failure_detector> ptr(new failure_detector());
-            m_failure_detectors.insert(std::make_pair(nodes[i], ptr));
-        }
-    }
-
-    failure_detector_map_t::iterator it = m_failure_detectors.begin();
-
-    while (it != m_failure_detectors.end())
-    {
-        if (!std::binary_search(nodes.begin(), nodes.end(), it->first))
-        {
-            m_failure_detectors.erase(it);
-            it = m_failure_detectors.begin();
-        }
-        else
-        {
-            ++it;
-        }
-    }
+    update_failure_detectors();
+    m_client_manager.proof_of_life(monotonic_time());
 
     // Log to let people know
     LOG(INFO) << "the latest stable configuration is " << m_config_manager.stable();
@@ -1286,7 +1318,7 @@ compare_suspicions(const suspicion& lhs, const suspicion& rhs)
 static void
 get_suspicions(uint64_t now,
                const replicant::chain_node& us,
-               const std::map<uint64_t, std::tr1::shared_ptr<replicant::failure_detector> >& fds,
+               const replicant::failure_manager& fm,
                const replicant::configuration& config,
                std::vector<suspicion>* suspicions)
 {
@@ -1296,17 +1328,21 @@ get_suspicions(uint64_t now,
 
     for (ssize_t i = 0; i < end - nodes; ++i)
     {
-        std::map<uint64_t, std::tr1::shared_ptr<failure_detector> >::const_iterator it;
-        it = fds.find(nodes[i].token);
+        if (nodes[i].token == us.token)
+        {
+            continue;
+        }
 
-        if (it == fds.end() || nodes[i].token == us.token)
+        double d = fm.suspicion(nodes[i].token, now);
+
+        if (d < 0)
         {
             continue;
         }
 
         suspicions->push_back(suspicion());
         suspicions->back().token = nodes[i].token;
-        suspicions->back().suspicion = it->second->suspicion(now);
+        suspicions->back().suspicion = d;
         suspicions->back().mean = 0;
         suspicions->back().stdev = 0;
         suspicions->back().in_chain = config.in_config_chain(nodes[i].token);
@@ -1345,7 +1381,7 @@ daemon :: periodic_maintain_cluster(uint64_t now)
 
     // compute the suspicion for all nodes
     std::vector<suspicion> suspicions;
-    get_suspicions(now, m_us, m_failure_detectors, m_config_manager.latest(), &suspicions);
+    get_suspicions(now, m_us, m_failure_manager, m_config_manager.latest(), &suspicions);
 
     // determine a cutoff point in the suspicions vector.
     // for each suspicions[i]:
@@ -1621,7 +1657,7 @@ daemon :: process_client_disconnect(const replicant::connection& conn,
 {
     uint64_t nonce;
     up = up >> nonce;
-    CHECK_UNPACK(CLIENT_REGISTER, up);
+    CHECK_UNPACK(CLIENT_DISCONNECT, up);
 
     if (!conn.is_client)
     {
@@ -1637,12 +1673,38 @@ daemon :: process_client_disconnect(const replicant::connection& conn,
         return;
     }
 
-    size_t sz = BUSYBEE_HEADER_SIZE
-              + pack_size(REPLNET_CLIENT_DISCONNECT);
-    std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
-    msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_CLIENT_DISCONNECT;
     uint64_t slot = m_fs.next_slot_to_issue();
     issue_command(slot, OBJECT_CLI_DIE, conn.token, nonce, e::slice("", 0));
+}
+
+void
+daemon :: process_client_timeout(const replicant::connection& conn,
+                                 std::auto_ptr<e::buffer>,
+                                 e::unpacker up)
+{
+    uint64_t version;
+    uint64_t client;
+    up = up >> version >> client;
+    CHECK_UNPACK(CLIENT_TIMEOUT, up);
+
+    if (!conn.is_cluster_member)
+    {
+        LOG(WARNING) << "rejecting \"CLIENT_TIMEOUT\" from " << conn.token
+                     << "/" << conn.addr << " which is not a cluster member";
+        return;
+    }
+
+    const chain_node* head = m_config_manager.stable().head();
+
+    if (!head || *head != m_us ||
+        version != m_config_manager.stable().version())
+    {
+        // silently drop because the sender is obligated to retry
+        return;
+    }
+
+    uint64_t slot = m_fs.next_slot_to_issue();
+    issue_command(slot, OBJECT_CLI_DIE, client, UINT64_MAX, e::slice("", 0));
 }
 
 void
@@ -1823,6 +1885,7 @@ daemon :: issue_command(uint64_t slot,
 #endif
 
     m_fs.issue_slot(slot, object, client, nonce, data);
+    m_client_manager.proof_of_life(client, monotonic_time());
     const chain_node* next = m_config_manager.stable().next(m_us.token);
 
     if (next)
@@ -1848,6 +1911,62 @@ daemon :: issue_command(uint64_t slot,
         !m_config_manager.stable().in_command_chain(m_us.token))
     {
         acknowledge_command(slot);
+    }
+}
+
+void
+daemon :: defer_command(uint64_t object,
+                        uint64_t client,
+                        const e::slice& _data)
+{
+    std::tr1::shared_ptr<e::buffer> data(e::buffer::create(_data.size()));
+    data->resize(_data.size());
+    memmove(data->data(), _data.data(), _data.size());
+
+    {
+        po6::threads::mutex::hold hold(&m_deferred_mtx);
+        m_deferred.push(deferred_command(object, client, data));
+    }
+
+    trip_periodic(0, &daemon::periodic_execute_deferred);
+}
+
+void
+daemon :: defer_command(uint64_t object,
+                        uint64_t client, uint64_t nonce,
+                        const e::slice& _data)
+{
+    std::tr1::shared_ptr<e::buffer> data(e::buffer::create(_data.size()));
+    data->resize(_data.size());
+    memmove(data->data(), _data.data(), _data.size());
+
+    {
+        po6::threads::mutex::hold hold(&m_deferred_mtx);
+        m_deferred.push(deferred_command(object, client, nonce, data));
+    }
+
+    trip_periodic(0, &daemon::periodic_execute_deferred);
+}
+
+void
+daemon :: submit_command(uint64_t object,
+                         uint64_t client, uint64_t nonce,
+                         const e::slice& data)
+{
+    size_t sz = BUSYBEE_HEADER_SIZE
+              + pack_size(REPLNET_COMMAND_SUBMIT)
+              + 3 * sizeof(uint64_t)
+              + data.size();
+    std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
+    e::buffer::packer pa = msg->pack_at(BUSYBEE_HEADER_SIZE)
+        << REPLNET_COMMAND_SUBMIT << object << client << nonce;
+    pa.copy(data);
+
+    const chain_node* head = m_config_manager.stable().head();
+
+    if (head)
+    {
+        send(*head, msg);
     }
 }
 
@@ -1909,11 +2028,15 @@ daemon :: acknowledge_command(uint64_t slot)
         {
             LOG(INFO) << "registering client " << client;
             m_fs.reg_client(client);
+            m_client_manager.register_client(client);
+            update_failure_detectors();
         }
         else
         {
             LOG(INFO) << "disconnecting client " << client;
             m_fs.die_client(client);
+            m_client_manager.deregister_client(client);
+            update_failure_detectors();
         }
 
         size_t sz = BUSYBEE_HEADER_SIZE
@@ -1960,6 +2083,27 @@ daemon :: periodic_describe_slots(uint64_t now)
     {
         LOG(INFO) << "we've transfered through " << m_heal_next.acknowledged
                   << " and have begun transfer up to " << m_heal_next.proposed;
+    }
+}
+
+void
+daemon :: periodic_execute_deferred(uint64_t)
+{
+    while (!m_deferred.empty())
+    {
+        const deferred_command& dc(m_deferred.front());
+        uint64_t slot = m_fs.next_slot_to_issue();
+
+        if (dc.has_nonce)
+        {
+            issue_command(slot, dc.object, dc.client, dc.nonce, dc.data->as_slice());
+        }
+        else
+        {
+            issue_command(slot, dc.object, dc.client, slot, dc.data->as_slice());
+        }
+
+        m_deferred.pop();
     }
 }
 
@@ -2327,12 +2471,12 @@ daemon :: process_pong(const replicant::connection& conn,
     uint64_t seqno = 0;
     up = up >> seqno;
     CHECK_UNPACK(PONG, up);
+    uint64_t now = monotonic_time();
+    m_failure_manager.pong(conn.token, seqno, now);
 
-    failure_detector_map_t::iterator it = m_failure_detectors.find(conn.token);
-
-    if (it != m_failure_detectors.end())
+    if (conn.is_client)
     {
-        it->second->heartbeat(seqno, monotonic_time());
+        m_client_manager.proof_of_life(conn.token, now);
     }
 }
 
@@ -2340,33 +2484,97 @@ void
 daemon :: periodic_exchange(uint64_t now)
 {
     trip_periodic(now + m_s.PING_INTERVAL, &daemon::periodic_exchange);
-    std::vector<chain_node> nodes;
-    m_config_manager.get_all_nodes(&nodes);
     uint64_t version = m_config_manager.stable().version();
+    m_failure_manager.ping(this, &daemon::send_no_disruption, version);
+}
 
-    for (size_t i = 0; i < nodes.size(); ++i)
+void
+daemon :: periodic_suspect_clients(uint64_t now)
+{
+    trip_periodic(now + m_s.PING_INTERVAL, &daemon::periodic_suspect_clients);
+    const configuration& config(m_config_manager.stable());
+    std::vector<uint64_t> clients;
+    m_client_manager.owned_clients(config.index(m_us.token),
+                                   config.config_size(),
+                                   &clients);
+
+    for (size_t i = 0; i < clients.size(); ++i)
     {
-        if (nodes[i] == m_us)
+        double d = m_failure_manager.suspicion(clients[i], now);
+
+        if (d > m_s.CLIENT_SUSPICION)
+        {
+            m_object_manager.suspect(clients[i]);
+        }
+    }
+}
+
+void
+daemon :: periodic_disconnect_clients(uint64_t now)
+{
+    trip_periodic(now + m_s.CLIENT_DISCONNECT_INTERVAL,
+                  &daemon::periodic_disconnect_clients);
+    const configuration& config(m_config_manager.stable());
+    std::vector<uint64_t> our_clients;
+    m_client_manager.owned_clients(config.index(m_us.token),
+                                   config.config_size(),
+                                   &our_clients);
+    std::vector<uint64_t> dead_clients;
+    m_client_manager.last_seen_before(now - m_s.CLIENT_DISCONNECT_TIMEOUT,
+                                      &dead_clients);
+    uint64_t version = m_config_manager.stable().version();
+    const chain_node* head = m_config_manager.stable().head();
+
+    if (!head)
+    {
+        return;
+    }
+
+    for (size_t i = 0; i < our_clients.size(); ++i)
+    {
+        if (!std::binary_search(dead_clients.begin(),
+                                dead_clients.end(),
+                                our_clients[i]))
         {
             continue;
         }
 
-        failure_detector_map_t::iterator it = m_failure_detectors.find(nodes[i].token);
-
-        if (it == m_failure_detectors.end())
-        {
-            continue;
-        }
-
-        uint64_t seqno = it->second->seqno();
         size_t sz = BUSYBEE_HEADER_SIZE
-                  + pack_size(REPLNET_PING)
+                  + pack_size(REPLNET_CLIENT_TIMEOUT)
                   + sizeof(uint64_t)
                   + sizeof(uint64_t);
         std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
-        msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_PING << version << seqno;
-        send_no_disruption(nodes[i].token, msg);
+        msg->pack_at(BUSYBEE_HEADER_SIZE)
+            << REPLNET_CLIENT_TIMEOUT << version << our_clients[i];
+        send_no_disruption(head->token, msg);
+        LOG(INFO) << "session for " << our_clients[i] << " timed out";
     }
+
+    std::vector<uint64_t> all_clients;
+    m_client_manager.list_clients(&all_clients);
+    m_object_manager.suspect_if_not_listed(all_clients);
+}
+
+void
+daemon :: update_failure_detectors()
+{
+    std::vector<uint64_t> nodes;
+    m_config_manager.get_all_nodes(&nodes);
+    std::vector<uint64_t> clients;
+    m_client_manager.list_clients(&clients);
+    std::vector<uint64_t> ids(nodes.size() + clients.size());
+    std::merge(nodes.begin(), nodes.end(),
+               clients.begin(), clients.end(),
+               ids.begin());
+    m_failure_manager.track(ids);
+}
+
+void
+daemon :: issue_suspect_callback(uint64_t obj_id,
+                                 uint64_t cb_id,
+                                 const e::slice& data)
+{
+    submit_command(obj_id, CLIENT_SUSPECT, cb_id, data);
 }
 
 void
@@ -2393,9 +2601,7 @@ daemon :: issue_alarm(uint64_t obj_id, const char* func)
     }
 
     e::slice data(func, strlen(func) + 1);
-    uint64_t slot = m_fs.next_slot_to_issue();
-    issue_command(slot, obj_id, 0, slot, data);
-    return;
+    defer_command(obj_id, CLIENT_ALARM, data);
 }
 
 bool
@@ -2514,6 +2720,13 @@ daemon :: send(const chain_node& node, std::auto_ptr<e::buffer> msg)
 bool
 daemon :: send_no_disruption(uint64_t token, std::auto_ptr<e::buffer> msg)
 {
+    const chain_node* node = m_config_manager.latest().node_from_token(token);
+
+    if (node)
+    {
+        m_busybee_mapper.set(*node);
+    }
+
     switch (m_busybee->send(token, msg))
     {
         case BUSYBEE_SUCCESS:
@@ -2640,6 +2853,8 @@ compare_periodic(const _periodic& lhs, const _periodic& rhs)
 void
 daemon :: trip_periodic(uint64_t when, periodic_fptr fp)
 {
+    po6::threads::mutex::hold hold(&m_periodic_mtx);
+
     for (size_t i = 0; i < m_periodic.size(); ++i)
     {
         if (m_periodic[i].second == fp)
@@ -2668,6 +2883,7 @@ daemon :: trip_periodic(uint64_t when, periodic_fptr fp)
 void
 daemon :: run_periodic()
 {
+    po6::threads::mutex::hold hold(&m_periodic_mtx);
     uint64_t now = monotonic_time();
 
     while (!m_periodic.empty() && m_periodic[0].first <= now)
@@ -2683,7 +2899,9 @@ daemon :: run_periodic()
         std::pop_heap(m_periodic.begin(), m_periodic.end(), compare_periodic);
         fp = m_periodic.back().second;
         m_periodic.pop_back();
+        m_periodic_mtx.unlock();
         (this->*fp)(now);
+        m_periodic_mtx.lock();
     }
 }
 

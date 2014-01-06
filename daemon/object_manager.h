@@ -66,10 +66,13 @@ class object_manager
         void set_callback(daemon* d, void (daemon::*command_cb)(uint64_t slot, uint64_t client, uint64_t nonce, response_returncode rc, const e::slice& data),
                                      void (daemon::*notify_cb)(uint64_t client, uint64_t nonce, response_returncode rc, const e::slice& data),
                                      void (daemon::*snapshot_cb)(std::auto_ptr<snapshot>),
-                                     void (daemon::*alarm_cb)(uint64_t obj_id, const char* func));
+                                     void (daemon::*alarm_cb)(uint64_t obj_id, const char* func),
+                                     void (daemon::*suspect_cb)(uint64_t obj_id, uint64_t cb_id, const e::slice& data));
         void enqueue(uint64_t slot, uint64_t object,
                      uint64_t client, uint64_t nonce,
                      const e::slice& data);
+        void suspect(uint64_t client);
+        void suspect_if_not_listed(const std::vector<uint64_t>& clients);
         void throttle(uint64_t object, size_t sz);
         void wait(uint64_t object, uint64_t client, uint64_t nonce, uint64_t cond, uint64_t state);
         void periodic(uint64_t now);
@@ -118,6 +121,7 @@ class object_manager
         void (daemon::*m_notify_cb)(uint64_t client, uint64_t nonce, response_returncode rc, const e::slice& data);
         void (daemon::*m_snapshot_cb)(std::auto_ptr<snapshot>);
         void (daemon::*m_alarm_cb)(uint64_t obj_id, const char* func);
+        void (daemon::*m_suspect_cb)(uint64_t obj_id, uint64_t cb_id, const e::slice& data);
         object_map_t m_objects;
         bool m_logging_enabled;
 };

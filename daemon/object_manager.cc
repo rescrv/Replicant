@@ -25,8 +25,11 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
+#define __STDC_LIMIT_MACROS
+
 // C
 #include <cstdio>
+#include <stdint.h>
 
 // POSIX
 #include <dlfcn.h>
@@ -55,6 +58,7 @@
 
 // Replicant
 #include "common/network_msgtype.h"
+#include "common/special_clients.h"
 #include "common/special_objects.h"
 #include "daemon/daemon.h"
 #include "daemon/object_manager.h"
@@ -139,6 +143,7 @@ class object_manager::object
 {
     public:
         class condition;
+        class suspicion;
 
     public:
         object(uint64_t created_at_slot);
@@ -165,8 +170,15 @@ class object_manager::object
         void throttle(size_t sz);
         void set_alarm(const char* func, uint64_t seconds);
         bool trip_alarm(uint64_t now, const char** func);
+        void set_suspect(uint64_t client,
+                         uint64_t slot,
+                         std::auto_ptr<e::buffer> callback);
+        bool get_suspect_callback(uint64_t client, suspicion* s);
+        void get_suspects_not_listed(const std::vector<uint64_t>& clients,
+                                     std::vector<suspicion>* s);
+        void clear_suspect(uint64_t slot);
 
-    // the state machine
+    // the state machine; only manipulate within background thread
     public:
         void* lib;
         replicant_state_machine* sym;
@@ -193,6 +205,15 @@ class object_manager::object
         std::list<command> m_commands;
         const char* m_alarm_func;
         uint64_t m_alarm_when;
+        std::map<uint64_t, suspicion> m_suspicions;
+};
+
+struct object_manager::object::suspicion
+{
+    suspicion() : slot(0), callback() {}
+    ~suspicion() throw () {}
+    uint64_t slot;
+    std::tr1::shared_ptr<e::buffer> callback;
 };
 
 object_manager :: object :: object(uint64_t slot)
@@ -209,6 +230,7 @@ object_manager :: object :: object(uint64_t slot)
     , m_commands()
     , m_alarm_func("")
     , m_alarm_when(0)
+    , m_suspicions()
 {
 }
 
@@ -343,6 +365,65 @@ object_manager :: object :: trip_alarm(uint64_t now, const char** func)
     }
 }
 
+void
+object_manager :: object :: set_suspect(uint64_t client, uint64_t slot, std::auto_ptr<e::buffer> _callback)
+{
+    po6::threads::mutex::hold hold(&m_mtx);
+    suspicion s;
+    s.slot = slot;
+    s.callback.reset(_callback.release());
+    m_suspicions[client] = s;
+}
+
+bool
+object_manager :: object :: get_suspect_callback(uint64_t client, suspicion* s)
+{
+    po6::threads::mutex::hold hold(&m_mtx);
+    std::map<uint64_t, suspicion>::iterator it = m_suspicions.find(client);
+
+    if (it == m_suspicions.end())
+    {
+        return false;
+    }
+
+    *s = it->second;
+    return true;
+}
+
+void
+object_manager :: object :: get_suspects_not_listed(const std::vector<uint64_t>& clients,
+                                                    std::vector<suspicion>* s)
+{
+    po6::threads::mutex::hold hold(&m_mtx);
+
+    for (std::map<uint64_t, suspicion>::iterator it = m_suspicions.begin();
+            it != m_suspicions.end(); ++it)
+    {
+        if (std::binary_search(clients.begin(), clients.end(), it->first))
+        {
+            continue;
+        }
+
+        s->push_back(it->second);
+    }
+}
+
+void
+object_manager :: object :: clear_suspect(uint64_t slot)
+{
+    po6::threads::mutex::hold hold(&m_mtx);
+
+    for (std::map<uint64_t, suspicion>::iterator it = m_suspicions.begin();
+            it != m_suspicions.end(); ++it)
+    {
+        if (it->second.slot == slot)
+        {
+            m_suspicions.erase(it);
+            break;
+        }
+    }
+}
+
 //////////////////////////////// Condition Class ///////////////////////////////
 
 class object_manager::object::condition
@@ -441,6 +522,7 @@ object_manager :: object_manager()
     , m_notify_cb()
     , m_snapshot_cb()
     , m_alarm_cb()
+    , m_suspect_cb()
     , m_objects()
     , m_logging_enabled(false)
 {
@@ -454,13 +536,15 @@ void
 object_manager :: set_callback(daemon* d, void (daemon::*command_cb)(uint64_t slot, uint64_t client, uint64_t nonce, response_returncode rc, const e::slice& data),
                                           void (daemon::*notify_cb)(uint64_t client, uint64_t nonce, response_returncode rc, const e::slice& data),
                                           void (daemon::*snapshot_cb)(std::auto_ptr<snapshot>),
-                                          void (daemon::*alarm_cb)(uint64_t obj_id, const char* func))
+                                          void (daemon::*alarm_cb)(uint64_t obj_id, const char* func),
+                                          void (daemon::*suspect_cb)(uint64_t obj_id, uint64_t cb_id, const e::slice& data))
 {
     m_daemon = d;
     m_command_cb = command_cb;
     m_notify_cb = notify_cb;
     m_snapshot_cb = snapshot_cb;
     m_alarm_cb = alarm_cb;
+    m_suspect_cb = suspect_cb;
 }
 
 void
@@ -502,6 +586,11 @@ object_manager :: enqueue(uint64_t slot, uint64_t obj_id,
         if (ctx.alarm_when > 0)
         {
             obj->set_alarm(ctx.alarm_func, ctx.alarm_when);
+        }
+
+        if (ctx.suspect_client > 0)
+        {
+            obj->set_suspect(ctx.suspect_client, slot, ctx.suspect_callback);
         }
 
         obj->start_thread(this, obj_id, obj);
@@ -596,6 +685,11 @@ object_manager :: enqueue(uint64_t slot, uint64_t obj_id,
             obj->set_alarm(ctx.alarm_func, ctx.alarm_when);
         }
 
+        if (ctx.suspect_client > 0)
+        {
+            obj->set_suspect(ctx.suspect_client, slot, ctx.suspect_callback);
+        }
+
         obj->start_thread(this, obj_id, obj);
         m_objects.insert(std::make_pair(obj_id, obj));
         return command_send_response(slot, client, nonce, RESPONSE_SUCCESS, e::slice());
@@ -615,6 +709,39 @@ object_manager :: enqueue(uint64_t slot, uint64_t obj_id,
     {
         LOG(ERROR) << "object_manager asked to work on special object " << obj_id;
         return command_send_error_response(slot, client, nonce, RESPONSE_SERVER_ERROR);
+    }
+}
+
+void
+object_manager :: suspect(uint64_t client)
+{
+    for (object_map_t::iterator it = m_objects.begin();
+            it != m_objects.end(); ++it)
+    {
+        object::suspicion s;
+
+        if (!it->second->get_suspect_callback(client, &s))
+        {
+            continue;
+        }
+
+        (m_daemon->*m_suspect_cb)(it->first, s.slot, s.callback->as_slice());
+    }
+}
+
+void
+object_manager :: suspect_if_not_listed(const std::vector<uint64_t>& clients)
+{
+    for (object_map_t::iterator it = m_objects.begin();
+            it != m_objects.end(); ++it)
+    {
+        std::vector<object::suspicion> s;
+        it->second->get_suspects_not_listed(clients, &s);
+
+        for (size_t i = 0; i < s.size(); ++i)
+        {
+            (m_daemon->*m_suspect_cb)(it->first, s[i].slot, s[i].callback->as_slice());
+        }
     }
 }
 
@@ -967,6 +1094,11 @@ object_manager :: dispatch_command(uint64_t obj_id,
                                    const command& cmd,
                                    bool* shutdown)
 {
+    if (cmd.client == CLIENT_SUSPECT)
+    {
+        obj->clear_suspect(cmd.nonce);
+    }
+
     switch (cmd.type)
     {
         case command::NORMAL:
@@ -1026,6 +1158,11 @@ object_manager :: dispatch_command_normal(uint64_t obj_id,
         if (ctx.alarm_when > 0)
         {
             obj->set_alarm(ctx.alarm_func, ctx.alarm_when);
+        }
+
+        if (ctx.suspect_client > 0)
+        {
+            obj->set_suspect(ctx.suspect_client, cmd.slot, ctx.suspect_callback);
         }
 
         if (!ctx.response)
@@ -1109,6 +1246,11 @@ object_manager :: dispatch_command_snapshot(uint64_t obj_id,
     if (ctx.alarm_when > 0)
     {
         obj->set_alarm(ctx.alarm_func, ctx.alarm_when);
+    }
+
+    if (ctx.suspect_client > 0)
+    {
+        obj->set_suspect(ctx.suspect_client, cmd.slot, ctx.suspect_callback);
     }
 
     // serialize the conditions

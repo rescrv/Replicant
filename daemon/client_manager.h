@@ -1,4 +1,4 @@
-// Copyright (c) 2012, Robert Escriva
+// Copyright (c) 2014, Robert Escriva
 // All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
@@ -25,43 +25,40 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
-#ifndef replicant_state_machine_context_h_
-#define replicant_state_machine_context_h_
+#ifndef replicant_daemon_client_manager_h_
+#define replicant_daemon_client_manager_h_
 
-// Replicant
-#include "daemon/object_manager.h"
-#include "daemon/replicant_state_machine.h"
+// C
+#include <stdint.h>
 
-struct replicant_state_machine_context
+// STL
+#include <vector>
+
+namespace replicant
+{
+
+class client_manager
 {
     public:
-        replicant_state_machine_context(uint64_t slot, uint64_t object, uint64_t client,
-                                        replicant::object_manager* om,
-                                        replicant::object_manager::object* ob);
-        ~replicant_state_machine_context() throw ();
+        client_manager();
+        ~client_manager() throw ();
 
     public:
-        void close_log_output();
-
-    public:
-        uint64_t slot;
-        uint64_t object;
-        uint64_t client;
-        char* log_output;
-        size_t log_output_sz;
-        FILE* output;
-        replicant::object_manager* obj_man;
-        replicant::object_manager::object* obj;
-        const char* response;
-        size_t response_sz;
-        const char* alarm_func;
-        uint64_t alarm_when;
-        uint64_t suspect_client;
-        std::auto_ptr<e::buffer> suspect_callback;
+        void register_client(uint64_t client);
+        void deregister_client(uint64_t client);
+        void list_clients(std::vector<uint64_t>* clients);
+        void owned_clients(uint64_t chain_index,
+                           uint64_t chain_length,
+                           std::vector<uint64_t>* clients);
+        void last_seen_before(uint64_t when, std::vector<uint64_t>* clients);
+        void proof_of_life(uint64_t now);
+        void proof_of_life(uint64_t client, uint64_t now);
 
     private:
-        replicant_state_machine_context(const replicant_state_machine_context&);
-        replicant_state_machine_context& operator = (const replicant_state_machine_context&);
+        class client_metadata;
+        std::vector<client_metadata> m_clients;
 };
 
-#endif // replicant_state_machine_context_h_
+} // namespace replicant
+
+#endif // replicant_daemon_client_manager_h_

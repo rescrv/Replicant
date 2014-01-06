@@ -1,4 +1,4 @@
-// Copyright (c) 2012, Robert Escriva
+// Copyright (c) 2014, Robert Escriva
 // All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
@@ -25,43 +25,55 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
-#ifndef replicant_state_machine_context_h_
-#define replicant_state_machine_context_h_
+#ifndef replicant_daemon_failure_manager_h_
+#define replicant_daemon_failure_manager_h_
+
+// C
+#include <stdint.h>
+
+// STL
+#include <memory>
+#include <utility>
+#include <vector>
+
+// Google Sparsehash
+#include <google/dense_hash_map>
+
+// e
+#include <e/buffer.h>
 
 // Replicant
-#include "daemon/object_manager.h"
-#include "daemon/replicant_state_machine.h"
+#include "daemon/failure_detector.h"
 
-struct replicant_state_machine_context
+namespace replicant
+{
+class daemon;
+
+class failure_manager
 {
     public:
-        replicant_state_machine_context(uint64_t slot, uint64_t object, uint64_t client,
-                                        replicant::object_manager* om,
-                                        replicant::object_manager::object* ob);
-        ~replicant_state_machine_context() throw ();
+        failure_manager();
+        ~failure_manager() throw ();
 
     public:
-        void close_log_output();
-
-    public:
-        uint64_t slot;
-        uint64_t object;
-        uint64_t client;
-        char* log_output;
-        size_t log_output_sz;
-        FILE* output;
-        replicant::object_manager* obj_man;
-        replicant::object_manager::object* obj;
-        const char* response;
-        size_t response_sz;
-        const char* alarm_func;
-        uint64_t alarm_when;
-        uint64_t suspect_client;
-        std::auto_ptr<e::buffer> suspect_callback;
+        void track(const std::vector<uint64_t>& tokens);
+        void ping(daemon* d,
+                  bool (daemon::*s)(uint64_t, std::auto_ptr<e::buffer>),
+                  uint64_t version);
+        void pong(uint64_t token, uint64_t seqno, uint64_t now);
+        double suspicion(uint64_t token, uint64_t now) const;
 
     private:
-        replicant_state_machine_context(const replicant_state_machine_context&);
-        replicant_state_machine_context& operator = (const replicant_state_machine_context&);
+        typedef e::intrusive_ptr<failure_detector> fd_ptr;
+        typedef std::vector<std::pair<uint64_t, fd_ptr> > fd_vector_t;
+
+    private:
+        failure_detector* find(uint64_t) const;
+
+    private:
+        fd_vector_t m_fds;
 };
 
-#endif // replicant_state_machine_context_h_
+} // namespace replicant
+
+#endif // replicant_daemon_failure_manager_h_

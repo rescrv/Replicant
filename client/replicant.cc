@@ -395,9 +395,11 @@ replicant_client :: disconnect()
     std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
     msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_CLIENT_DISCONNECT << nonce;
     e::intrusive_ptr<command> cmd = new command(&rc, nonce, msg, NULL, NULL);
-    send_to_preferred_chain_position(cmd, &rc);
+    msg.reset(cmd->request()->copy());
+    send_to_chain_head(msg, &rc);
 
-    while (m_commands.find(nonce) != m_commands.end())
+    while (m_commands.find(nonce) != m_commands.end() &&
+           m_resend.find(nonce) == m_commands.end())
     {
         m_busybee->set_timeout(-1);
         inner_loop(&rc);
@@ -593,6 +595,12 @@ replicant_client :: inner_loop(replicant_returncode* status)
             break;
         case REPLNET_CLIENT_UNKNOWN:
             return report_cluster_jump(status);
+        case REPLNET_PING:
+            if ((ret = handle_ping(*node, msg, up, status)) < 0)
+            {
+                return ret;
+            }
+            break;
         UNEXPECTED_MESSAGE_CASE(*node, NOP);
         UNEXPECTED_MESSAGE_CASE(*node, BOOTSTRAP);
         UNEXPECTED_MESSAGE_CASE(*node, SERVER_REGISTER);
@@ -602,6 +610,7 @@ replicant_client :: inner_loop(replicant_returncode* status)
         UNEXPECTED_MESSAGE_CASE(*node, CONFIG_REJECT);
         UNEXPECTED_MESSAGE_CASE(*node, CLIENT_REGISTER);
         UNEXPECTED_MESSAGE_CASE(*node, CLIENT_DISCONNECT);
+        UNEXPECTED_MESSAGE_CASE(*node, CLIENT_TIMEOUT);
         UNEXPECTED_MESSAGE_CASE(*node, COMMAND_SUBMIT);
         UNEXPECTED_MESSAGE_CASE(*node, COMMAND_ISSUE);
         UNEXPECTED_MESSAGE_CASE(*node, COMMAND_ACK);
@@ -611,7 +620,6 @@ replicant_client :: inner_loop(replicant_returncode* status)
         UNEXPECTED_MESSAGE_CASE(*node, HEAL_DONE);
         UNEXPECTED_MESSAGE_CASE(*node, STABLE);
         UNEXPECTED_MESSAGE_CASE(*node, CONDITION_WAIT);
-        UNEXPECTED_MESSAGE_CASE(*node, PING);
         UNEXPECTED_MESSAGE_CASE(*node, PONG);
         default:
             ERROR(MISBEHAVING_SERVER) << "communication error: server "
@@ -806,6 +814,7 @@ replicant_client :: wait_for_token_registration(replicant_returncode* status)
         if (rrc == replicant::RESPONSE_SUCCESS)
         {
             m_state = REPLCL_REGISTERED;
+            send_nops_to_preferred_quorum(status); // error irrelevant
             return 0;
         }
         else
@@ -854,8 +863,20 @@ replicant_client :: handle_inform(const chain_node& node,
 
     if (m_config->version() < new_config.version())
     {
+        // disconnect old nodes
+        for (const chain_node* n = m_config->members_begin();
+                n < m_config->members_end(); ++n)
+        {
+            if (!new_config.in_config_chain(n->token))
+            {
+                m_busybee->drop(n->token);
+            }
+        }
+
+        // switch to the new config
         *m_config = new_config;
 
+        // enqueue some commands to be retried
         for (command_map::iterator it = m_commands.begin(); it != m_commands.end(); )
         {
             const chain_node* n = m_config->node_from_token(it->first);
@@ -871,34 +892,52 @@ replicant_client :: handle_inform(const chain_node& node,
             m_commands.erase(it);
             it = m_commands.begin();
         }
+
+        // establish a suitable number of connections
+        send_nops_to_preferred_quorum(status); // error irrelevant
     }
 
     return 0;
 }
 
 int64_t
-replicant_client :: send_to_chain_head(std::auto_ptr<e::buffer> msg,
-                                       replicant_returncode* status)
+replicant_client :: handle_ping(const replicant::chain_node& node,
+                                std::auto_ptr<e::buffer> msg,
+                                e::unpacker up,
+                                replicant_returncode* status)
 {
-    const chain_node* head = m_config->head();
+    uint64_t version = 0;
+    uint64_t seqno = 0;
+    up = up >> version >> seqno;
 
-    if (!head)
+    if (up.error())
     {
-        ERROR(NEED_BOOTSTRAP) << "bootstrapped to an empty cluster: file a bug";
-        reset_to_disconnected();
+        ERROR(MISBEHAVING_SERVER) << "communication error: server "
+                                  << node << " sent invalid PING message="
+                                  << msg->as_slice().hex();
         return -1;
     }
 
-    m_busybee_mapper->set(*head);
-    busybee_returncode rc = m_busybee->send(head->token, msg);
+    msg->clear();
+    msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_PONG << seqno;
+    return send_to_specific_node(&node, msg, status);
+}
+
+int64_t
+replicant_client :: send_to_specific_node(const chain_node* node,
+                                          std::auto_ptr<e::buffer> msg,
+                                          replicant_returncode* status)
+{
+    m_busybee_mapper->set(*node);
+    busybee_returncode rc = m_busybee->send(node->token, msg);
 
     switch (rc)
     {
         case BUSYBEE_SUCCESS:
             return 0;
         case BUSYBEE_DISRUPTED:
-            handle_disruption(*head, status);
-            ERROR(BACKOFF) << "connection to " << *head << " broke:  backoff before retrying";
+            handle_disruption(*node, status);
+            ERROR(BACKOFF) << "connection to " << *node << " broke:  backoff before retrying";
             return -1;
         BUSYBEE_ERROR_CASE(SHUTDOWN);
         BUSYBEE_ERROR_CASE(POLLFAILED);
@@ -914,53 +953,86 @@ replicant_client :: send_to_chain_head(std::auto_ptr<e::buffer> msg,
 }
 
 int64_t
+replicant_client :: send_to_chain_head(std::auto_ptr<e::buffer> msg,
+                                       replicant_returncode* status)
+{
+    const chain_node* head = m_config->head();
+
+    if (!head)
+    {
+        ERROR(NEED_BOOTSTRAP) << "bootstrapped to an empty cluster: file a bug";
+        reset_to_disconnected();
+        return -1;
+    }
+
+    return send_to_specific_node(head, msg, status);
+}
+
+int64_t
 replicant_client :: send_to_preferred_chain_position(e::intrusive_ptr<command> cmd,
                                                      replicant_returncode* status)
 {
-    bool sent = false;
-    const chain_node* sent_to = NULL;
+    const uint64_t* const start = m_config->chain_begin();
+    const uint64_t* const limit = m_config->chain_end();
+    size_t chain_length = limit - start;
+    size_t offset = ((m_token >> 32) * chain_length) >> 32;
 
-    for (const uint64_t* n = m_config->chain_begin();
-            !sent && n!= m_config->chain_end(); ++n)
+    for (size_t i = 0; i < chain_length; ++i)
     {
-        sent_to = m_config->node_from_token(*n);
+        const uint64_t* n = start + ((i + offset) % chain_length);
+        const chain_node* node = m_config->node_from_token(*n);
         std::auto_ptr<e::buffer> msg(cmd->request()->copy());
-        m_busybee_mapper->set(*sent_to);
-        busybee_returncode rc = m_busybee->send(sent_to->token, msg);
 
-        switch (rc)
+        if (send_to_specific_node(node, msg, status) < 0)
         {
-            case BUSYBEE_SUCCESS:
-                sent = true;
-                break;
-            case BUSYBEE_DISRUPTED:
-                handle_disruption(*sent_to, status);
-                ERROR(BACKOFF) << "connection to " << *sent_to << " broke:  backoff before retrying";
-                continue;
-            BUSYBEE_ERROR_CASE_CONTINUE(SHUTDOWN);
-            BUSYBEE_ERROR_CASE_CONTINUE(POLLFAILED);
-            BUSYBEE_ERROR_CASE_CONTINUE(ADDFDFAIL);
-            BUSYBEE_ERROR_CASE_CONTINUE(TIMEOUT);
-            BUSYBEE_ERROR_CASE_CONTINUE(EXTERNAL);
-            BUSYBEE_ERROR_CASE_CONTINUE(INTERRUPTED);
-            default:
-                ERROR(INTERNAL_ERROR) << "internal error: BusyBee unexpectedly returned "
-                                      << (unsigned) rc << ": please file a bug";
-                continue;
+            continue;
         }
-    }
 
-    if (sent)
-    {
-        cmd->set_sent_to(*sent_to);
+        cmd->set_sent_to(*node);
         m_commands[cmd->nonce()] = cmd;
         return cmd->clientid();
     }
-    else
+
+    // We have an error captured above.
+    return -1;
+}
+
+int64_t
+replicant_client :: send_nops_to_preferred_quorum(replicant_returncode* status)
+{
+    const uint64_t* const start = m_config->chain_begin();
+    const uint64_t* const limit = m_config->chain_end();
+    size_t chain_length = limit - start;
+    size_t offset = ((m_token >> 32) * chain_length) >> 32;
+    size_t quorum = chain_length / 2 + 1;
+    int64_t id = 0;
+
+    for (size_t i = 0; i < chain_length; ++i)
     {
-        // We have an error captured by REPLSETERROR above.
-        return -1;
+        const uint64_t* n = start + ((i + offset) % chain_length);
+
+        if (quorum == 0)
+        {
+            m_busybee->drop(*n);
+            continue;
+        }
+
+        const chain_node* node = m_config->node_from_token(*n);
+        size_t sz = BUSYBEE_HEADER_SIZE + pack_size(REPLNET_NOP);
+        std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
+        msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_NOP;
+
+        if (send_to_specific_node(node, msg, status) < 0)
+        {
+            --id;
+            continue;
+        }
+
+        // one less message that needs to be sent to produce a quorum
+        --quorum;
     }
+
+    return id;
 }
 
 void

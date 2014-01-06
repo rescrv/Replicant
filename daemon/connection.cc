@@ -36,6 +36,7 @@ connection :: connection()
     , is_prev(false)
     , is_next(false)
     , token(0)
+    , addr()
 {
 }
 

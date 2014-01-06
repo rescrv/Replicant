@@ -59,7 +59,7 @@ AC_DEFUN([ANAL_WARNINGS],
         AX_CHECK_COMPILE_FLAG([-Wformat-security],[WANAL_CFLAGS="${WANAL_CFLAGS} -Wformat-security"],,)
         AX_CHECK_COMPILE_FLAG([-Wformat],[WANAL_CFLAGS="${WANAL_CFLAGS} -Wformat"],,)
         AX_CHECK_COMPILE_FLAG([-Wformat-y2k],[WANAL_CFLAGS="${WANAL_CFLAGS} -Wformat-y2k"],,)
-        AX_CHECK_COMPILE_FLAG([-Wframe-larger-than=8192],[WANAL_CFLAGS="${WANAL_CFLAGS} -Wframe-larger-than=8192"],,)
+        AX_CHECK_COMPILE_FLAG([-Wframe-larger-than=65536],[WANAL_CFLAGS="${WANAL_CFLAGS} -Wframe-larger-than=65536"],,)
         AX_CHECK_COMPILE_FLAG([-Wignored-qualifiers],[WANAL_CFLAGS="${WANAL_CFLAGS} -Wignored-qualifiers"],,)
         AX_CHECK_COMPILE_FLAG([-Wimplicit],[WANAL_CFLAGS_ONLY="${WANAL_CFLAGS} -Wimplicit"],,)
         AX_CHECK_COMPILE_FLAG([-Winit-self],[WANAL_CFLAGS="${WANAL_CFLAGS} -Winit-self"],,)

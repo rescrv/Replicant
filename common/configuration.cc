@@ -328,6 +328,22 @@ configuration :: config_size() const
     return m_chain.size();
 }
 
+uint64_t
+configuration :: index(uint64_t token) const
+{
+    size_t idx = 0;
+
+    for (; idx < m_chain.size(); ++idx)
+    {
+        if (m_chain[idx] == token)
+        {
+            break;
+        }
+    }
+
+    return idx;
+}
+
 const chain_node*
 configuration :: members_begin() const
 {

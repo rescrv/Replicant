@@ -34,6 +34,9 @@
 // STL
 #include <deque>
 
+// e
+#include <e/intrusive_ptr.h>
+
 namespace replicant
 {
 
@@ -50,8 +53,14 @@ class failure_detector
 
     private:
         class ping;
+        friend class e::intrusive_ptr<failure_detector>;
+        void inc() { ++m_ref; }
+        void dec() { if (--m_ref == 0) delete this; }
+
+    private:
         std::deque<ping> m_window;
         uint64_t m_window_sz;
+        size_t m_ref;
 };
 
 } // namespace replicant

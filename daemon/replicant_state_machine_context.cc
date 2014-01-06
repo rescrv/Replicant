@@ -73,6 +73,8 @@ replicant_state_machine_context :: replicant_state_machine_context(uint64_t s,
     , response_sz(0)
     , alarm_func("")
     , alarm_when(0)
+    , suspect_client()
+    , suspect_callback()
 {
 }
 
@@ -158,6 +160,21 @@ replicant_state_machine_alarm(struct replicant_state_machine_context* ctx,
 {
     ctx->alarm_func = func;
     ctx->alarm_when = seconds;
+}
+
+void
+replicant_state_machine_suspect(struct replicant_state_machine_context* ctx,
+                                uint64_t client, const char* func,
+                                const char* data, size_t data_sz)
+{
+
+    size_t func_sz = strlen(func) + 1;
+    std::auto_ptr<e::buffer> suspect(e::buffer::create(func_sz + data_sz));
+    suspect->resize(func_sz + data_sz);
+    memmove(suspect->data(), func, func_sz);
+    memmove(suspect->data() + func_sz, data, data_sz);
+    ctx->suspect_client = client;
+    ctx->suspect_callback = suspect;
 }
 
 } // extern "C"

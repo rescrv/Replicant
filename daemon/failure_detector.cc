@@ -51,6 +51,7 @@ class failure_detector::ping
 failure_detector :: failure_detector()
     : m_window()
     , m_window_sz(1000)
+    , m_ref(0)
 {
 }
 

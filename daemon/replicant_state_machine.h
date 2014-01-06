@@ -59,9 +59,16 @@ replicant_state_machine_condition_broadcast(struct replicant_state_machine_conte
                                             const char* cond,
                                             uint64_t* state);
 
+/* allowed once per method invocation */
 void
 replicant_state_machine_alarm(struct replicant_state_machine_context* ctx,
                               const char* func, uint64_t seconds);
+
+/* allowed once per method invocation */
+void
+replicant_state_machine_suspect(struct replicant_state_machine_context* ctx,
+                                uint64_t client, const char* func,
+                                const char* data, size_t data_sz);
 
 struct replicant_state_machine_step
 {
