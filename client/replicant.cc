@@ -877,14 +877,6 @@ replicant_client :: handle_inform(const chain_node& node,
 }
 
 int64_t
-replicant_client :: send_bootstrap(replicant_returncode* status)
-{
-    std::auto_ptr<e::buffer> msg(e::buffer::create(BUSYBEE_HEADER_SIZE + pack_size(REPLNET_BOOTSTRAP)));
-    msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_BOOTSTRAP;
-    return send_to_chain_head(msg, status);
-}
-
-int64_t
 replicant_client :: send_to_chain_head(std::auto_ptr<e::buffer> msg,
                                        replicant_returncode* status)
 {

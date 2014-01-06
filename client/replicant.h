@@ -141,7 +141,6 @@ class replicant_client
                               e::unpacker up,
                               replicant_returncode* status);
         // Send commands and receive responses
-        int64_t send_bootstrap(replicant_returncode* status);
         int64_t send_to_chain_head(std::auto_ptr<e::buffer> msg,
                                    replicant_returncode* status);
         int64_t send_to_preferred_chain_position(e::intrusive_ptr<command> cmd,
