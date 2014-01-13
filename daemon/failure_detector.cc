@@ -148,7 +148,7 @@ failure_detector :: suspicion(uint64_t now)
     }
 
     double stdev = sqrt(M2 / (n - 1));
-    stdev = std::max(stdev, m_interval / 100.);
+    stdev = std::max(stdev, m_interval / 10.);
 
     // Run that through phi
     double f = phi(((now - m_window.back().time) - mean) / stdev);
