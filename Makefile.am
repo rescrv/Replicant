@@ -67,6 +67,7 @@ noinst_HEADERS += common/mapper.h
 noinst_HEADERS += common/network_msgtype.h
 noinst_HEADERS += common/packing.h
 noinst_HEADERS += common/response_returncode.h
+noinst_HEADERS += common/special_clients.h
 noinst_HEADERS += common/special_objects.h
 
 ################################################################################
