@@ -56,7 +56,8 @@ class failure_manager
         ~failure_manager() throw ();
 
     public:
-        void track(const std::vector<uint64_t>& tokens);
+        void track(const std::vector<uint64_t>& tokens,
+                   uint64_t interval, uint64_t window_sz);
         void ping(daemon* d,
                   bool (daemon::*s)(uint64_t, std::auto_ptr<e::buffer>),
                   uint64_t version);

@@ -2566,7 +2566,7 @@ daemon :: update_failure_detectors()
     std::merge(nodes.begin(), nodes.end(),
                clients.begin(), clients.end(),
                ids.begin());
-    m_failure_manager.track(ids);
+    m_failure_manager.track(ids, m_s.PING_INTERVAL, m_s.PING_WINDOW);
 }
 
 void

@@ -48,9 +48,10 @@ class failure_detector::ping
         uint64_t time;
 };
 
-failure_detector :: failure_detector()
+failure_detector :: failure_detector(uint64_t interval, uint64_t window_sz)
     : m_window()
-    , m_window_sz(1000)
+    , m_window_sz(window_sz)
+    , m_interval(interval)
     , m_ref(0)
 {
 }
@@ -121,11 +122,10 @@ double
 failure_detector :: suspicion(uint64_t now)
 {
     if (m_window.empty() ||
-        m_window.size() < 10 ||
-        m_window.back().time - m_window.front().time <
-        1000ULL * 1000ULL * 1000ULL)
+        m_window.size() < m_window_sz / 10. ||
+        m_window.back().time - m_window.front().time < m_interval * 10)
     {
-        return HUGE_VAL;
+        return 1.0;
     }
 
     // Calculate the mean and standard deviation
@@ -148,6 +148,7 @@ failure_detector :: suspicion(uint64_t now)
     }
 
     double stdev = sqrt(M2 / (n - 1));
+    stdev = std::max(stdev, m_interval / 100.);
 
     // Run that through phi
     double f = phi(((now - m_window.back().time) - mean) / stdev);

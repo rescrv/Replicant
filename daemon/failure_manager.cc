@@ -46,7 +46,8 @@ failure_manager :: ~failure_manager() throw ()
 }
 
 void
-failure_manager :: track(const std::vector<uint64_t>& tokens)
+failure_manager :: track(const std::vector<uint64_t>& tokens,
+                         uint64_t interval, uint64_t window_sz)
 {
     for (size_t i = 1; i < tokens.size(); ++i)
     {
@@ -72,7 +73,7 @@ failure_manager :: track(const std::vector<uint64_t>& tokens)
         }
         else if (m_fds[old_idx].first > tokens[new_idx])
         {
-            fd_ptr fd = new failure_detector();
+            fd_ptr fd = new failure_detector(interval, window_sz);
             replacement.push_back(std::make_pair(tokens[new_idx], fd));
             ++new_idx;
         }
@@ -80,7 +81,7 @@ failure_manager :: track(const std::vector<uint64_t>& tokens)
 
     while (new_idx < tokens.size())
     {
-        fd_ptr fd = new failure_detector();
+        fd_ptr fd = new failure_detector(interval, window_sz);
         replacement.push_back(std::make_pair(tokens[new_idx], fd));
         ++new_idx;
     }

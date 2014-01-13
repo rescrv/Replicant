@@ -43,7 +43,7 @@ namespace replicant
 class failure_detector
 {
     public:
-        failure_detector();
+        failure_detector(uint64_t ping_pong, uint64_t window_sz);
         ~failure_detector() throw ();
 
     public:
@@ -60,6 +60,7 @@ class failure_detector
     private:
         std::deque<ping> m_window;
         uint64_t m_window_sz;
+        uint64_t m_interval;
         size_t m_ref;
 };
 
