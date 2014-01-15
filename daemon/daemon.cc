@@ -619,6 +619,9 @@ daemon :: run(bool daemonize,
             case REPLNET_CLIENT_UNKNOWN:
                 LOG(WARNING) << "dropping \"CLIENT_UNKNOWN\" received by server";
                 break;
+            case REPLNET_CLIENT_DECEASED:
+                LOG(WARNING) << "dropping \"CLIENT_DECEASED\" received by server";
+                break;
             case REPLNET_COMMAND_SUBMIT:
                 process_command_submit(conn, msg, up);
                 break;
@@ -1585,10 +1588,19 @@ daemon :: process_condition_wait(const replicant::connection& conn,
 
     if (!conn.is_client)
     {
-        LOG(WARNING) << "dropping \"CONDITION_WAIT\" that did not come from a client";
+        LOG(WARNING) << "rejecting \"CONDITION_WAIT\" that did not come from a client";
         size_t sz = BUSYBEE_HEADER_SIZE + pack_size(REPLNET_CLIENT_UNKNOWN);
         std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
         msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_CLIENT_UNKNOWN;
+        send_no_disruption(conn.token, msg);
+        return;
+    }
+    else if (!conn.is_live_client)
+    {
+        LOG(WARNING) << "rejecting \"CONDITION_WAIT\" that came from dead client " << conn.token;
+        size_t sz = BUSYBEE_HEADER_SIZE + pack_size(REPLNET_CLIENT_DECEASED);
+        std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
+        msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_CLIENT_DECEASED;
         send_no_disruption(conn.token, msg);
         return;
     }
@@ -1612,9 +1624,9 @@ daemon :: process_client_register(const replicant::connection& conn,
         success = false;
     }
 
-    if (m_fs.is_client(client))
+    if (conn.is_client)
     {
-        LOG(WARNING) << "rejecting registration for client that comes from a dead client";
+        LOG(WARNING) << "rejecting registration for client that comes from an existing client";
         success = false;
     }
 
@@ -1724,25 +1736,38 @@ daemon :: process_command_submit(const replicant::connection& conn,
         object != OBJECT_OBJ_SNAPSHOT && object != OBJECT_OBJ_RESTORE &&
         IS_SPECIAL_OBJECT(object) && !conn.is_cluster_member)
     {
-        LOG(INFO) << "dropping \"COMMAND_SUBMIT\" for special object that "
+        LOG(INFO) << "rejecting \"COMMAND_SUBMIT\" for special object that "
                   << "was not sent by a cluster member";
         return;
     }
 
-    if (!conn.is_cluster_member && !conn.is_client)
+    if (!(conn.is_cluster_member || (conn.is_client && conn.is_live_client)))
     {
-        LOG(INFO) << "dropping \"COMMAND_SUBMIT\" from " << conn.token
-                  << " because it is not a client or cluster member";
-        size_t sz = BUSYBEE_HEADER_SIZE + pack_size(REPLNET_CLIENT_UNKNOWN);
-        msg.reset(e::buffer::create(sz));
-        msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_CLIENT_UNKNOWN;
-        send_no_disruption(conn.token, msg);
-        return;
+        if (conn.is_client && !conn.is_live_client)
+        {
+            LOG(INFO) << "rejecting \"COMMAND_SUBMIT\" from " << conn.token
+                      << " because it is dead";
+            size_t sz = BUSYBEE_HEADER_SIZE + pack_size(REPLNET_CLIENT_DECEASED);
+            msg.reset(e::buffer::create(sz));
+            msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_CLIENT_DECEASED;
+            send_no_disruption(conn.token, msg);
+            return;
+        }
+        else
+        {
+            LOG(INFO) << "rejecting \"COMMAND_SUBMIT\" from " << conn.token
+                      << " because it is not a client or cluster member";
+            size_t sz = BUSYBEE_HEADER_SIZE + pack_size(REPLNET_CLIENT_UNKNOWN);
+            msg.reset(e::buffer::create(sz));
+            msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_CLIENT_UNKNOWN;
+            send_no_disruption(conn.token, msg);
+            return;
+        }
     }
 
     if (conn.is_client && conn.token != client)
     {
-        LOG(INFO) << "dropping \"COMMAND_SUBMIT\" from " << conn.token
+        LOG(INFO) << "rejecting \"COMMAND_SUBMIT\" from " << conn.token
                   << " because it uses the wrong token";
         size_t sz = BUSYBEE_HEADER_SIZE + pack_size(REPLNET_CLIENT_UNKNOWN);
         msg.reset(e::buffer::create(sz));
@@ -2654,7 +2679,7 @@ daemon :: recv(replicant::connection* conn, std::auto_ptr<e::buffer>* msg)
         }
 
         conn->is_cluster_member = false;
-        conn->is_client = m_fs.is_live_client(conn->token);
+        conn->is_client = m_fs.lookup_client(conn->token, &conn->is_live_client);
         conn->is_prev = false;
         conn->is_next = false;
         return true;

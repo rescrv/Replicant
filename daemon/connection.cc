@@ -33,6 +33,7 @@ using replicant::connection;
 connection :: connection()
     : is_cluster_member(false)
     , is_client(false)
+    , is_live_client(false)
     , is_prev(false)
     , is_next(false)
     , token(0)

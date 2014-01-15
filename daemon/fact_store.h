@@ -74,9 +74,7 @@ class fact_store
 
     // Manage client information
     public:
-        bool is_client(uint64_t client);
-        bool is_live_client(uint64_t client);
-        void get_all_clients(std::vector<uint64_t>* clients);
+        bool lookup_client(uint64_t client, bool* is_live);
         void reg_client(uint64_t client);
         void die_client(uint64_t client);
 

@@ -647,15 +647,7 @@ fact_store :: inform_configuration(const configuration& config)
 }
 
 bool
-fact_store :: is_client(uint64_t client)
-{
-    char key[CLIENT_KEY_SIZE];
-    pack_client_key(client, key);
-    return check_key_exists(key, CLIENT_KEY_SIZE);
-}
-
-bool
-fact_store :: is_live_client(uint64_t client)
+fact_store :: lookup_client(uint64_t client, bool* is_live)
 {
     char key[CLIENT_KEY_SIZE];
     pack_client_key(client, key);
@@ -668,34 +660,18 @@ fact_store :: is_live_client(uint64_t client)
 
     if (backing == "reg")
     {
-        return true;
+        *is_live = true;
     }
     else if (backing == "die")
     {
-        return false;
+        *is_live = false;
     }
     else
     {
         abort();
     }
-}
 
-void
-fact_store :: get_all_clients(std::vector<uint64_t>* clients)
-{
-    prefix_iterator iter(leveldb::Slice(CLIENT_PREFIX), m_db);
-
-    for (; iter.valid(); iter.next())
-    {
-        if (iter.key().size() != CLIENT_KEY_SIZE)
-        {
-            continue;
-        }
-
-        uint64_t id;
-        unpack_client_key(iter.key().data(), &id);
-        clients->push_back(id);
-    }
+    return true;
 }
 
 void

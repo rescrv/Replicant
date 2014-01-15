@@ -595,6 +595,9 @@ replicant_client :: inner_loop(replicant_returncode* status)
             break;
         case REPLNET_CLIENT_UNKNOWN:
             return report_cluster_jump(status);
+        case REPLNET_CLIENT_DECEASED:
+            reset_to_disconnected();
+            break;
         case REPLNET_PING:
             if ((ret = handle_ping(*node, msg, up, status)) < 0)
             {

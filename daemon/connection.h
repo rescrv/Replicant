@@ -46,6 +46,7 @@ class connection
     public:
         bool is_cluster_member;
         bool is_client;
+        bool is_live_client;
         bool is_prev;
         bool is_next;
         uint64_t token;
