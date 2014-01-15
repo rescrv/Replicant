@@ -498,16 +498,16 @@ replicant_client :: poll_fd()
 int64_t
 replicant_client :: inner_loop(replicant_returncode* status)
 {
-    if (m_cluster_jump)
-    {
-        return -1;
-    }
-
     int64_t ret = maintain_connection(status);
 
     if (ret != 0)
     {
         return ret;
+    }
+
+    if (m_cluster_jump)
+    {
+        return -1;
     }
 
     // Resend all those that need it
@@ -640,12 +640,21 @@ replicant_client :: maintain_connection(replicant_returncode* status)
     {
         int64_t ret;
 
+        if (m_cluster_jump)
+        {
+            reset_to_disconnected();
+        }
+
         switch (m_state)
         {
             case REPLCL_DISCONNECTED:
                 if ((ret = perform_bootstrap(status)) < 0)
                 {
                     return ret;
+                }
+                if (m_cluster_jump)
+                {
+                    return report_cluster_jump(status);
                 }
                 break;
             case REPLCL_BOOTSTRAPPED:
