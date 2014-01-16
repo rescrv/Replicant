@@ -888,18 +888,9 @@ replicant_client :: handle_inform(const chain_node& node,
         // switch to the new config
         *m_config = new_config;
 
-        // enqueue some commands to be retried
+        // enqueue all commands to be retried
         for (command_map::iterator it = m_commands.begin(); it != m_commands.end(); )
         {
-            const chain_node* n = m_config->node_from_token(it->first);
-
-            // If this op wasn't sent to a removed host, then skip it
-            if (n && m_config->in_command_chain(n->token))
-            {
-                ++it;
-                continue;
-            }
-
             m_resend.insert(*it);
             m_commands.erase(it);
             it = m_commands.begin();

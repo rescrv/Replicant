@@ -25,6 +25,9 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
+// C
+#include <cmath>
+
 // BusyBee
 #include "busybee_constants.h"
 
@@ -131,6 +134,95 @@ failure_manager :: suspicion(uint64_t token, uint64_t now) const
     }
 
     return fd->suspicion(now);
+}
+
+namespace
+{
+
+struct suspicion_stats
+{
+    uint64_t token;
+    double suspicion;
+    double mean;
+    double stdev;
+};
+
+bool
+compare_suspicions(const suspicion_stats& lhs, const suspicion_stats& rhs)
+{
+    return lhs.suspicion < rhs.suspicion;
+}
+
+}
+
+void
+failure_manager :: get_suspicions(uint64_t now, std::vector<uint64_t>* tokens, size_t* cutoff)
+{
+    std::vector<suspicion_stats> stats;
+    stats.reserve(tokens->size());
+
+    for (size_t i = 0; i < tokens->size(); ++i)
+    {
+        double d = suspicion((*tokens)[i], now);
+
+        if (d < 0)
+        {
+            d = HUGE_VAL;
+        }
+
+        stats.push_back(suspicion_stats());
+        stats.back().token = (*tokens)[i];
+        stats.back().suspicion = d;
+    }
+
+    std::sort(stats.begin(), stats.end(), compare_suspicions);
+    double n = 0;
+    double mean = 0;
+    double M2 = 0;
+
+    for (size_t i = 0; i < stats.size(); ++i)
+    {
+        if (std::isinf(stats[i].suspicion))
+        {
+            break;
+        }
+
+        ++n;
+        double delta = stats[i].suspicion - mean;
+        mean = mean + delta / n;
+        M2 = M2 + delta * (stats[i].suspicion - mean);
+        stats[i].mean = mean;
+        stats[i].stdev = n > 1 ? sqrt(M2 / (n - 1)) : 0;
+    }
+
+    for (size_t i = 0; i < stats.size(); ++i)
+    {
+        (*tokens)[i] = stats[i].token;
+    }
+
+    *cutoff = 0;
+
+    for (; *cutoff < stats.size(); ++*cutoff)
+    {
+        if (std::isinf(stats[*cutoff].suspicion))
+        {
+            break;
+        }
+        else if (stats[*cutoff].suspicion > 10.0)
+        {
+            break;
+        }
+        else if (*cutoff > 0)
+        {
+            double threshold = stats[*cutoff - 1].mean
+                             + 6 * std::max(stats[*cutoff - 1].stdev, 0.25);
+
+            if (stats[*cutoff].suspicion > threshold)
+            {
+                break;
+            }
+        }
+    }
 }
 
 failure_detector*

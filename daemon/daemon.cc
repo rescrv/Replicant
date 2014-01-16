@@ -99,6 +99,13 @@ monotonic_time()
     return e::time();
 }
 
+// round x up to a multiple of y
+static uint64_t
+round_up(uint64_t x, uint64_t y)
+{
+    return ((x + y - 1) / y) * y;
+}
+
 struct daemon::deferred_command
 {
     deferred_command() : object(), client(), has_nonce(), nonce(), data() {}
@@ -1303,111 +1310,33 @@ daemon :: post_reconfiguration_hooks()
     }
 }
 
-struct suspicion
-{
-    uint64_t token;
-    double suspicion;
-    double mean;
-    double stdev;
-    bool in_chain;
-};
-
-static bool
-compare_suspicions(const suspicion& lhs, const suspicion& rhs)
-{
-    return lhs.suspicion < rhs.suspicion;
-}
-
-static void
-get_suspicions(uint64_t now,
-               const replicant::chain_node& us,
-               const replicant::failure_manager& fm,
-               const replicant::configuration& config,
-               std::vector<suspicion>* suspicions)
-{
-    using namespace replicant;
-    const chain_node* nodes = config.members_begin();
-    const chain_node* end = config.members_end();
-
-    for (ssize_t i = 0; i < end - nodes; ++i)
-    {
-        if (nodes[i].token == us.token)
-        {
-            continue;
-        }
-
-        double d = fm.suspicion(nodes[i].token, now);
-
-        if (d < 0)
-        {
-            continue;
-        }
-
-        suspicions->push_back(suspicion());
-        suspicions->back().token = nodes[i].token;
-        suspicions->back().suspicion = d;
-        suspicions->back().mean = 0;
-        suspicions->back().stdev = 0;
-        suspicions->back().in_chain = config.in_config_chain(nodes[i].token);
-    }
-
-    std::sort(suspicions->begin(), suspicions->end(), compare_suspicions);
-    double n = 0;
-    double mean = 0;
-    double M2 = 0;
-
-    for (size_t i = 0; i < suspicions->size(); ++i)
-    {
-        if (std::isinf((*suspicions)[i].suspicion))
-        {
-            break;
-        }
-
-        ++n;
-        double delta = (*suspicions)[i].suspicion - mean;
-        mean = mean + delta / n;
-        M2 = M2 + delta * ((*suspicions)[i].suspicion - mean);
-        (*suspicions)[i].mean = mean;
-        (*suspicions)[i].stdev = n > 1 ? sqrt(M2 / (n - 1)) : 0;
-    }
-}
-
 void
 daemon :: periodic_maintain_cluster(uint64_t now)
 {
+    trip_periodic(round_up(now, m_s.FAILURE_DETECT_INTERVAL) + m_s.FAILURE_DETECT_SUSPECT_OFFSET,
+                  &daemon::periodic_maintain_cluster);
+
     if (!m_config_manager.stable().in_command_chain(m_us.token))
     {
         return;
     }
 
-    trip_periodic(now + m_s.MAINTAIN_INTERVAL, &daemon::periodic_maintain_cluster);
+    const chain_node* nodes = m_config_manager.stable().members_begin();
+    const chain_node* end = m_config_manager.stable().members_end();
+    std::vector<uint64_t> tokens;
+    size_t cutoff = 0;
 
-    // compute the suspicion for all nodes
-    std::vector<suspicion> suspicions;
-    get_suspicions(now, m_us, m_failure_manager, m_config_manager.latest(), &suspicions);
-
-    // determine a cutoff point in the suspicions vector.
-    // for each suspicions[i]:
-    //      i < cutoff_suspicions
-    //      i >= cutoff_suspicions
-    size_t cutoff_suspicions = 0;
-
-    for (; cutoff_suspicions < suspicions.size(); ++cutoff_suspicions)
+    for (ssize_t i = 0; i < end - nodes; ++i)
     {
-        if (std::isinf(suspicions[cutoff_suspicions].suspicion))
+        if (nodes[i].token == m_us.token)
         {
-            break;
+            continue;
         }
 
-        double threshold = suspicions[cutoff_suspicions].mean
-                         + 3 * suspicions[cutoff_suspicions].stdev;
-        threshold = std::max(threshold, 10.0);
-
-        if (suspicions[cutoff_suspicions].suspicion > threshold)
-        {
-            break;
-        }
+        tokens.push_back(nodes[i].token);
     }
+
+    m_failure_manager.get_suspicions(now, &tokens, &cutoff);
 
     // separate the servers into sets of servers:
     // stable_live:  servers that are in every config and not suspected
@@ -1424,42 +1353,42 @@ daemon :: periodic_maintain_cluster(uint64_t now)
     std::vector<uint64_t> removed_dead_tokens;
     stable_live_tokens.push_back(m_us.token);
 
-    for (size_t i = 0; i < cutoff_suspicions; ++i)
+    for (size_t i = 0; i < cutoff; ++i)
     {
-        if (m_config_manager.all(&configuration::in_config_chain, suspicions[i].token))
+        if (m_config_manager.all(&configuration::in_config_chain, tokens[i]))
         {
-            stable_live_tokens.push_back(suspicions[i].token);
+            stable_live_tokens.push_back(tokens[i]);
         }
-        else if (m_config_manager.any(&configuration::in_config_chain, suspicions[i].token))
+        else if (m_config_manager.any(&configuration::in_config_chain, tokens[i]))
         {
-            unstable_live_tokens.push_back(suspicions[i].token);
+            unstable_live_tokens.push_back(tokens[i]);
         }
         else
         {
-            removed_live_tokens.push_back(suspicions[i].token);
+            removed_live_tokens.push_back(tokens[i]);
         }
     }
 
-    for (size_t i = cutoff_suspicions; i < suspicions.size(); ++i)
+    for (size_t i = cutoff; i < tokens.size(); ++i)
     {
-        if (m_config_manager.all(&configuration::in_config_chain, suspicions[i].token))
+        if (m_config_manager.all(&configuration::in_config_chain, tokens[i]))
         {
-            stable_dead_tokens.push_back(suspicions[i].token);
+            stable_dead_tokens.push_back(tokens[i]);
         }
-        else if (m_config_manager.any(&configuration::in_config_chain, suspicions[i].token))
+        else if (m_config_manager.any(&configuration::in_config_chain, tokens[i]))
         {
-            unstable_dead_tokens.push_back(suspicions[i].token);
+            unstable_dead_tokens.push_back(tokens[i]);
         }
         else
         {
-            removed_dead_tokens.push_back(suspicions[i].token);
+            removed_dead_tokens.push_back(tokens[i]);
         }
     }
 
     assert(stable_live_tokens.size() + stable_dead_tokens.size() +
            unstable_live_tokens.size() + unstable_dead_tokens.size() +
            removed_live_tokens.size() + removed_dead_tokens.size()
-           == suspicions.size() + 1);
+           == tokens.size() + 1);
 
     // Here we have a decision to make that balances safety from future failures
     // with liveness now.  Dead nodes must be removed so that the system can
@@ -1475,7 +1404,7 @@ daemon :: periodic_maintain_cluster(uint64_t now)
 
     if (stable_live_tokens.size() * 2 <= m_config_manager.smallest_config_chain())
     {
-        LOG_EVERY_N(INFO, static_cast<int64_t>(SECONDS / m_s.MAINTAIN_INTERVAL))
+        LOG_EVERY_N(INFO, static_cast<int64_t>(SECONDS / m_s.FAILURE_DETECT_INTERVAL))
             << "could not propose new configuration because only "
             << stable_live_tokens.size() << " nodes are stable, which is not a quorum of "
             << m_config_manager.smallest_config_chain();
@@ -1551,7 +1480,7 @@ daemon :: periodic_maintain_cluster(uint64_t now)
 
     if (!new_config.validate())
     {
-        LOG_EVERY_N(INFO, static_cast<int64_t>(SECONDS / m_s.MAINTAIN_INTERVAL))
+        LOG_EVERY_N(INFO, static_cast<int64_t>(SECONDS / m_s.FAILURE_DETECT_INTERVAL))
             << "cannot propose " << new_config << " because it is invalid";
         return;
     }
@@ -1560,7 +1489,7 @@ daemon :: periodic_maintain_cluster(uint64_t now)
 
     if (!m_config_manager.contains_quorum_of_all(new_config, &no_quorum))
     {
-        LOG_EVERY_N(INFO, static_cast<int64_t>(SECONDS / m_s.MAINTAIN_INTERVAL))
+        LOG_EVERY_N(INFO, static_cast<int64_t>(SECONDS / m_s.FAILURE_DETECT_INTERVAL))
             << "cannot propose " << new_config << " because it violates quorum invariants with "
             << *no_quorum;
         return;
@@ -2096,7 +2025,7 @@ daemon :: record_execution(uint64_t slot, uint64_t client, uint64_t nonce, repli
 void
 daemon :: periodic_describe_slots(uint64_t now)
 {
-    trip_periodic(now + m_s.REPORT_INTERVAL, &daemon::periodic_describe_slots);
+    trip_periodic(round_up(now, m_s.REPORT_EVERY), &daemon::periodic_describe_slots);
     LOG(INFO) << "we are " << m_us << " and here's some info:"
               << " issued <=" << m_fs.next_slot_to_issue()
               << " | acked <=" << m_fs.next_slot_to_ack();
@@ -2508,7 +2437,8 @@ daemon :: process_pong(const replicant::connection& conn,
 void
 daemon :: periodic_exchange(uint64_t now)
 {
-    trip_periodic(now + m_s.PING_INTERVAL, &daemon::periodic_exchange);
+    trip_periodic(round_up(now, m_s.FAILURE_DETECT_INTERVAL) + m_s.FAILURE_DETECT_PING_OFFSET,
+                  &daemon::periodic_exchange);
     uint64_t version = m_config_manager.stable().version();
     m_failure_manager.ping(this, &daemon::send_no_disruption, version);
 }
@@ -2516,7 +2446,8 @@ daemon :: periodic_exchange(uint64_t now)
 void
 daemon :: periodic_suspect_clients(uint64_t now)
 {
-    trip_periodic(now + m_s.PING_INTERVAL, &daemon::periodic_suspect_clients);
+    trip_periodic(round_up(now, m_s.FAILURE_DETECT_INTERVAL) + m_s.FAILURE_DETECT_SUSPECT_OFFSET,
+                  &daemon::periodic_suspect_clients);
     const configuration& config(m_config_manager.stable());
     std::vector<uint64_t> clients;
     m_client_manager.owned_clients(config.index(m_us.token),
@@ -2537,7 +2468,7 @@ daemon :: periodic_suspect_clients(uint64_t now)
 void
 daemon :: periodic_disconnect_clients(uint64_t now)
 {
-    trip_periodic(now + m_s.CLIENT_DISCONNECT_INTERVAL,
+    trip_periodic(round_up(now, m_s.CLIENT_DISCONNECT_EVERY),
                   &daemon::periodic_disconnect_clients);
     const configuration& config(m_config_manager.stable());
     std::vector<uint64_t> our_clients;
@@ -2591,7 +2522,9 @@ daemon :: update_failure_detectors()
     std::merge(nodes.begin(), nodes.end(),
                clients.begin(), clients.end(),
                ids.begin());
-    m_failure_manager.track(ids, m_s.PING_INTERVAL, m_s.PING_WINDOW);
+    m_failure_manager.track(ids,
+                            m_s.FAILURE_DETECT_INTERVAL,
+                            m_s.FAILURE_DETECT_WINDOW_SIZE);
 }
 
 void

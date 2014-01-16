@@ -63,6 +63,7 @@ class failure_manager
                   uint64_t version);
         void pong(uint64_t token, uint64_t seqno, uint64_t now);
         double suspicion(uint64_t token, uint64_t now) const;
+        void get_suspicions(uint64_t now, std::vector<uint64_t>* tokens, size_t* cutoff);
 
     private:
         typedef e::intrusive_ptr<failure_detector> fd_ptr;
