@@ -749,6 +749,7 @@ replicant_client :: wait_for_token_registration(replicant_returncode* status)
     {
         uint64_t token;
         std::auto_ptr<e::buffer> msg;
+        m_busybee->set_timeout(1000);
         busybee_returncode rc = m_busybee->recv(&token, &msg);
 
         switch (rc)
@@ -757,13 +758,16 @@ replicant_client :: wait_for_token_registration(replicant_returncode* status)
                 break;
             case BUSYBEE_INTERRUPTED:
                 ERROR(INTERRUPTED) << "signal received";
+                reset_to_disconnected();
                 return -1;
             case BUSYBEE_TIMEOUT:
                 ERROR(TIMEOUT) << "operation timed out";
+                reset_to_disconnected();
                 return -1;
             case BUSYBEE_DISRUPTED:
                 ERROR(NEED_BOOTSTRAP) << "could not register with the cluster: "
                                       << e::error::strerror(errno);
+                reset_to_disconnected();
                 return -1;
             BUSYBEE_ERROR_CASE_DISCONNECT(SHUTDOWN);
             BUSYBEE_ERROR_CASE_DISCONNECT(POLLFAILED);
