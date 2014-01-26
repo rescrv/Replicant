@@ -158,6 +158,7 @@ daemon :: daemon()
     , m_object_manager()
     , m_failure_manager()
     , m_client_manager()
+    , m_suspected_clients()
     , m_periodic_mtx()
     , m_periodic()
     , m_deferred_mtx()
@@ -2453,16 +2454,26 @@ daemon :: periodic_suspect_clients(uint64_t now)
     m_client_manager.owned_clients(config.index(m_us.token),
                                    config.config_size(),
                                    &clients);
+    size_t cutoff = 0;
+    m_failure_manager.get_suspicions(now, &clients, &cutoff);
+    std::vector<uint64_t> suspected;
 
-    for (size_t i = 0; i < clients.size(); ++i)
+    for (size_t i = cutoff; i < clients.size(); ++i)
     {
-        double d = m_failure_manager.suspicion(clients[i], now);
-
-        if (d > m_s.CLIENT_SUSPICION)
+        if (std::binary_search(m_suspected_clients.begin(),
+                               m_suspected_clients.end(),
+                               clients[i]))
         {
             m_object_manager.suspect(clients[i]);
         }
+        else
+        {
+            suspected.push_back(clients[i]);
+        }
     }
+
+    std::sort(suspected.begin(), suspected.end());
+    suspected.swap(m_suspected_clients);
 }
 
 void
