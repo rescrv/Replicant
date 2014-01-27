@@ -48,12 +48,34 @@ class failure_detector::ping
         uint64_t time;
 };
 
-failure_detector :: failure_detector(uint64_t interval, uint64_t window_sz)
+failure_detector :: failure_detector(uint64_t now, uint64_t interval, uint64_t window_sz)
     : m_window()
     , m_window_sz(window_sz)
     , m_interval(interval)
     , m_ref(0)
 {
+    uint64_t delta = interval + interval / 10.;
+
+    if (delta * window_sz < now)
+    {
+        uint64_t then = now - delta * (window_sz - 1);
+
+        while (m_window.size() < m_window_sz)
+        {
+            heartbeat(seqno(), then);
+            then += delta;
+        }
+
+        assert(m_window.back().time == now);
+    }
+
+#if 0
+    uint64_t delta = interval + interval / 10.;
+
+    while (now >= delta && m_window.size() < m_window_sz)
+    {
+    }
+#endif
 }
 
 failure_detector :: ~failure_detector() throw ()
@@ -122,8 +144,7 @@ double
 failure_detector :: suspicion(uint64_t now)
 {
     if (m_window.empty() ||
-        m_window.size() < m_window_sz / 10. ||
-        m_window.back().time - m_window.front().time < m_interval * 10)
+        m_window.size() < m_window_sz / 10.)
     {
         return 1.0;
     }

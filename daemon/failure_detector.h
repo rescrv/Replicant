@@ -43,7 +43,7 @@ namespace replicant
 class failure_detector
 {
     public:
-        failure_detector(uint64_t ping_pong, uint64_t window_sz);
+        failure_detector(uint64_t now, uint64_t ping_pong, uint64_t window_sz);
         ~failure_detector() throw ();
 
     public:

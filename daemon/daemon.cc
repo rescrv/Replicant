@@ -2533,7 +2533,8 @@ daemon :: update_failure_detectors()
     std::merge(nodes.begin(), nodes.end(),
                clients.begin(), clients.end(),
                ids.begin());
-    m_failure_manager.track(ids,
+    uint64_t now = monotonic_time();
+    m_failure_manager.track(now, ids,
                             m_s.FAILURE_DETECT_INTERVAL,
                             m_s.FAILURE_DETECT_WINDOW_SIZE);
 }
