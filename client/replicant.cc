@@ -943,8 +943,9 @@ replicant_client :: send_to_specific_node(const chain_node* node,
         case BUSYBEE_SUCCESS:
             return 0;
         case BUSYBEE_DISRUPTED:
+            ERROR(BACKOFF) << "connection to " << *node << " broke ("
+                           << strerror(errno) << "):  backoff before retrying";
             handle_disruption(*node, status);
-            ERROR(BACKOFF) << "connection to " << *node << " broke:  backoff before retrying";
             return -1;
         BUSYBEE_ERROR_CASE(SHUTDOWN);
         BUSYBEE_ERROR_CASE(POLLFAILED);
