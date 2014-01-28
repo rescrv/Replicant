@@ -473,6 +473,7 @@ daemon :: run(bool daemonize,
         else if (object == OBJECT_CLI_REG)
         {
             m_client_manager.register_client(client);
+            m_client_manager.proof_of_life(client, monotonic_time());
         }
         else if (object == OBJECT_CLI_DIE)
         {
@@ -1984,6 +1985,7 @@ daemon :: acknowledge_command(uint64_t slot)
             LOG(INFO) << "registering client " << client;
             m_fs.reg_client(client);
             m_client_manager.register_client(client);
+            m_client_manager.proof_of_life(client, monotonic_time());
             update_failure_detectors();
         }
         else
