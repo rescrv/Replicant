@@ -68,14 +68,6 @@ failure_detector :: failure_detector(uint64_t now, uint64_t interval, uint64_t w
 
         assert(m_window.back().time == now);
     }
-
-#if 0
-    uint64_t delta = interval + interval / 10.;
-
-    while (now >= delta && m_window.size() < m_window_sz)
-    {
-    }
-#endif
 }
 
 failure_detector :: ~failure_detector() throw ()
