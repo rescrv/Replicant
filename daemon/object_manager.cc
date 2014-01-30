@@ -26,6 +26,7 @@
 // POSSIBILITY OF SUCH DAMAGE.
 
 #define __STDC_LIMIT_MACROS
+#include <ciso646> // detect std::lib
 
 // C
 #include <cstdio>
@@ -37,7 +38,13 @@
 
 // STL
 #include <list>
+#ifdef _LIBCPP_VERSION
+#include <functional>
 #include <memory>
+#else
+#include <tr1/functional>
+#include <tr1/memory>
+#endif
 
 // Google Log
 #include <glog/logging.h>
@@ -67,6 +74,14 @@
 #include "daemon/snapshot.h"
 #if defined __APPLE__
 #include "daemon/memstream.h"
+#endif
+
+#ifdef _LIBCPP_VERSION
+#define REF std::ref
+#define SHARED_PTR std::shared_ptr
+#else
+#define REF std::tr1::ref
+#define SHARED_PTR std::tr1::shared_ptr
 #endif
 
 using replicant::object_manager;
@@ -213,7 +228,7 @@ struct object_manager::object::suspicion
     suspicion() : slot(0), callback() {}
     ~suspicion() throw () {}
     uint64_t slot;
-    std::tr1::shared_ptr<e::buffer> callback;
+    SHARED_PTR<e::buffer> callback;
 };
 
 object_manager :: object :: object(uint64_t slot)
@@ -242,10 +257,48 @@ object_manager :: object :: ~object() throw ()
     }
 }
 
+namespace replicant
+{
+
+class thread_wrapper
+{
+    public:
+        thread_wrapper(object_manager* om, uint64_t obj_id, e::intrusive_ptr<object_manager::object> obj)
+            : m_om(om)
+            , m_obj_id(obj_id)
+            , m_obj(obj)
+        {
+        }
+
+        thread_wrapper(const thread_wrapper& other)
+            : m_om(other.m_om)
+            , m_obj_id(other.m_obj_id)
+            , m_obj(other.m_obj)
+        {
+        }
+
+    public:
+        void operator () ()
+        {
+            m_om->worker_thread(m_obj_id, m_obj);
+        }
+
+    private:
+        thread_wrapper& operator = (const thread_wrapper&);
+
+    private:
+        object_manager* m_om;
+        uint64_t m_obj_id;
+        e::intrusive_ptr<object_manager::object> m_obj;
+};
+
+} // namespace replicant
+
 void
 object_manager :: object :: start_thread(object_manager* om, uint64_t obj_id, e::intrusive_ptr<object> obj)
 {
-    m_thread.reset(new po6::threads::thread(std::tr1::bind(&object_manager::worker_thread, om, obj_id, obj)));
+    thread_wrapper tw(om, obj_id, obj);
+    m_thread.reset(new po6::threads::thread(REF(tw)));
     m_thread->start();
 }
 
@@ -867,7 +920,7 @@ object_manager :: common_object_initialize(uint64_t slot,
 {
     // write out the library
     char buf[43 /*strlen("./libreplicant-slot<slot \lt 2**64>.so\x00")*/];
-    sprintf(buf, "./libreplicant-slot%lu.so", slot);
+    sprintf(buf, "./libreplicant-slot%llu.so", slot);
     po6::io::fd tmplib(open(buf, O_WRONLY|O_CREAT|O_EXCL, S_IRWXU));
 
     if (tmplib.get() < 0)
