@@ -513,7 +513,7 @@ fact_store :: open(const po6::pathname& path,
 
     if (!initialize(ostr, restored, us))
     {
-        LOG(ERROR) << ostr.str() << std::endl;
+        LOG(ERROR) << ostr;
         return false;
     }
 

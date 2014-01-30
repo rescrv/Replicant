@@ -32,6 +32,7 @@
 #include <queue>
 #include <functional>
 #include <set>
+#include <tr1/memory>
 #include <utility>
 #include <vector>
 
@@ -256,7 +257,7 @@ class daemon
         po6::threads::mutex m_periodic_mtx;
         std::vector<periodic> m_periodic;
         po6::threads::mutex m_deferred_mtx;
-        std::list<deferred_command> m_deferred;
+        std::queue<deferred_command> m_deferred;
         std::map<uint64_t, uint64_t> m_temporary_servers;
         uint64_t m_heal_token;
         heal_next m_heal_next;

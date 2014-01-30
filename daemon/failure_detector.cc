@@ -60,14 +60,22 @@ failure_detector :: failure_detector(uint64_t now, uint64_t interval, uint64_t w
     {
         uint64_t then = now - delta * (window_sz - 1);
 
-        while (m_window->size() < m_window_sz)
+        while (m_window.size() < m_window_sz)
         {
             heartbeat(seqno(), then);
             then += delta;
         }
 
-        assert(m_window->back().time == now);
+        assert(m_window.back().time == now);
     }
+
+#if 0
+    uint64_t delta = interval + interval / 10.;
+
+    while (now >= delta && m_window.size() < m_window_sz)
+    {
+    }
+#endif
 }
 
 failure_detector :: ~failure_detector() throw ()
@@ -77,34 +85,34 @@ failure_detector :: ~failure_detector() throw ()
 uint64_t
 failure_detector :: seqno()
 {
-    if (m_window->empty())
+    if (m_window.empty())
     {
         return 0;
     }
     else
     {
-        return m_window->back().seqno + 1;
+        return m_window.back().seqno + 1;
     }
 }
 
 void
 failure_detector :: heartbeat(uint64_t seq, uint64_t now)
 {
-    if (m_window->empty() ||
-        (m_window->back().seqno < seq &&
-         m_window->back().time < now))
+    if (m_window.empty() ||
+        (m_window.back().seqno < seq &&
+         m_window.back().time < now))
     {
-        m_window->push_back(ping(seq, now));
+        m_window.push_back(ping(seq, now));
     }
-    else if (m_window->back().seqno == seq &&
-             m_window->back().time < now)
+    else if (m_window.back().seqno == seq &&
+             m_window.back().time < now)
     {
-        m_window->back().time = now;
+        m_window.back().time = now;
     }
 
-    if (m_window->size() > m_window_sz)
+    if (m_window.size() > m_window_sz)
     {
-        m_window->pop_front();
+        m_window.pop_front();
     }
 }
 
@@ -135,8 +143,8 @@ phi(double x)
 double
 failure_detector :: suspicion(uint64_t now)
 {
-    if (m_window->empty() ||
-        m_window->size() < m_window_sz / 10.)
+    if (m_window.empty() ||
+        m_window.size() < m_window_sz / 10.)
     {
         return 1.0;
     }
@@ -146,10 +154,10 @@ failure_detector :: suspicion(uint64_t now)
     double mean = 0;
     double M2 = 0;
 
-    std::deque<ping>::iterator a = m_window->begin();
-    std::deque<ping>::iterator b = m_window->begin() + 1;
+    std::deque<ping>::iterator a = m_window.begin();
+    std::deque<ping>::iterator b = m_window.begin() + 1;
 
-    while (b != m_window->end())
+    while (b != m_window.end())
     {
         ++n;
         double diff = b->time - a->time;
@@ -164,7 +172,7 @@ failure_detector :: suspicion(uint64_t now)
     stdev = std::max(stdev, m_interval / 50.);
 
     // Run that through phi
-    double f = phi(((now - m_window->back().time) - mean) / stdev);
+    double f = phi(((now - m_window.back().time) - mean) / stdev);
 
     if (f < 1.0)
     {

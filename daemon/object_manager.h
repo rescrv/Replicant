@@ -86,7 +86,6 @@ class object_manager
         class command;
         typedef std::map<uint64_t, e::intrusive_ptr<object> > object_map_t;
         typedef std::set<e::intrusive_ptr<object> > object_set_t;
-        friend class thread_wrapper;
 
     private:
         e::intrusive_ptr<object> common_object_initialize(uint64_t slot,

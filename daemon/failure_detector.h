@@ -33,7 +33,6 @@
 
 // STL
 #include <deque>
-#include <memory>
 
 // e
 #include <e/intrusive_ptr.h>
@@ -59,7 +58,7 @@ class failure_detector
         void dec() { if (--m_ref == 0) delete this; }
 
     private:
-        std::auto_ptr<std::deque<ping> > m_window;
+        std::deque<ping> m_window;
         uint64_t m_window_sz;
         uint64_t m_interval;
         size_t m_ref;
