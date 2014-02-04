@@ -37,7 +37,13 @@
 
 // STL
 #include <list>
+#ifdef _LIBCPP_VERSION
+#include <functional>
 #include <memory>
+#else
+#include <tr1/functional>
+#include <tr1/memory>
+#endif
 
 // Google Log
 #include <glog/logging.h>
@@ -67,6 +73,12 @@
 #include "daemon/snapshot.h"
 #if defined __APPLE__
 #include "daemon/memstream.h"
+#endif
+
+#ifdef _LIBCPP_VERSION
+#define SHARED_PTR std::shared_ptr
+#else
+#define SHARED_PTR std::tr1::shared_ptr
 #endif
 
 using replicant::object_manager;
@@ -213,7 +225,7 @@ struct object_manager::object::suspicion
     suspicion() : slot(0), callback() {}
     ~suspicion() throw () {}
     uint64_t slot;
-    std::tr1::shared_ptr<e::buffer> callback;
+    SHARED_PTR<e::buffer> callback;
 };
 
 object_manager :: object :: object(uint64_t slot)
@@ -867,7 +879,7 @@ object_manager :: common_object_initialize(uint64_t slot,
 {
     // write out the library
     char buf[43 /*strlen("./libreplicant-slot<slot \lt 2**64>.so\x00")*/];
-    sprintf(buf, "./libreplicant-slot%lu.so", slot);
+    sprintf(buf, "./libreplicant-slot%llu.so", slot);
     po6::io::fd tmplib(open(buf, O_WRONLY|O_CREAT|O_EXCL, S_IRWXU));
 
     if (tmplib.get() < 0)

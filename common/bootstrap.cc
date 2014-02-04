@@ -110,6 +110,7 @@ replicant :: bootstrap(const po6::net::hostname& hn, configuration* config)
     }
     catch (po6::error& e)
     {
+        errno = e;
         return BOOTSTRAP_SEE_ERRNO;
     }
 }

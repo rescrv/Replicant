@@ -32,7 +32,6 @@
 #include <queue>
 #include <functional>
 #include <set>
-#include <tr1/memory>
 #include <utility>
 #include <vector>
 
