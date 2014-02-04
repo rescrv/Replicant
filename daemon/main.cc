@@ -65,6 +65,7 @@ main(int argc, const char* argv[])
     const char* init_lib = NULL;
     const char* init_str = NULL;
     const char* init_rst = NULL;
+    bool log_immediate = false;
 
     e::argparser ap;
     ap.autohelp();
@@ -104,6 +105,9 @@ main(int argc, const char* argv[])
     ap.arg().long_name("restore")
             .description("initialize a new cluster by restoring object/library with this backup")
             .metavar("restore").as_string(&init_rst).hidden();
+    ap.arg().long_name("log-immediate")
+            .description("immediately flush all log output")
+            .set_true(&log_immediate).hidden();
 
     if (!ap.parse(argc, argv))
     {
@@ -185,6 +189,11 @@ main(int argc, const char* argv[])
 
     google::InitGoogleLogging(argv[0]);
     google::InstallFailureSignalHandler();
+
+    if (log_immediate)
+    {
+        FLAGS_logbufsecs = 0;
+    }
 
     try
     {
