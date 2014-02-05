@@ -202,7 +202,7 @@ failure_manager :: get_suspicions(uint64_t now, std::vector<uint64_t>* tokens, s
 
     for (size_t i = 0; i < stats.size(); ++i)
     {
-        if (std::isinf(stats[*cutoff].suspicion))
+        if (std::isinf(stats[i].suspicion))
         {
             *cutoff = i;
             return;
@@ -217,10 +217,10 @@ failure_manager :: get_suspicions(uint64_t now, std::vector<uint64_t>* tokens, s
 
     for (size_t i = stats.size() - 1; i > 0; --i)
     {
-        double threshold = stats[*cutoff - 1].mean
-                         + 6 * std::max(stats[*cutoff - 1].stdev, 0.25);
+        double threshold = stats[i - 1].mean
+                         + 6 * std::max(stats[i - 1].stdev, 0.25);
 
-        if (stats[*cutoff].suspicion > threshold)
+        if (stats[i].suspicion > threshold)
         {
             *cutoff = i;
             return;
