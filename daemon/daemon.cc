@@ -173,7 +173,7 @@ daemon :: daemon()
     , m_periodic_mtx()
     , m_periodic()
     , m_deferred_mtx()
-    , m_deferred()
+    , m_deferred(new std::queue<deferred_command>())
     , m_temporary_servers()
     , m_heal_token(0)
     , m_heal_next()
@@ -186,7 +186,7 @@ daemon :: daemon()
     m_periodic.empty();
     m_periodic_mtx.unlock();
     m_deferred_mtx.lock();
-    m_deferred.empty();
+    m_deferred->empty();
     m_deferred_mtx.unlock();
     m_object_manager.set_callback(this, &daemon::record_execution,
                                         &daemon::send_notify,
@@ -1892,7 +1892,7 @@ daemon :: defer_command(uint64_t object,
 
     {
         po6::threads::mutex::hold hold(&m_deferred_mtx);
-        m_deferred.push(deferred_command(object, client, data));
+        m_deferred->push(deferred_command(object, client, data));
     }
 
     trip_periodic(0, &daemon::periodic_execute_deferred);
@@ -1909,7 +1909,7 @@ daemon :: defer_command(uint64_t object,
 
     {
         po6::threads::mutex::hold hold(&m_deferred_mtx);
-        m_deferred.push(deferred_command(object, client, nonce, data));
+        m_deferred->push(deferred_command(object, client, nonce, data));
     }
 
     trip_periodic(0, &daemon::periodic_execute_deferred);
@@ -2057,9 +2057,9 @@ daemon :: periodic_describe_slots(uint64_t now)
 void
 daemon :: periodic_execute_deferred(uint64_t)
 {
-    while (!m_deferred.empty())
+    while (!m_deferred->empty())
     {
-        const deferred_command& dc(m_deferred.front());
+        const deferred_command& dc(m_deferred->front());
         uint64_t slot = m_fs.next_slot_to_issue();
 
         if (dc.has_nonce)
@@ -2071,7 +2071,7 @@ daemon :: periodic_execute_deferred(uint64_t)
             issue_command(slot, dc.object, dc.client, slot, dc.data->as_slice());
         }
 
-        m_deferred.pop();
+        m_deferred->pop();
     }
 }
 
