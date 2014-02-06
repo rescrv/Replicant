@@ -38,10 +38,8 @@
 // STL
 #include <list>
 #ifdef _LIBCPP_VERSION
-#include <functional>
 #include <memory>
 #else
-#include <tr1/functional>
 #include <tr1/memory>
 #endif
 
@@ -155,7 +153,7 @@ class object_manager::object
 {
     public:
         class condition;
-        class suspicion;
+        struct suspicion;
 
     public:
         object(uint64_t created_at_slot);
@@ -228,6 +226,18 @@ struct object_manager::object::suspicion
     SHARED_PTR<e::buffer> callback;
 };
 
+struct object_manager::thread_wrapper
+{
+    thread_wrapper(object_manager* om, uint64_t obj_id, e::intrusive_ptr<object> obj)
+        : m_om(om), m_obj_id(obj_id), m_obj(obj) {}
+
+    void operator () () { m_om->worker_thread(m_obj_id, m_obj); }
+
+    object_manager* m_om;
+    uint64_t m_obj_id;
+    e::intrusive_ptr<object> m_obj;
+};
+
 object_manager :: object :: object(uint64_t slot)
     : lib(NULL)
     , sym(NULL)
@@ -257,7 +267,7 @@ object_manager :: object :: ~object() throw ()
 void
 object_manager :: object :: start_thread(object_manager* om, uint64_t obj_id, e::intrusive_ptr<object> obj)
 {
-    m_thread.reset(new po6::threads::thread(std::tr1::bind(&object_manager::worker_thread, om, obj_id, obj)));
+    m_thread.reset(new po6::threads::thread(thread_wrapper(om, obj_id, obj)));
     m_thread->start();
 }
 

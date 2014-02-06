@@ -47,7 +47,7 @@
 #include "common/response_returncode.h"
 #include "daemon/snapshot.h"
 
-class replicant_state_machine_context;
+struct replicant_state_machine_context;
 namespace replicant
 {
 class daemon;
@@ -56,6 +56,7 @@ class object_manager
 {
     public:
         class object;
+        struct thread_wrapper;
 
     public:
         object_manager();

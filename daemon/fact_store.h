@@ -109,9 +109,9 @@ class fact_store
         bool integrity_check(const po6::pathname& path, bool destructive);
 
     private:
-        class slot;
-        class exec;
-        class slot_mapping;
+        struct slot;
+        struct exec;
+        struct slot_mapping;
 
     // setup the database
     private:

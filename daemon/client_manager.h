@@ -55,7 +55,7 @@ class client_manager
         void proof_of_life(uint64_t client, uint64_t now);
 
     private:
-        class client_metadata;
+        struct client_metadata;
         std::vector<client_metadata> m_clients;
 };
 

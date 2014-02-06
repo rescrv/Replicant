@@ -40,7 +40,7 @@ namespace replicant
 class configuration_manager
 {
     public:
-        class proposal;
+        struct proposal;
 
     public:
         configuration_manager();
