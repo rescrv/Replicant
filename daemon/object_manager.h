@@ -56,7 +56,6 @@ class object_manager
 {
     public:
         class object;
-        struct thread_wrapper;
 
     public:
         object_manager();

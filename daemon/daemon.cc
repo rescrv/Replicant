@@ -41,11 +41,6 @@
 
 // STL
 #include <algorithm>
-#ifdef _LIBCPP_VERSION
-#include <memory>
-#else
-#include <tr1/memory>
-#endif
 
 // Google Log
 #include <glog/logging.h>
@@ -55,6 +50,7 @@
 #include <po6/pathname.h>
 
 // e
+#include <e/compat.h>
 #include <e/endian.h>
 #include <e/envconfig.h>
 #include <e/strescape.h>
@@ -76,12 +72,6 @@
 #include "daemon/request_response.h"
 
 using replicant::daemon;
-
-#ifdef _LIBCPP_VERSION
-#define SHARED_PTR std::shared_ptr
-#else
-#define SHARED_PTR std::tr1::shared_ptr
-#endif
 
 #define CHECK_UNPACK(MSGTYPE, UNPACKER) \
     do \
@@ -121,10 +111,10 @@ struct daemon::deferred_command
 {
     deferred_command() : object(), client(), has_nonce(), nonce(), data() {}
     deferred_command(uint64_t o, uint64_t c,
-                     SHARED_PTR<e::buffer> d)
+                     e::compat::shared_ptr<e::buffer> d)
         : object(o), client(c), has_nonce(false), nonce(0), data(d) {}
     deferred_command(uint64_t o, uint64_t c, uint64_t n,
-                     SHARED_PTR<e::buffer> d)
+                     e::compat::shared_ptr<e::buffer> d)
         : object(o), client(c), has_nonce(true), nonce(n), data(d) {}
     deferred_command(const deferred_command& other)
         : object(other.object)
@@ -153,7 +143,7 @@ struct daemon::deferred_command
     uint64_t client;
     bool has_nonce; // else it's the slot
     uint64_t nonce;
-    SHARED_PTR<e::buffer> data;
+    e::compat::shared_ptr<e::buffer> data;
 };
 
 daemon :: ~daemon() throw ()
@@ -1886,7 +1876,7 @@ daemon :: defer_command(uint64_t object,
                         uint64_t client,
                         const e::slice& _data)
 {
-    SHARED_PTR<e::buffer> data(e::buffer::create(_data.size()));
+    e::compat::shared_ptr<e::buffer> data(e::buffer::create(_data.size()));
     data->resize(_data.size());
     memmove(data->data(), _data.data(), _data.size());
 
@@ -1903,7 +1893,7 @@ daemon :: defer_command(uint64_t object,
                         uint64_t client, uint64_t nonce,
                         const e::slice& _data)
 {
-    SHARED_PTR<e::buffer> data(e::buffer::create(_data.size()));
+    e::compat::shared_ptr<e::buffer> data(e::buffer::create(_data.size()));
     data->resize(_data.size());
     memmove(data->data(), _data.data(), _data.size());
 

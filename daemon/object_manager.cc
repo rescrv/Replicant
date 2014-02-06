@@ -37,11 +37,6 @@
 
 // STL
 #include <list>
-#ifdef _LIBCPP_VERSION
-#include <memory>
-#else
-#include <tr1/memory>
-#endif
 
 // Google Log
 #include <glog/logging.h>
@@ -54,6 +49,7 @@
 
 // e
 #include <e/buffer.h>
+#include <e/compat.h>
 #include <e/endian.h>
 #include <e/time.h>
 
@@ -71,12 +67,6 @@
 #include "daemon/snapshot.h"
 #if defined __APPLE__
 #include "daemon/memstream.h"
-#endif
-
-#ifdef _LIBCPP_VERSION
-#define SHARED_PTR std::shared_ptr
-#else
-#define SHARED_PTR std::tr1::shared_ptr
 #endif
 
 using replicant::object_manager;
@@ -223,19 +213,7 @@ struct object_manager::object::suspicion
     suspicion() : slot(0), callback() {}
     ~suspicion() throw () {}
     uint64_t slot;
-    SHARED_PTR<e::buffer> callback;
-};
-
-struct object_manager::thread_wrapper
-{
-    thread_wrapper(object_manager* om, uint64_t obj_id, e::intrusive_ptr<object> obj)
-        : m_om(om), m_obj_id(obj_id), m_obj(obj) {}
-
-    void operator () () { m_om->worker_thread(m_obj_id, m_obj); }
-
-    object_manager* m_om;
-    uint64_t m_obj_id;
-    e::intrusive_ptr<object> m_obj;
+    e::compat::shared_ptr<e::buffer> callback;
 };
 
 object_manager :: object :: object(uint64_t slot)
@@ -267,7 +245,9 @@ object_manager :: object :: ~object() throw ()
 void
 object_manager :: object :: start_thread(object_manager* om, uint64_t obj_id, e::intrusive_ptr<object> obj)
 {
-    m_thread.reset(new po6::threads::thread(thread_wrapper(om, obj_id, obj)));
+    using namespace po6::threads;
+    function f(make_thread_wrapper(&object_manager::worker_thread, om, obj_id, obj));
+    m_thread.reset(new thread(f));
     m_thread->start();
 }
 
