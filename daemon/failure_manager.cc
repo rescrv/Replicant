@@ -227,7 +227,7 @@ failure_manager :: get_suspicions(uint64_t now, std::vector<uint64_t>* tokens, s
         }
     }
 
-    if (stats[0].suspicion > 10.)
+    if (stats[0].suspicion > 16.)
     {
         *cutoff = 0;
         return;

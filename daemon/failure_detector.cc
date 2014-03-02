@@ -55,12 +55,13 @@ failure_detector :: failure_detector(uint64_t now, uint64_t interval, uint64_t w
     , m_ref(0)
 {
     uint64_t delta = interval + interval / 10.;
+    uint64_t tenth_window_sz = m_window_sz / 10;
 
-    if (delta * window_sz < now)
+    if (delta * tenth_window_sz < now)
     {
-        uint64_t then = now - delta * (window_sz - 1);
+        uint64_t then = now - delta * (tenth_window_sz - 1);
 
-        while (m_window->size() < m_window_sz)
+        while (m_window->size() < tenth_window_sz)
         {
             heartbeat(seqno(), then);
             then += delta;
@@ -161,7 +162,7 @@ failure_detector :: suspicion(uint64_t now)
     }
 
     double stdev = sqrt(M2 / (n - 1));
-    stdev = std::max(stdev, m_interval / 50.);
+    stdev = std::max(stdev, double(m_interval));
 
     // Run that through phi
     double f = phi(((now - m_window->back().time) - mean) / stdev);
