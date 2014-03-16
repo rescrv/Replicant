@@ -1,4 +1,0 @@
-ASSUME:  Only one process may bind to a given IP/port pair at a time
-VIOLATE?  If violated, this may lead to duplicate processes registering with the
-    same token if through extreme luck (or a broken /dev/urandom) the two
-    clients race and select the same unique 64-bit integer
