@@ -253,7 +253,6 @@ class daemon
         replicant::object_manager m_object_manager;
         failure_manager m_failure_manager;
         client_manager m_client_manager;
-        std::vector<uint64_t> m_suspected_clients;
         po6::threads::mutex m_periodic_mtx;
         std::vector<periodic> m_periodic;
         po6::threads::mutex m_deferred_mtx;

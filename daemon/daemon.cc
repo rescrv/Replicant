@@ -159,7 +159,6 @@ daemon :: daemon()
     , m_object_manager()
     , m_failure_manager()
     , m_client_manager()
-    , m_suspected_clients()
     , m_periodic_mtx()
     , m_periodic()
     , m_deferred_mtx()
@@ -2459,24 +2458,11 @@ daemon :: periodic_suspect_clients(uint64_t now)
                                    &clients);
     size_t cutoff = 0;
     m_failure_manager.get_suspicions(now, &clients, &cutoff);
-    std::vector<uint64_t> suspected;
 
     for (size_t i = cutoff; i < clients.size(); ++i)
     {
-        if (std::binary_search(m_suspected_clients.begin(),
-                               m_suspected_clients.end(),
-                               clients[i]))
-        {
-            m_object_manager.suspect(clients[i]);
-        }
-        else
-        {
-            suspected.push_back(clients[i]);
-        }
+        m_object_manager.suspect(clients[i]);
     }
-
-    std::sort(suspected.begin(), suspected.end());
-    suspected.swap(m_suspected_clients);
 }
 
 void
@@ -2536,6 +2522,23 @@ daemon :: update_failure_detectors()
     std::merge(nodes.begin(), nodes.end(),
                clients.begin(), clients.end(),
                ids.begin());
+
+    for (size_t i = 0; i < ids.size(); ++i)
+    {
+        if (ids[i] != m_us.token)
+        {
+            continue;
+        }
+
+        for (size_t j = i + 1; j < ids.size(); ++j)
+        {
+            ids[j - 1] = ids[j];
+        }
+
+        ids.pop_back();
+        break;
+    }
+
     uint64_t now = monotonic_time();
     m_failure_manager.track(now, ids,
                             m_s.FAILURE_DETECT_INTERVAL,

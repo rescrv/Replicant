@@ -1142,23 +1142,23 @@ replicant_client :: handle_command_response(const chain_node& node,
             break;
         case replicant::RESPONSE_NO_CTOR:
             c->fail(REPLICANT_BAD_LIBRARY);
-            ERROR(BAD_LIBRARY) << "state machine not doesn't contain a constructor";
+            ERROR(BAD_LIBRARY) << "state machine doesn't contain a constructor";
             break;
         case replicant::RESPONSE_NO_RTOR:
             c->fail(REPLICANT_BAD_LIBRARY);
-            ERROR(BAD_LIBRARY) << "state machine not doesn't contain a reconstructor";
+            ERROR(BAD_LIBRARY) << "state machine doesn't contain a reconstructor";
             break;
         case replicant::RESPONSE_NO_DTOR:
             c->fail(REPLICANT_BAD_LIBRARY);
-            ERROR(BAD_LIBRARY) << "state machine not doesn't contain a denstructor";
+            ERROR(BAD_LIBRARY) << "state machine doesn't contain a denstructor";
             break;
         case replicant::RESPONSE_NO_SNAP:
             c->fail(REPLICANT_BAD_LIBRARY);
-            ERROR(BAD_LIBRARY) << "state machine not doesn't contain a snapshot function";
+            ERROR(BAD_LIBRARY) << "state machine doesn't contain a snapshot function";
             break;
         case replicant::RESPONSE_NO_FUNC:
             c->fail(REPLICANT_FUNC_NOT_FOUND);
-            ERROR(FUNC_NOT_FOUND) << "state machine not doesn't contain the requested function";
+            ERROR(FUNC_NOT_FOUND) << "state machine doesn't contain the requested function";
             break;
         case replicant::RESPONSE_CTOR_FAILED:
             c->fail(REPLICANT_CTOR_FAILED);
