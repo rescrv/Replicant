@@ -2495,6 +2495,14 @@ daemon :: periodic_disconnect_clients(uint64_t now)
             continue;
         }
 
+        po6::net::location addr;
+
+        if (m_busybee->get_addr(our_clients[i], &addr) == BUSYBEE_SUCCESS)
+        {
+            m_client_manager.proof_of_life(our_clients[i], now);
+            continue;
+        }
+
         size_t sz = BUSYBEE_HEADER_SIZE
                   + pack_size(REPLNET_CLIENT_TIMEOUT)
                   + sizeof(uint64_t)
