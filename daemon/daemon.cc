@@ -2564,15 +2564,16 @@ daemon :: issue_suspect_callback(uint64_t obj_id,
 void
 daemon :: periodic_alarm(uint64_t now)
 {
+    uint64_t ms250 = 250ULL * 1000ULL * 1000ULL;
+    uint64_t when = now + ms250 - (now % ms250);
+    trip_periodic(when, &daemon::periodic_alarm);
+
     if (*m_config_manager.stable().head() != m_us)
     {
         return;
     }
 
     m_object_manager.periodic(now);
-    uint64_t ms250 = 250ULL * 1000ULL * 1000ULL;
-    uint64_t when = now + ms250 - (now % ms250);
-    trip_periodic(when, &daemon::periodic_alarm);
 }
 
 void
