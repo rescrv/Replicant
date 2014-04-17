@@ -170,6 +170,7 @@ class object_manager::object
         void throttle(size_t sz);
         void set_alarm(const char* func, uint64_t seconds);
         bool trip_alarm(uint64_t now, const char** func);
+        void clear_alarm(const char* func);
         void set_suspect(uint64_t client,
                          uint64_t slot,
                          std::auto_ptr<e::buffer> callback);
@@ -357,13 +358,23 @@ object_manager :: object :: trip_alarm(uint64_t now, const char** func)
     if (now >= m_alarm_when && m_alarm_when > 0)
     {
         *func = m_alarm_func;
-        m_alarm_func = "";
-        m_alarm_when = 0;
         return true;
     }
     else
     {
         return false;
+    }
+}
+
+void
+object_manager :: object :: clear_alarm(const char* func)
+{
+    po6::threads::mutex::hold hold(&m_mtx);
+
+    if (strcmp(m_alarm_func, func) == 0)
+    {
+        m_alarm_func = "";
+        m_alarm_when = 0;
     }
 }
 
@@ -869,7 +880,7 @@ object_manager :: common_object_initialize(uint64_t slot,
 {
     // write out the library
     char buf[43 /*strlen("./libreplicant-slot<slot \lt 2**64>.so\x00")*/];
-    sprintf(buf, "./libreplicant-slot%llu.so", slot);
+    sprintf(buf, "./libreplicant-slot%lu.so", slot);
     po6::io::fd tmplib(open(buf, O_WRONLY|O_CREAT|O_EXCL, S_IRWXU));
 
     if (tmplib.get() < 0)
@@ -1135,6 +1146,7 @@ object_manager :: dispatch_command_normal(uint64_t obj_id,
         return;
     }
 
+    obj->clear_alarm(func);
     replicant_state_machine_step* syms = obj->sym->steps;
     replicant_state_machine_step* sym = NULL;
 
