@@ -148,15 +148,18 @@ struct daemon::deferred_command
 
 daemon :: ~daemon() throw ()
 {
+    m_gc.deregister_thread(&m_gc_ts);
 }
 
 daemon :: daemon()
     : m_s()
+    , m_gc()
+    , m_gc_ts()
     , m_busybee_mapper()
     , m_busybee()
     , m_us()
     , m_config_manager()
-    , m_object_manager()
+    , m_object_manager(&m_gc)
     , m_failure_manager()
     , m_client_manager()
     , m_periodic_mtx()
@@ -187,6 +190,7 @@ daemon :: daemon()
     trip_periodic(0, &daemon::periodic_suspect_clients);
     trip_periodic(0, &daemon::periodic_disconnect_clients);
     trip_periodic(0, &daemon::periodic_alarm);
+    m_gc.register_thread(&m_gc_ts);
 }
 
 static bool
@@ -428,7 +432,7 @@ daemon :: run(bool daemonize,
         return EXIT_FAILURE;
     }
 
-    m_busybee.reset(new busybee_mta(&m_busybee_mapper, m_us.address, m_us.token, 0/*we don't use pause/unpause*/));
+    m_busybee.reset(new busybee_mta(&m_gc, &m_busybee_mapper, m_us.address, m_us.token, 0/*we don't use pause/unpause*/));
     m_busybee->set_timeout(1);
 
     if (!restored)
@@ -685,6 +689,8 @@ daemon :: run(bool daemonize,
         {
             exit_on_signal(SIGTERM);
         }
+
+        m_gc.quiescent_state(&m_gc_ts);
     }
 
     LOG(INFO) << "replicant is gracefully shutting down";

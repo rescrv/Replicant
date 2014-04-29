@@ -39,6 +39,7 @@
 // e
 #include <e/buffer.h>
 #include <e/error.h>
+#include <e/garbage_collector.h>
 #include <e/intrusive_ptr.h>
 
 // replicant_returncode occupies [4864, 5120)
@@ -170,6 +171,7 @@ class replicant_client
         replicant_client& operator = (const replicant_client& rhs);
 
     private:
+        std::auto_ptr<e::garbage_collector> m_gc;
         std::auto_ptr<replicant::mapper> m_busybee_mapper;
         std::auto_ptr<class busybee_st> m_busybee;
         std::auto_ptr<replicant::configuration> m_config;
@@ -184,6 +186,7 @@ class replicant_client
         command_map m_resend;
         e::error m_last_error;
         bool m_cluster_jump;
+        e::garbage_collector::thread_state m_gc_ts;
 };
 
 std::ostream&

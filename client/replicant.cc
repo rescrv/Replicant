@@ -25,6 +25,8 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
+#define __STDC_LIMIT_MACROS
+
 // e
 #include <e/endian.h>
 #include <e/time.h>
@@ -100,8 +102,9 @@ replicant_destroy_output(const char* output, size_t)
 }
 
 replicant_client :: replicant_client(const char* host, in_port_t port)
-    : m_busybee_mapper(new replicant::mapper())
-    , m_busybee(new busybee_st(m_busybee_mapper.get(), 0))
+    : m_gc(new e::garbage_collector())
+    , m_busybee_mapper(new replicant::mapper())
+    , m_busybee(new busybee_st(m_gc.get(), m_busybee_mapper.get(), 0))
     , m_config(new replicant::configuration())
     , m_bootstrap(host, port)
     , m_token(0x4141414141414141ULL)
@@ -113,11 +116,14 @@ replicant_client :: replicant_client(const char* host, in_port_t port)
     , m_resend()
     , m_last_error()
     , m_cluster_jump(false)
+    , m_gc_ts()
 {
+    m_gc->register_thread(&m_gc_ts);
 }
 
 replicant_client :: ~replicant_client() throw ()
 {
+    m_gc->deregister_thread(&m_gc_ts);
 }
 
 int64_t
@@ -498,6 +504,7 @@ replicant_client :: poll_fd()
 int64_t
 replicant_client :: inner_loop(replicant_returncode* status)
 {
+    m_gc->quiescent_state(&m_gc_ts);
     int64_t ret = maintain_connection(status);
 
     if (ret != 0)
@@ -1221,7 +1228,7 @@ void
 replicant_client :: reset_to_disconnected()
 {
     m_busybee_mapper.reset(new replicant::mapper());
-    m_busybee.reset(new busybee_st(m_busybee_mapper.get(), 0));
+    m_busybee.reset(new busybee_st(m_gc.get(), m_busybee_mapper.get(), 0));
     m_config.reset(new configuration());
     m_token = 0x4141414141414141ULL;
     // leave m_nonce

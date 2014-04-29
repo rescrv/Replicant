@@ -529,8 +529,9 @@ object_manager :: object :: condition :: waiter :: operator == (const waiter& rh
 
 ///////////////////////////////// Public Class /////////////////////////////////
 
-object_manager :: object_manager()
+object_manager :: object_manager(e::garbage_collector* gc)
     : m_daemon()
+    , m_gc(gc)
     , m_command_cb()
     , m_notify_cb()
     , m_snapshot_cb()
@@ -1046,10 +1047,13 @@ object_manager :: worker_thread(uint64_t obj_id, e::intrusive_ptr<object> obj)
         return;
     }
 
+    e::garbage_collector::thread_state gc_ts;
+    m_gc->register_thread(&gc_ts);
     bool shutdown = false;
 
     while (!shutdown)
     {
+        m_gc->quiescent_state(&gc_ts);
         std::list<command> commands;
         obj->dequeue(&commands, &shutdown);
 
@@ -1060,6 +1064,7 @@ object_manager :: worker_thread(uint64_t obj_id, e::intrusive_ptr<object> obj)
         }
     }
 
+    m_gc->deregister_thread(&gc_ts);
     LOG(INFO) << "exiting worker thread for object " << obj_id;
 }
 

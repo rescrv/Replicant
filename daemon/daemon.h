@@ -246,6 +246,8 @@ class daemon
 
     private:
         settings m_s;
+        e::garbage_collector m_gc;
+        e::garbage_collector::thread_state m_gc_ts;
         replicant::mapper m_busybee_mapper;
         std::auto_ptr<busybee_mta> m_busybee;
         chain_node m_us;

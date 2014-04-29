@@ -25,6 +25,8 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
+#define __STDC_LIMIT_MACROS
+
 #ifndef replicant_daemon_object_manager_h_
 #define replicant_daemon_object_manager_h_
 
@@ -40,6 +42,7 @@
 #include <po6/threads/mutex.h>
 
 // e
+#include <e/garbage_collector.h>
 #include <e/intrusive_ptr.h>
 #include <e/slice.h>
 
@@ -58,7 +61,7 @@ class object_manager
         class object;
 
     public:
-        object_manager();
+        object_manager(e::garbage_collector* gc);
         ~object_manager() throw ();
 
     public:
@@ -117,6 +120,7 @@ class object_manager
 
     private:
         daemon* m_daemon;
+        e::garbage_collector* m_gc;
         void (daemon::*m_command_cb)(uint64_t slot, uint64_t client, uint64_t nonce, response_returncode rc, const e::slice& data);
         void (daemon::*m_notify_cb)(uint64_t client, uint64_t nonce, response_returncode rc, const e::slice& data);
         void (daemon::*m_snapshot_cb)(std::auto_ptr<snapshot>);
