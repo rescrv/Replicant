@@ -28,6 +28,9 @@
 // C
 #include <cmath>
 
+// STL
+#include <algorithm>
+
 // BusyBee
 #include "busybee_constants.h"
 
