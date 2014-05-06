@@ -318,6 +318,15 @@ daemon :: run(bool daemonize,
         return EXIT_FAILURE;
     }
 
+    if (strlen(data.dirname().get()))
+    {
+        if (chdir(data.dirname().get()) < 0)
+        {
+            PLOG(ERROR) << "could not change cwd to data directory";
+            return EXIT_FAILURE;
+        }
+    }
+
     m_us.address = bind_to;
     bool init = false;
 
