@@ -62,6 +62,8 @@ main(int argc, const char* argv[])
     bool connect = false;
     const char* connect_host = "127.0.0.1";
     long connect_port = 1982;
+    const char* pidfile = "";
+    bool has_pidfile = false;
     bool init = false;
     const char* init_obj = NULL;
     const char* init_lib = NULL;
@@ -95,6 +97,9 @@ main(int argc, const char* argv[])
     ap.arg().name('P', "connect-port")
             .description("connect to an alternative port (default: 1982)")
             .metavar("port").as_long(&connect_port).set_true(&connect);
+    ap.arg().long_name("pidfile")
+            .description("write the PID to a file (default: don't)")
+            .metavar("file").as_string(&pidfile).set_true(&has_pidfile);
     ap.arg().long_name("object")
             .description("initialize a new cluster with this object")
             .metavar("object").as_string(&init_obj).set_true(&init).hidden();
@@ -203,6 +208,7 @@ main(int argc, const char* argv[])
         return d.run(daemonize,
                      po6::pathname(data),
                      po6::pathname(log ? log : data),
+                     po6::pathname(pidfile), has_pidfile,
                      listen, bind_to,
                      connect, po6::net::hostname(connect_host, connect_port),
                      init_obj, init_lib, init_str, init_rst);
