@@ -36,9 +36,6 @@
 #include <utility>
 #include <vector>
 
-// Google Sparsehash
-#include <google/dense_hash_map>
-
 // e
 #include <e/buffer.h>
 
