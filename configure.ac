@@ -58,7 +58,7 @@ else
     AC_SUBST([LRT_LIBS], [""])
 fi
 
-PKG_CHECK_MODULES([PO6], [libpo6 >= 0.3.1])
+PKG_CHECK_MODULES([PO6], [libpo6 >= 0.5])
 PKG_CHECK_MODULES([E], [libe >= 0.3.2])
 PKG_CHECK_MODULES([BUSYBEE], [busybee >= 0.3.0])
 PKG_CHECK_MODULES([HYPERLEVELDB], [libhyperleveldb >= 1.0])
