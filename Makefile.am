@@ -74,9 +74,11 @@ noinst_HEADERS += common/special_objects.h
 #################################### Daemon ####################################
 ################################################################################
 
+if ENABLE_DAEMON
 replicantexec_PROGRAMS += replicant-daemon
 lib_LTLIBRARIES += libreplicant-state-machine.la
 include_HEADERS += daemon/replicant_state_machine.h
+endif
 
 noinst_HEADERS += daemon/client_manager.h
 noinst_HEADERS += daemon/configuration_manager.h
@@ -128,9 +130,11 @@ libreplicant_state_machine_la_LDFLAGS = -version-info 1:0:0
 #################################### Client ####################################
 ################################################################################
 
+if ENABLE_CLIENT
 lib_LTLIBRARIES += libreplicant.la
 include_HEADERS += client/replicant.h
 pkgconfig_DATA += replicant.pc
+endif
 
 noinst_HEADERS += client/command.h
 noinst_HEADERS += client/replicant.h
@@ -153,7 +157,10 @@ libreplicant_la_LDFLAGS = -version-info 1:0:0
 ##################################### Tools ####################################
 ################################################################################
 
+if ENABLE_REPLICANT_STUB
 bin_PROGRAMS += replicant
+endif
+if ENABLE_TOOLS
 noinst_PROGRAMS += replicant-block
 noinst_PROGRAMS += replicant-cli
 replicantexec_PROGRAMS += replicant-new-object
@@ -162,6 +169,7 @@ replicantexec_PROGRAMS += replicant-backup-object
 replicantexec_PROGRAMS += replicant-restore-object
 replicantexec_PROGRAMS += replicant-debug-dump
 replicantexec_PROGRAMS += replicant-integrity-check
+endif
 
 noinst_HEADERS += tools/common.h
 
