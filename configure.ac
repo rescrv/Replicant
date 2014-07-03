@@ -44,6 +44,24 @@ AC_LANG(C++)
 
 ANAL_WARNINGS
 
+# Components that influence other checks
+AC_ARG_ENABLE([all-components], [AS_HELP_STRING([--enable-all-components],
+              [enable building all components @<:@default: yes@:>@])],
+              [enable_all_components=${enable_all_components}], [enable_all_components=yes])
+AC_ARG_ENABLE([client], [AS_HELP_STRING([--enable-client],
+              [enable building the client library @<:@default: yes@:>@])],
+              [enable_client=${enable_client}], [enable_client=${enable_all_components}])
+AM_CONDITIONAL([ENABLE_CLIENT], [test x"${enable_client}" = xyes])
+AC_ARG_ENABLE([tools], [AS_HELP_STRING([--enable-tools],
+              [enable building the command-line tools @<:@default: yes@:>@])],
+              [enable_tools=${enable_tools}], [enable_tools=${enable_all_components}])
+AM_CONDITIONAL([ENABLE_TOOLS], [test x"${enable_tools}" = xyes])
+AC_ARG_ENABLE([daemon], [AS_HELP_STRING([--enable-daemon],
+              [enable building the daemon @<:@default: yes@:>@])],
+              [enable_daemon=${enable_daemon}], [enable_daemon=${enable_all_components}])
+AM_CONDITIONAL([ENABLE_DAEMON], [test x"${enable_daemon}" = xyes])
+AM_CONDITIONAL([ENABLE_REPLICANT_STUB], [test x"${enable_daemon}" = xyes -o x"${enable_tools}" = xyes])
+
 # Checks for libraries.
 AC_CHECK_LIB([popt], [poptGetContext], [], [AC_MSG_ERROR([
 ---------------------------------------
