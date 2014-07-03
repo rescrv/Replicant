@@ -1330,7 +1330,7 @@ fact_store :: integrity_check(int tries_remaining, bool output, bool destructive
         REPORT_ERROR("not checking proposals further; no accepted configurations found");
     }
 
-    uint64_t erase_slots_above = UINT64_MAX;
+    uint64_t erase_slots_ge = UINT64_MAX;
 
     // check that slots are continuous
     for (size_t i = 1; i < slots_issued.size(); ++i)
@@ -1344,34 +1344,40 @@ fact_store :: integrity_check(int tries_remaining, bool output, bool destructive
             // if not acked, this is recoverable
             if (slots_issued[i].number > slots_acked.empty() ? 0 : slots_acked.back())
             {
-                erase_slots_above = std::min(erase_slots_above,
-                                             slots_issued[i].number);
+                erase_slots_ge = std::min(erase_slots_ge,
+                                          slots_issued[i].number);
             }
         }
     }
 
-    if (erase_slots_above < UINT64_MAX)
+    if (slots_issued.empty() || slots_issued.back().number > erase_slots_ge)
     {
         if (!destructive)
         {
-            REPORT_ERROR("must erase slots above " << erase_slots_above
+            REPORT_ERROR("must erase slots above " << erase_slots_ge
                          << " (this error may be fixed automatically by a destructive integrity check)");
         }
         else
         {
-            REPORT_ERROR("must erase slots above " << erase_slots_above
+            REPORT_ERROR("must erase slots above " << erase_slots_ge
                          << " (running in destructive mode: trying to fix automatically)");
 
             for (size_t i = 0; i < slots_issued.size(); ++i)
             {
-                uint64_t number = slots_issued[slots_issued.size() - i - 1].number;
+                uint64_t number = slots_issued[i].number;
 
-                if (number >= erase_slots_above)
+                if (number >= erase_slots_ge)
                 {
                     char key[SLOT_KEY_SIZE];
                     pack_slot_key(number, key);
                     delete_key(key, SLOT_KEY_SIZE);
                 }
+            }
+
+            while (!slots_issued.empty() &&
+                   slots_issued.back().number >= erase_slots_ge)
+            {
+                slots_issued.pop_back();
             }
 
             tried_something = true;
@@ -1409,50 +1415,64 @@ fact_store :: integrity_check(int tries_remaining, bool output, bool destructive
     }
 
     // check the bidirection mapping (client, nonce) <-> slot
-    for (size_t i = 0; i < slot_mappings.size(); ++i)
+    for (size_t i = 0; i < slot_mappings.size(); )
     {
+        bool remove = false;
+
         if (slots_issued.empty() ||
             slots_issued.front().number > slot_mappings[i].slot ||
             slots_issued.back().number < slot_mappings[i].slot)
         {
-            if (!destructive)
-            {
-                REPORT_ERROR("slot mapping (" << slot_mappings[i].client << ", "
-                             << slot_mappings[i].nonce << ") -> "
-                             << slot_mappings[i].slot << " points to invalid slot"
-                             << " (this error may be fixed automatically by a destructive integrity check)");
-            }
-            else
-            {
-                REPORT_ERROR("slot mapping (" << slot_mappings[i].client << ", "
-                             << slot_mappings[i].nonce << ") -> "
-                             << slot_mappings[i].slot << " points to invalid slot"
-                             << " (running in destructive mode: trying to fix automatically)");
-                char key[NONCE_KEY_SIZE];
-                pack_nonce_key(slot_mappings[i].client, slot_mappings[i].nonce, key);
-                delete_key(key, NONCE_KEY_SIZE);
-                tried_something = true;
-            }
+            REPORT_ERROR("slot mapping (" << slot_mappings[i].client << ", "
+                         << slot_mappings[i].nonce << ") -> "
+                         << slot_mappings[i].slot << " points to invalid slot"
+                         << (!destructive ?
+                             " (this error may be fixed automatically by a destructive integrity check)" :
+                             " (running in destructive mode: trying to fix automatically)"));
+            remove = true;
+        }
+        else
+        {
+            slot s;
+            s.number = slot_mappings[i].slot;
+            std::vector<slot>::iterator it;
+            it = std::lower_bound(slots_issued.begin(),
+                                  slots_issued.end(), s);
+            assert(it != slots_issued.end());
 
-            continue;
+            if (it->client != slot_mappings[i].client ||
+                it->nonce != slot_mappings[i].nonce)
+            {
+                REPORT_ERROR("unreciprocal slot mapping ("
+                             << slot_mappings[i].client << ", "
+                             << slot_mappings[i].nonce << ") -> "
+                             << slot_mappings[i].slot << " -> ("
+                             << slots_issued[i].client << ", "
+                             << slots_issued[i].nonce << ")"
+                             << (!destructive ?
+                                 " (this error may be fixed automatically by a destructive integrity check)" :
+                                 " (running in destructive mode: trying to fix automatically)"));
+                remove = true;
+            }
         }
 
-        slot s;
-        s.number = slot_mappings[i].slot;
-        std::vector<slot>::iterator it;
-        it = std::lower_bound(slots_issued.begin(),
-                              slots_issued.end(), s);
-        assert(it != slots_issued.end());
-
-        if (it->client != slot_mappings[i].client ||
-            it->nonce != slot_mappings[i].nonce)
+        if (remove && destructive)
         {
-            REPORT_ERROR("unreciprocal slot mapping ("
-                         << slot_mappings[i].client << ", "
-                         << slot_mappings[i].nonce << ") -> "
-                         << slot_mappings[i].slot << " -> ("
-                         << slots_issued[i].client << ", "
-                         << slots_issued[i].nonce << ")");
+            char key[NONCE_KEY_SIZE];
+            pack_nonce_key(slot_mappings[i].client, slot_mappings[i].nonce, key);
+            delete_key(key, NONCE_KEY_SIZE);
+            tried_something = true;
+
+            for (size_t j = i + 1; j < slot_mappings.size(); ++j)
+            {
+                slot_mappings[j - 1] = slot_mappings[j];
+            }
+
+            slot_mappings.pop_back();
+        }
+        else
+        {
+            ++i;
         }
     }
 
@@ -1473,62 +1493,43 @@ fact_store :: integrity_check(int tries_remaining, bool output, bool destructive
         it = std::lower_bound(slot_mappings.begin(),
                               slot_mappings.end(),
                               sm);
+        bool add = false;
 
         if (it == slot_mappings.end() ||
             it->client != sm.client ||
             it->nonce != sm.nonce)
         {
-            if (!destructive)
-            {
-                REPORT_ERROR("slot " << slots_issued[i].number
-                             << " claims to originate from ("
-                             << slots_issued[i].client << ", "
-                             << slots_issued[i].nonce
-                             << "), but said slot (client, nonce) pair doesn't exist"
-                             << " (this error may be fixed automatically by a destructive integrity check)");
-            }
-            else
-            {
-                REPORT_ERROR("slot " << slots_issued[i].number
-                             << " claims to originate from ("
-                             << slots_issued[i].client << ", "
-                             << slots_issued[i].nonce
-                             << "), but said slot (client, nonce) pair doesn't exist"
-                             << " (running in destructive mode: trying to fix automatically)");
-                char key[NONCE_KEY_SIZE];
-                pack_nonce_key(slots_issued[i].client, slots_issued[i].nonce, key);
-                char val[NONCE_VAL_SIZE];
-                pack_nonce_val(slots_issued[i].number, val);
-                store_key_value(key, NONCE_KEY_SIZE, val, NONCE_VAL_SIZE);
-                tried_something = true;
-            }
+            REPORT_ERROR("slot " << slots_issued[i].number
+                         << " claims to originate from ("
+                         << slots_issued[i].client << ", "
+                         << slots_issued[i].nonce
+                         << "), but said slot (client, nonce) pair doesn't exist"
+                         << (!destructive ?
+                             " (this error may be fixed automatically by a destructive integrity check)" :
+                             " (running in destructive mode: trying to fix automatically)"));
+            add = true;
         }
         else if (it->slot != slots_issued[i].number)
         {
-            if (!destructive)
-            {
-                REPORT_ERROR("unreciprocal slot mapping "
-                             << slots_issued[i].number << " -> ("
-                             << slots_issued[i].client << ", "
-                             << slots_issued[i].nonce << ") -> "
-                             << it->slot
-                             << " (this error may be fixed automatically by a destructive integrity check)");
-            }
-            else
-            {
-                REPORT_ERROR("unreciprocal slot mapping "
-                             << slots_issued[i].number << " -> ("
-                             << slots_issued[i].client << ", "
-                             << slots_issued[i].nonce << ") -> "
-                             << it->slot
-                             << " (running in destructive mode: trying to fix automatically)");
-                char key[NONCE_KEY_SIZE];
-                pack_nonce_key(slots_issued[i].client, slots_issued[i].nonce, key);
-                char val[NONCE_VAL_SIZE];
-                pack_nonce_val(slots_issued[i].number, val);
-                store_key_value(key, NONCE_KEY_SIZE, val, NONCE_VAL_SIZE);
-                tried_something = true;
-            }
+            REPORT_ERROR("unreciprocal slot mapping "
+                         << slots_issued[i].number << " -> ("
+                         << slots_issued[i].client << ", "
+                         << slots_issued[i].nonce << ") -> "
+                         << it->slot
+                         << (!destructive ?
+                             " (this error may be fixed automatically by a destructive integrity check)" :
+                             " (running in destructive mode: trying to fix automatically)"));
+            add = true;
+        }
+
+        if (add && destructive)
+        {
+            char key[NONCE_KEY_SIZE];
+            pack_nonce_key(slots_issued[i].client, slots_issued[i].nonce, key);
+            char val[NONCE_VAL_SIZE];
+            pack_nonce_val(slots_issued[i].number, val);
+            store_key_value(key, NONCE_KEY_SIZE, val, NONCE_VAL_SIZE);
+            tried_something = true;
         }
     }
 
