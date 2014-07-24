@@ -554,7 +554,7 @@ fact_store :: wipe()
 {
     if (only_key_is_replicant_key())
     {
-        delete_key("replicant", 9, true);
+        delete_key("replicant", 9);
     }
 }
 
@@ -611,7 +611,7 @@ fact_store :: propose_configuration(uint64_t proposal_id, uint64_t proposal_time
         ptr = pack_config(configs[i], ptr);
     }
 
-    store_key_value(key, PROPOSAL_KEY_SIZE, &value.front(), value.size(), true);
+    store_key_value(key, PROPOSAL_KEY_SIZE, &value.front(), value.size());
 }
 
 void
@@ -622,7 +622,7 @@ fact_store :: accept_configuration(uint64_t proposal_id, uint64_t proposal_time)
     assert(!is_rejected_configuration(proposal_id, proposal_time));
     char key[ACCEPTED_PROPOSAL_KEY_SIZE];
     pack_accepted_proposal_key(proposal_id, proposal_time, key);
-    store_key_value(key, ACCEPTED_PROPOSAL_KEY_SIZE, "", 0, true);
+    store_key_value(key, ACCEPTED_PROPOSAL_KEY_SIZE, "", 0);
 }
 
 void
@@ -633,7 +633,7 @@ fact_store :: reject_configuration(uint64_t proposal_id, uint64_t proposal_time)
     assert(!is_rejected_configuration(proposal_id, proposal_time));
     char key[REJECTED_PROPOSAL_KEY_SIZE];
     pack_rejected_proposal_key(proposal_id, proposal_time, key);
-    store_key_value(key, REJECTED_PROPOSAL_KEY_SIZE, "", 0, true);
+    store_key_value(key, REJECTED_PROPOSAL_KEY_SIZE, "", 0);
 }
 
 void
@@ -643,7 +643,7 @@ fact_store :: inform_configuration(const configuration& config)
     pack_inform_config_key(config.version(), key);
     std::vector<char> value(pack_size(config));
     pack_config(config, &value.front());
-    store_key_value(key, INFORM_CONFIG_KEY_SIZE, &value.front(), value.size(), true);
+    store_key_value(key, INFORM_CONFIG_KEY_SIZE, &value.front(), value.size());
 }
 
 bool
@@ -679,7 +679,7 @@ fact_store :: reg_client(uint64_t client)
 {
     char key[CLIENT_KEY_SIZE];
     pack_client_key(client, key);
-    store_key_value(key, CLIENT_KEY_SIZE, "reg", 3, true);
+    store_key_value(key, CLIENT_KEY_SIZE, "reg", 3);
 }
 
 void
@@ -687,7 +687,7 @@ fact_store :: die_client(uint64_t client)
 {
     char key[CLIENT_KEY_SIZE];
     pack_client_key(client, key);
-    store_key_value(key, CLIENT_KEY_SIZE, "die", 3, false);
+    store_key_value(key, CLIENT_KEY_SIZE, "die", 3);
 }
 
 bool
@@ -827,7 +827,7 @@ fact_store :: issue_slot(uint64_t number,
     pack_slot_key(number, key);
     std::vector<char> val;
     pack_slot_val(object, client, nonce, data, &val);
-    store_key_value(key, SLOT_KEY_SIZE, &val.front(), val.size(), true);
+    store_key_value(key, SLOT_KEY_SIZE, &val.front(), val.size());
 
     if (number == m_cache_next_slot_issue && m_cache_next_slot_issue != 0)
     {
@@ -838,7 +838,7 @@ fact_store :: issue_slot(uint64_t number,
     pack_nonce_key(client, nonce, keyn);
     char valn[NONCE_VAL_SIZE];
     pack_nonce_val(number, valn);
-    store_key_value(keyn, NONCE_KEY_SIZE, valn, NONCE_VAL_SIZE, false);
+    store_key_value(keyn, NONCE_KEY_SIZE, valn, NONCE_VAL_SIZE);
 }
 
 void
@@ -847,7 +847,7 @@ fact_store :: ack_slot(uint64_t number)
     assert(number == m_cache_next_slot_ack || m_cache_next_slot_ack == 0);
     char key[ACK_KEY_SIZE];
     pack_ack_key(number, key);
-    store_key_value(key, ACK_KEY_SIZE, "", 0, false);
+    store_key_value(key, ACK_KEY_SIZE, "", 0);
 
     if (number == m_cache_next_slot_ack && m_cache_next_slot_ack != 0)
     {
@@ -864,7 +864,7 @@ fact_store :: exec_slot(uint64_t number,
     pack_exec_key(number, key);
     std::vector<char> value;
     pack_exec_val(rc, data, &value);
-    store_key_value(key, EXEC_KEY_SIZE, &value.front(), value.size(), false);
+    store_key_value(key, EXEC_KEY_SIZE, &value.front(), value.size());
 }
 
 void
@@ -888,10 +888,10 @@ fact_store :: clear_unacked_slots()
         {
             char keyn[NONCE_KEY_SIZE];
             pack_nonce_key(client, nonce, keyn);
-            delete_key(keyn, NONCE_KEY_SIZE, false);
+            delete_key(keyn, NONCE_KEY_SIZE);
         }
 
-        delete_key(key, SLOT_KEY_SIZE, false);
+        delete_key(key, SLOT_KEY_SIZE);
         --next_to_issue;
     }
 
@@ -1370,7 +1370,7 @@ fact_store :: integrity_check(int tries_remaining, bool output, bool destructive
                 {
                     char key[SLOT_KEY_SIZE];
                     pack_slot_key(number, key);
-                    delete_key(key, SLOT_KEY_SIZE, true);
+                    delete_key(key, SLOT_KEY_SIZE);
                 }
             }
 
@@ -1460,7 +1460,7 @@ fact_store :: integrity_check(int tries_remaining, bool output, bool destructive
         {
             char key[NONCE_KEY_SIZE];
             pack_nonce_key(slot_mappings[i].client, slot_mappings[i].nonce, key);
-            delete_key(key, NONCE_KEY_SIZE, true);
+            delete_key(key, NONCE_KEY_SIZE);
             tried_something = true;
 
             for (size_t j = i + 1; j < slot_mappings.size(); ++j)
@@ -1528,7 +1528,7 @@ fact_store :: integrity_check(int tries_remaining, bool output, bool destructive
             pack_nonce_key(slots_issued[i].client, slots_issued[i].nonce, key);
             char val[NONCE_VAL_SIZE];
             pack_nonce_val(slots_issued[i].number, val);
-            store_key_value(key, NONCE_KEY_SIZE, val, NONCE_VAL_SIZE, true);
+            store_key_value(key, NONCE_KEY_SIZE, val, NONCE_VAL_SIZE);
             tried_something = true;
         }
     }
@@ -1581,10 +1581,10 @@ fact_store :: check_key_exists(const char* key, size_t key_sz)
 
 void
 fact_store :: store_key_value(const char* key, size_t key_sz,
-                              const char* value, size_t value_sz, bool sync)
+                              const char* value, size_t value_sz)
 {
     leveldb::WriteOptions opts;
-    opts.sync = sync;
+    opts.sync = false;
     leveldb::Slice k(key, key_sz);
     leveldb::Slice v(value, value_sz);
     leveldb::Status st = m_db->Put(opts, k, v);
@@ -1651,10 +1651,10 @@ fact_store :: retrieve_value(const char* key, size_t key_sz,
 }
 
 void
-fact_store :: delete_key(const char* key, size_t key_sz, bool sync)
+fact_store :: delete_key(const char* key, size_t key_sz)
 {
     leveldb::WriteOptions opts;
-    opts.sync = sync;
+    opts.sync = false;
     leveldb::Slice k(key, key_sz);
     leveldb::Status st = m_db->Delete(opts, k);
 
