@@ -127,10 +127,10 @@ class fact_store
     private:
         bool check_key_exists(const char* key, size_t key_sz);
         void store_key_value(const char* key, size_t key_sz,
-                             const char* value, size_t value_sz, bool sync);
+                             const char* value, size_t value_sz);
         bool retrieve_value(const char* key, size_t key_sz,
                             std::string* backing);
-        void delete_key(const char* key, size_t key_sz, bool sync);
+        void delete_key(const char* key, size_t key_sz);
         bool only_key_is_replicant_key();
 
     // read data from leveldb in bulk
