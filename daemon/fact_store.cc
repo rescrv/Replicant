@@ -1056,6 +1056,7 @@ fact_store :: initialize(std::ostream& ostr, bool* restored, chain_node* us)
         first_time = false;
 
         if (rbacking != PACKAGE_VERSION &&
+            rbacking != "0.6.1" &&
             rbacking != "0.6.0" &&
             rbacking != "0.5.0" &&
             rbacking != "0.5.1")
