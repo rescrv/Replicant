@@ -168,6 +168,7 @@ class object_manager::object
                      uint64_t state);
         void dequeue(std::list<command>* commands, bool* shutdown);
         void throttle(size_t sz);
+        void wait_to_complete();
         void set_alarm(const char* func, uint64_t seconds);
         bool trip_alarm(uint64_t now, const char** func);
         void clear_alarm(const char* func);
@@ -204,6 +205,7 @@ class object_manager::object
         po6::threads::cond m_commands_avail;
         po6::threads::cond m_command_consumed;
         std::list<command> m_commands;
+        bool m_consumer_waiting;
         const char* m_alarm_func;
         uint64_t m_alarm_when;
         std::map<uint64_t, suspicion> m_suspicions;
@@ -229,6 +231,7 @@ object_manager :: object :: object(uint64_t slot)
     , m_commands_avail(&m_mtx)
     , m_command_consumed(&m_mtx)
     , m_commands()
+    , m_consumer_waiting()
     , m_alarm_func("")
     , m_alarm_when(0)
     , m_suspicions()
@@ -319,7 +322,10 @@ object_manager :: object :: dequeue(std::list<command>* commands, bool*)
 
     while (m_commands.empty())
     {
+        m_consumer_waiting = true;
+        m_command_consumed.signal();
         m_commands_avail.wait();
+        m_consumer_waiting = false;
     }
 
     if (!m_commands.empty())
@@ -336,6 +342,17 @@ object_manager :: object :: throttle(size_t sz)
     po6::threads::mutex::hold hold(&m_mtx);
 
     while (m_commands.size() > sz)
+    {
+        m_command_consumed.wait();
+    }
+}
+
+void
+object_manager :: object :: wait_to_complete()
+{
+    po6::threads::mutex::hold hold(&m_mtx);
+
+    while (!m_commands.empty() || !m_consumer_waiting)
     {
         m_command_consumed.wait();
     }
@@ -544,6 +561,18 @@ object_manager :: object_manager(e::garbage_collector* gc)
 
 object_manager :: ~object_manager() throw ()
 {
+}
+
+void
+object_manager :: enable_logging()
+{
+    for (object_map_t::iterator it = m_objects.begin();
+            it != m_objects.end(); ++it)
+    {
+        it->second->wait_to_complete();
+    }
+
+    m_logging_enabled = true;
 }
 
 void
