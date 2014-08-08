@@ -171,8 +171,7 @@ configuration :: has_token(uint64_t token) const
 bool
 configuration :: is_member(const chain_node& node) const
 {
-    const chain_node* n = node_from_token(node.token);
-    return n && *n == node;
+    return node_from_token(node.token) != NULL;
 }
 
 const chain_node*
@@ -460,7 +459,7 @@ replicant :: operator == (const configuration& lhs, const configuration& rhs)
 
     for (size_t i = 0; i < lhs.m_members.size(); ++i)
     {
-        if (lhs.m_members[i] != rhs.m_members[i])
+        if (!lhs.m_members[i].exactly_matches(rhs.m_members[i]))
         {
             return false;
         }

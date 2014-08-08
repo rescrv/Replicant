@@ -39,6 +39,7 @@
 // po6
 #include <po6/net/hostname.h>
 #include <po6/net/ipaddr.h>
+#include <po6/threads/thread.h>
 
 // BusyBee
 #include <busybee_mta.h>
@@ -74,7 +75,7 @@ class daemon
                 bool set_bind_to,
                 po6::net::location bind_to,
                 bool set_existing,
-                po6::net::hostname existing,
+                const std::vector<po6::net::hostname>& existing,
                 const char* init_obj,
                 const char* init_lib,
                 const char* init_str,
@@ -94,9 +95,15 @@ class daemon
         void process_server_register(const replicant::connection& conn,
                                      std::auto_ptr<e::buffer> msg,
                                      e::unpacker up);
-        void process_change_address(const replicant::connection& conn,
-                                    std::auto_ptr<e::buffer> msg,
-                                    e::unpacker up);
+        void process_server_change_address(const replicant::connection& conn,
+                                           std::auto_ptr<e::buffer> msg,
+                                           e::unpacker up);
+        void process_server_identify(const replicant::connection& conn,
+                                     std::auto_ptr<e::buffer> msg,
+                                     e::unpacker up);
+        void process_server_identity(const replicant::connection& conn,
+                                     std::auto_ptr<e::buffer> msg,
+                                     e::unpacker up);
         void process_config_propose(const replicant::connection& conn,
                                     std::auto_ptr<e::buffer> msg,
                                     e::unpacker up);
@@ -122,6 +129,7 @@ class daemon
         // about this configuration w.r.t. previously issued ones and this call
         // will assert that
         void propose_config(const configuration& config);
+        void background_bootstrap();
         void periodic_change_address(uint64_t now);
         void periodic_maintain_cluster(uint64_t now);
 
@@ -230,6 +238,7 @@ class daemon
         bool send(const replicant::connection& conn, std::auto_ptr<e::buffer> msg);
         bool send(const chain_node& node, std::auto_ptr<e::buffer> msg);
         bool send_no_disruption(uint64_t token, std::auto_ptr<e::buffer> msg);
+        bool send_no_disruption(const chain_node& node, std::auto_ptr<e::buffer> msg);
 
     // Handle communication disruptions
     private:
@@ -257,12 +266,19 @@ class daemon
         replicant::mapper m_busybee_mapper;
         std::auto_ptr<busybee_mta> m_busybee;
         chain_node m_us;
+        bool m_have_bootstrapped;
+        uint64_t m_maintain_count;
+        std::vector<po6::net::hostname> m_bootstrap;
+        po6::threads::thread m_bootstrap_thread;
+        po6::threads::mutex m_bootstrap_mtx;
+        po6::threads::cond m_bootstrap_cond;
         configuration_manager m_config_manager;
         replicant::object_manager m_object_manager;
         failure_manager m_failure_manager;
         client_manager m_client_manager;
         po6::threads::mutex m_periodic_mtx;
         std::vector<periodic> m_periodic;
+        po6::threads::mutex m_send_mtx;
         po6::threads::mutex m_deferred_mtx;
         const std::auto_ptr<std::queue<deferred_command> > m_deferred;
         std::map<uint64_t, uint64_t> m_temporary_servers;

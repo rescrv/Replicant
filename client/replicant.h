@@ -84,7 +84,9 @@ class mapper;
 class replicant_client
 {
     public:
+        replicant_client(const char* connection_string);
         replicant_client(const char* host, in_port_t port);
+        replicant_client(po6::net::hostname* bootstrap, size_t bootstrap_sz);
         ~replicant_client() throw ();
 
     public:
@@ -117,6 +119,14 @@ class replicant_client
         int64_t loop(int timeout, replicant_returncode* status);
         int64_t loop(int64_t id, int timeout, replicant_returncode* status);
         void kill(int64_t id);
+        // string allocated with malloc; free with free
+        // returns 0 on success; -1 on error; not async
+        int64_t list_servers(replicant_returncode* status,
+                             std::string* servers);
+        // string allocated with malloc; free with free
+        // returns 0 on success; -1 on error; not async
+        int64_t connect_str(replicant_returncode* status,
+                            std::string* servers);
 #ifdef _MSC_VER
         fd_set* poll_fd();
 #else
@@ -175,7 +185,7 @@ class replicant_client
         std::auto_ptr<replicant::mapper> m_busybee_mapper;
         std::auto_ptr<class busybee_st> m_busybee;
         std::auto_ptr<replicant::configuration> m_config;
-        po6::net::hostname m_bootstrap;
+        std::vector<po6::net::hostname> m_bootstrap;
         uint64_t m_token;
         uint64_t m_nonce;
         uint64_t m_cluster;

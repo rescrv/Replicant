@@ -169,6 +169,7 @@ replicantexec_PROGRAMS += replicant-backup-object
 replicantexec_PROGRAMS += replicant-restore-object
 replicantexec_PROGRAMS += replicant-debug-dump
 replicantexec_PROGRAMS += replicant-integrity-check
+replicantexec_PROGRAMS += replicant-list-servers
 endif
 
 noinst_HEADERS += tools/common.h
@@ -199,6 +200,9 @@ replicant_integrity_check_LDADD = $(E_LIBS) $(HYPERLEVELDB_LIBS) -lglog
 
 replicant_debug_dump_SOURCES = tools/debug-dump.cc common/chain_node.cc common/configuration.cc common/packing.cc common/response_returncode.cc daemon/configuration_manager.cc daemon/fact_store.cc
 replicant_debug_dump_LDADD = $(E_LIBS) $(HYPERLEVELDB_LIBS) -lglog
+
+replicant_list_servers_SOURCES = tools/list-servers.cc
+replicant_list_servers_LDADD = libreplicant.la
 
 ################################################################################
 ################################### Examples ###################################

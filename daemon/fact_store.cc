@@ -1051,7 +1051,7 @@ fact_store :: initialize(std::ostream& ostr, bool* restored, chain_node* us)
     leveldb::Status st = m_db->Get(ropts, leveldb::Slice("replicant", 9), &rbacking);
     bool first_time = false;
 
-    if (st.ok())
+    if (st.ok() && !only_key_is_replicant_key())
     {
         first_time = false;
 
@@ -1064,7 +1064,7 @@ fact_store :: initialize(std::ostream& ostr, bool* restored, chain_node* us)
             return false;
         }
     }
-    else if (st.IsNotFound())
+    else if (st.ok() || st.IsNotFound())
     {
         first_time = true;
         leveldb::Slice k("replicant", 9);

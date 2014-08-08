@@ -83,6 +83,18 @@ configuration_manager :: get_all_nodes(std::vector<uint64_t>* nodes) const
     nodes->resize(it - nodes->begin());
 }
 
+namespace
+{
+
+bool
+exactly_matches(const replicant::chain_node& lhs,
+                const replicant::chain_node& rhs)
+{
+    return lhs.exactly_matches(rhs);
+}
+
+} // namespace
+
 void
 configuration_manager :: get_all_nodes(std::vector<chain_node>* nodes) const
 {
@@ -96,7 +108,8 @@ configuration_manager :: get_all_nodes(std::vector<chain_node>* nodes) const
     }
 
     std::sort(nodes->begin(), nodes->end());
-    std::vector<chain_node>::iterator it = std::unique(nodes->begin(), nodes->end());
+    std::vector<chain_node>::iterator it;
+    it = std::unique(nodes->begin(), nodes->end(), exactly_matches);
     nodes->resize(it - nodes->begin());
 }
 

@@ -55,6 +55,7 @@
 #include <e/compat.h>
 #include <e/endian.h>
 #include <e/envconfig.h>
+#include <e/error.h>
 #include <e/strescape.h>
 #include <e/time.h>
 
@@ -163,12 +164,19 @@ daemon :: daemon()
     , m_busybee_mapper()
     , m_busybee()
     , m_us()
+    , m_have_bootstrapped(false)
+    , m_maintain_count(0)
+    , m_bootstrap()
+    , m_bootstrap_thread(po6::threads::make_thread_wrapper(&daemon::background_bootstrap, this))
+    , m_bootstrap_mtx()
+    , m_bootstrap_cond(&m_bootstrap_mtx)
     , m_config_manager()
     , m_object_manager(&m_gc)
     , m_failure_manager()
     , m_client_manager()
     , m_periodic_mtx()
     , m_periodic()
+    , m_send_mtx()
     , m_deferred_mtx()
     , m_deferred(new std::queue<deferred_command>())
     , m_temporary_servers()
@@ -217,7 +225,7 @@ daemon :: run(bool daemonize,
               bool set_bind_to,
               po6::net::location bind_to,
               bool set_existing,
-              po6::net::hostname existing,
+              const std::vector<po6::net::hostname>& existing,
               const char* init_obj,
               const char* init_lib,
               const char* init_str,
@@ -358,30 +366,33 @@ daemon :: run(bool daemonize,
     else if (!restored && set_existing)
     {
         LOG(INFO) << "starting new daemon from command-line arguments using "
-                  << existing << " as our bootstrap node";
-        std::auto_ptr<e::buffer> request;
-        request.reset(e::buffer::create(BUSYBEE_HEADER_SIZE + pack_size(REPLNET_BOOTSTRAP)));
-        request->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_BOOTSTRAP;
-        std::auto_ptr<e::buffer> response;
-
-        if (!request_response(existing, 5000, request, "bootstrapping off of ", &response))
-        {
-            m_fs.wipe();
-            return EXIT_FAILURE;
-        }
-
+                  << bootstrap_hosts_to_string(&existing[0], existing.size())
+                  << " as our bootstrap node";
         configuration initial;
-        replicant_network_msgtype mt = REPLNET_NOP;
-        e::unpacker up = response->unpack_from(BUSYBEE_HEADER_SIZE);
-        up = up >> mt >> initial;
 
-        if (up.error() ||
-            mt != REPLNET_INFORM ||
-            !initial.validate())
+        switch (bootstrap(&existing[0], existing.size(), &initial))
         {
-            LOG(ERROR) << "received invalid INFORM message from " << existing;
-            m_fs.wipe();
-            return EXIT_FAILURE;
+            case replicant::BOOTSTRAP_SUCCESS:
+                break;
+            case replicant::BOOTSTRAP_SEE_ERRNO:
+                LOG(ERROR) << "cannot connect to cluster: " << e::error::strerror(errno);
+                return EXIT_FAILURE;
+            case replicant::BOOTSTRAP_COMM_FAIL:
+                LOG(ERROR) << "cannot connect to cluster: internal error: " << e::error::strerror(errno);
+                return EXIT_FAILURE;
+            case replicant::BOOTSTRAP_TIMEOUT:
+                LOG(ERROR) << "cannot connect to cluster: operation timed out";
+                return EXIT_FAILURE;
+            case replicant::BOOTSTRAP_CORRUPT_INFORM:
+                LOG(ERROR) << "cannot connect to cluster: server sent a corrupt INFORM message";
+                return EXIT_FAILURE;
+            case replicant::BOOTSTRAP_NOT_CLUSTER_MEMBER:
+                LOG(ERROR) << "cannot connect to cluster: server is not a member of the cluster";
+                return EXIT_FAILURE;
+            case replicant::BOOTSTRAP_GARBAGE:
+            default:
+                LOG(ERROR) << "cannot connect to cluster: bootstrap failed";
+                return EXIT_FAILURE;
         }
 
         LOG(INFO) << "successfully bootstrapped with " << initial;
@@ -400,17 +411,18 @@ daemon :: run(bool daemonize,
             LOG(ERROR) << "since we are picking 64-bit numbers, this is extremely unlikely";
             LOG(ERROR) << "if you re-launch the daemon, we'll try picking a different number, but you will want to check for errors in your environment";
             m_fs.wipe();
-            m_fs.wipe();
             return EXIT_FAILURE;
         }
 
         // XXX check for address conflict
 
         LOG(INFO) << "registering with the head of the configuration: " << *head;
+        std::auto_ptr<e::buffer> request;
         request.reset(e::buffer::create(BUSYBEE_HEADER_SIZE
                                        + pack_size(REPLNET_SERVER_REGISTER)
                                        + pack_size(m_us)));
         request->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_SERVER_REGISTER << m_us;
+        std::auto_ptr<e::buffer> response;
 
         if (!request_response(head->address, 5000, request, "registering with ", &response))
         {
@@ -418,7 +430,8 @@ daemon :: run(bool daemonize,
             return EXIT_FAILURE;
         }
 
-        up = response->unpack_from(BUSYBEE_HEADER_SIZE);
+        replicant_network_msgtype mt = REPLNET_NOP;
+        e::unpacker up = response->unpack_from(BUSYBEE_HEADER_SIZE);
         up = up >> mt;
 
         if (up.error())
@@ -621,6 +634,11 @@ daemon :: run(bool daemonize,
     m_fs.warm_cache();
     LOG(INFO) << "resuming normal operation";
     post_reconfiguration_hooks();
+    m_bootstrap_mtx.lock();
+    m_have_bootstrapped = false;
+    m_bootstrap_mtx.unlock();
+    m_bootstrap = existing;
+    m_bootstrap_thread.start();
 
     replicant::connection conn;
     std::auto_ptr<e::buffer> msg;
@@ -649,7 +667,13 @@ daemon :: run(bool daemonize,
                 LOG(WARNING) << "dropping \"SERVER_REGISTER_FAILED\" received by server";
                 break;
             case REPLNET_SERVER_CHANGE_ADDRESS:
-                process_change_address(conn, msg, up);
+                process_server_change_address(conn, msg, up);
+                break;
+            case REPLNET_SERVER_IDENTIFY:
+                process_server_identify(conn, msg, up);
+                break;
+            case REPLNET_SERVER_IDENTITY:
+                process_server_identity(conn, msg, up);
                 break;
             case REPLNET_CONFIG_PROPOSE:
                 process_config_propose(conn, msg, up);
@@ -733,6 +757,11 @@ daemon :: run(bool daemonize,
         m_gc.quiescent_state(&m_gc_ts);
     }
 
+    m_bootstrap_mtx.lock();
+    m_bootstrap_cond.signal();
+    s_continue = false;
+    m_bootstrap_mtx.unlock();
+    m_bootstrap_thread.join();
     LOG(INFO) << "replicant is gracefully shutting down";
     LOG(INFO) << "replicant will now terminate";
     return EXIT_SUCCESS;
@@ -809,7 +838,7 @@ daemon :: process_server_register(const replicant::connection& conn,
         success = false;
     }
 
-    if (success && *m_config_manager.stable().head() != m_us)
+    if (success && m_config_manager.stable().head()->token != m_us.token)
     {
         LOG(INFO) << "not acting on \"SERVER_REGISTER\" message because we are not the head";
         send(sender, create_inform_message());
@@ -847,9 +876,9 @@ daemon :: process_server_register(const replicant::connection& conn,
 }
 
 void
-daemon :: process_change_address(const replicant::connection& conn,
-                                 std::auto_ptr<e::buffer>,
-                                 e::unpacker up)
+daemon :: process_server_change_address(const replicant::connection& conn,
+                                        std::auto_ptr<e::buffer>,
+                                        e::unpacker up)
 {
     po6::net::location old_address;
     po6::net::location new_address;
@@ -872,6 +901,34 @@ daemon :: process_change_address(const replicant::connection& conn,
     new_config.change_address(conn.token, new_address);
     new_config.bump_version();
     propose_config(new_config);
+}
+
+void
+daemon :: process_server_identify(const replicant::connection& conn,
+                                  std::auto_ptr<e::buffer>,
+                                  e::unpacker)
+{
+    size_t sz = BUSYBEE_HEADER_SIZE
+              + pack_size(REPLNET_SERVER_IDENTITY)
+              + pack_size(m_us);
+    std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
+    msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_SERVER_IDENTITY << m_us;
+    send(conn, msg);
+}
+
+void
+daemon :: process_server_identity(const replicant::connection& conn,
+                                  std::auto_ptr<e::buffer>,
+                                  e::unpacker up)
+{
+    chain_node them;
+    up = up >> them;
+    CHECK_UNPACK(SERVER_IDENTITY, up);
+
+    if (conn.token != them.token)
+    {
+        m_busybee->drop(conn.token);
+    }
 }
 
 #define SEND_CONFIG_RESP(NODE, ACTION, ID, TIME, US) \
@@ -1040,7 +1097,7 @@ daemon :: process_config_propose(const replicant::connection& conn,
 
     const chain_node* prev = configs[configs_sz - 1].prev(m_us.token);
 
-    if (!prev || *prev != sender)
+    if (!prev || prev->token != sender.token)
     {
         // This should never happen, so it's an error
         LOG(ERROR) << "rejecting proposal " << proposal_id << ":" << proposal_time
@@ -1053,7 +1110,7 @@ daemon :: process_config_propose(const replicant::connection& conn,
     {
         m_config_manager.merge(proposal_id, proposal_time, configs, configs_sz);
 
-        if (*configs[configs_sz - 1].config_tail() == m_us)
+        if (configs[configs_sz - 1].config_tail()->token == m_us.token)
         {
             LOG(INFO) << "proposal " << proposal_id << ":" << proposal_time << " hit the config_tail; adopting";
             m_config_manager.advance(configs[configs_sz - 1]);
@@ -1135,7 +1192,7 @@ daemon :: process_config_accept(const replicant::connection& conn,
 
     const chain_node* next = new_config.next(m_us.token);
 
-    if (!next || *next != sender)
+    if (!next || next->token != sender.token)
     {
         LOG(ERROR) << "dropping \"CONFIG_ACCEPT\" message that comes from the wrong place"
                    << " " << sender << " instead of " << *next;
@@ -1208,7 +1265,7 @@ daemon :: process_config_reject(const replicant::connection& conn,
 
     const chain_node* next = new_config.next(m_us.token);
 
-    if (!next || *next != sender)
+    if (!next || next->token != sender.token)
     {
         LOG(ERROR) << "dropping \"CONFIG_REJECT\" message that comes from the wrong place:"
                    << " " << sender << " instead of " << *next;
@@ -1275,12 +1332,12 @@ daemon :: propose_config(const configuration& config)
     size_t configs_sz = config_chain.size();
     assert(configs_sz > 1);
     assert(configs[configs_sz - 1] == config);
-    assert(*configs[configs_sz - 1].head() == m_us);
+    assert(configs[configs_sz - 1].head()->token == m_us.token);
     m_fs.propose_configuration(proposal_id, proposal_time, configs, configs_sz);
     m_config_manager.merge(proposal_id, proposal_time, configs, configs_sz);
     LOG(INFO) << "proposing " << proposal_id << ":" << proposal_time << " " << config;
 
-    if (*configs[configs_sz - 1].config_tail() == m_us)
+    if (configs[configs_sz - 1].config_tail()->token == m_us.token)
     {
         m_fs.accept_configuration(proposal_id, proposal_time);
         m_config_manager.advance(config);
@@ -1307,6 +1364,9 @@ void
 daemon :: post_reconfiguration_hooks()
 {
     trip_periodic(0, &daemon::periodic_maintain_cluster);
+    po6::threads::mutex::hold hold(&m_bootstrap_mtx);
+    m_bootstrap_cond.signal();
+    m_have_bootstrapped = true;
 
     const configuration& config(m_config_manager.stable());
     LOG(INFO) << "deploying configuration " << config;
@@ -1317,6 +1377,7 @@ daemon :: post_reconfiguration_hooks()
     if (us && us->address != m_us.address)
     {
         trip_periodic(0, &daemon::periodic_change_address);
+        m_have_bootstrapped = false;
     }
 
     // Inform all clients
@@ -1356,7 +1417,7 @@ daemon :: post_reconfiguration_hooks()
 
     const chain_node* tail = config.command_tail();
 
-    if (tail && *tail == m_us)
+    if (tail && tail->token == m_us.token)
     {
         while (m_fs.next_slot_to_ack() < m_fs.next_slot_to_issue())
         {
@@ -1391,6 +1452,63 @@ daemon :: post_reconfiguration_hooks()
     else
     {
         LOG(INFO) << "the most recently deployed configuration can tolerate the expected " << f_d << " failures";
+    }
+}
+
+void
+daemon :: background_bootstrap()
+{
+    uint64_t maintain_count = 0;
+
+    while (true)
+    {
+        bool should_continue = true;
+        bool have_bootstrap = true;
+        m_bootstrap_mtx.lock();
+
+        while (s_continue &&
+               (m_have_bootstrapped ||
+                maintain_count == m_maintain_count))
+        {
+            m_bootstrap_cond.wait();
+        }
+
+        should_continue = s_continue;
+        have_bootstrap = m_have_bootstrapped;
+        maintain_count = m_maintain_count;
+        m_bootstrap_mtx.unlock();
+
+        if (!should_continue)
+        {
+            break;
+        }
+
+        if (have_bootstrap)
+        {
+            continue;
+        }
+
+        for (size_t i = 0; i < m_bootstrap.size(); ++i)
+        {
+            chain_node cn;
+            bootstrap_returncode rc;
+
+            if ((rc = bootstrap_identity(m_bootstrap[i], &cn)) != BOOTSTRAP_SUCCESS)
+            {
+                continue;
+            }
+
+            if (cn.token == m_us.token)
+            {
+                continue;
+            }
+
+            size_t sz = BUSYBEE_HEADER_SIZE
+                      + pack_size(REPLNET_SERVER_IDENTIFY);
+            std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
+            msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_SERVER_IDENTIFY;
+            send(cn, msg);
+        }
     }
 }
 
@@ -1438,6 +1556,10 @@ daemon :: periodic_maintain_cluster(uint64_t now)
 {
     trip_periodic(next_interval(now, m_s.FAILURE_DETECT_INTERVAL) + m_s.FAILURE_DETECT_SUSPECT_OFFSET,
                   &daemon::periodic_maintain_cluster);
+    m_bootstrap_mtx.lock();
+    ++m_maintain_count;
+    m_bootstrap_cond.signal();
+    m_bootstrap_mtx.unlock();
 
     if (!m_config_manager.stable().in_command_chain(m_us.token))
     {
@@ -1575,7 +1697,7 @@ daemon :: periodic_maintain_cluster(uint64_t now)
         }
     }
 
-    if (*new_config.head() != m_us)
+    if (new_config.head()->token != m_us.token)
     {
         return;
     }
@@ -1618,7 +1740,7 @@ daemon :: periodic_maintain_cluster(uint64_t now)
         return;
     }
 
-    if (*m_config_manager.stable().config_tail() != m_us ||
+    if (m_config_manager.stable().config_tail()->token != m_us.token ||
         m_config_manager.stable().version() == m_stable_version)
     {
         LOG(INFO) << "proposing new configuration " << new_config;
@@ -1691,7 +1813,7 @@ daemon :: process_client_register(const replicant::connection& conn,
 
     const chain_node* head = m_config_manager.stable().head();
 
-    if (!head || *head != m_us)
+    if (!head || head->token != m_us.token)
     {
         LOG(WARNING) << "rejecting registration for client because we are not the head";
         success = false;
@@ -1731,7 +1853,7 @@ daemon :: process_client_disconnect(const replicant::connection& conn,
 
     const chain_node* head = m_config_manager.stable().head();
 
-    if (!head || *head != m_us)
+    if (!head || head->token != m_us.token)
     {
         LOG(WARNING) << "rejecting \"CLIENT_DISCONNECT\" because we are not the head";
         return;
@@ -1760,7 +1882,7 @@ daemon :: process_client_timeout(const replicant::connection& conn,
 
     const chain_node* head = m_config_manager.stable().head();
 
-    if (!head || *head != m_us ||
+    if (!head || head->token != m_us.token ||
         version != m_config_manager.stable().version())
     {
         // silently drop because the sender is obligated to retry
@@ -1857,7 +1979,7 @@ daemon :: process_command_submit(const replicant::connection& conn,
     const chain_node* head = m_config_manager.stable().head();
 
     // If we are not the head
-    if (!head || *head != m_us)
+    if (!head || head->token != m_us.token)
     {
         // bounce the message
         send(*head, msg);
@@ -1900,7 +2022,7 @@ daemon :: process_command_issue(const replicant::connection& conn,
 
     const chain_node* tail = m_config_manager.stable().command_tail();
 
-    if (m_fs.is_issued_slot(slot) && (!tail || *tail != m_us))
+    if (m_fs.is_issued_slot(slot) && (!tail || tail->token != m_us.token))
     {
         // just drop it, we're waiting for an ACK ourselves
         return;
@@ -1984,7 +2106,7 @@ daemon :: issue_command(uint64_t slot,
 
     const chain_node* tail = m_config_manager.stable().command_tail();
 
-    if ((tail && *tail == m_us) ||
+    if ((tail && tail->token == m_us.token) ||
         !m_config_manager.stable().in_command_chain(m_us.token))
     {
         acknowledge_command(slot);
@@ -2303,7 +2425,7 @@ daemon :: process_heal_done(const replicant::connection& conn,
         LOG(INFO) << "the connection with the next node is 100% healed";
         const chain_node* tail = m_config_manager.stable().command_tail();
 
-        if (tail && *tail == m_us &&
+        if (tail && tail->token == m_us.token &&
             m_stable_version < m_config_manager.stable().version())
         {
             m_stable_version = m_config_manager.stable().version();
@@ -2460,6 +2582,9 @@ daemon :: periodic_heal_next(uint64_t now)
             ++m_heal_token;
             break;
         case heal_next::REQUEST_SENT:
+            m_heal_next.state = heal_next::BROKEN;
+            ++m_heal_token;
+            break;
         case heal_next::HEALING:
         case heal_next::HEALTHY_SENT:
             // do nothing, wait for other side
@@ -2694,7 +2819,7 @@ daemon :: periodic_alarm(uint64_t now)
     uint64_t when = now + ms250 - (now % ms250);
     trip_periodic(when, &daemon::periodic_alarm);
 
-    if (*m_config_manager.stable().head() != m_us)
+    if (m_config_manager.stable().head()->token != m_us.token)
     {
         return;
     }
@@ -2705,7 +2830,7 @@ daemon :: periodic_alarm(uint64_t now)
 void
 daemon :: issue_alarm(uint64_t obj_id, const char* func)
 {
-    if (*m_config_manager.stable().head() != m_us)
+    if (m_config_manager.stable().head()->token != m_us.token)
     {
         LOG(ERROR) << "alarm lost (should not happen)";
         return;
@@ -2758,8 +2883,8 @@ daemon :: recv(replicant::connection* conn, std::auto_ptr<e::buffer>* msg)
                 const chain_node* next = config.next(m_us.token);
                 conn->is_cluster_member = true;
                 conn->is_client = false;
-                conn->is_prev = prev && *n == *prev;
-                conn->is_next = next && *n == *next;
+                conn->is_prev = prev && n->token == prev->token;
+                conn->is_next = next && n->token == next->token;
                 return true;
             }
         }
@@ -2777,6 +2902,8 @@ daemon :: recv(replicant::connection* conn, std::auto_ptr<e::buffer>* msg)
 bool
 daemon :: send(const replicant::connection& conn, std::auto_ptr<e::buffer> msg)
 {
+    po6::threads::mutex::hold hold(&m_send_mtx);
+
     if (m_disrupted_backoff.find(conn.token) != m_disrupted_backoff.end())
     {
         return false;
@@ -2803,6 +2930,8 @@ daemon :: send(const replicant::connection& conn, std::auto_ptr<e::buffer> msg)
 bool
 daemon :: send(const chain_node& node, std::auto_ptr<e::buffer> msg)
 {
+    po6::threads::mutex::hold hold(&m_send_mtx);
+
     if (m_disrupted_backoff.find(node.token) != m_disrupted_backoff.end())
     {
         return false;
