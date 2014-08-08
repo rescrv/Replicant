@@ -105,9 +105,11 @@ monotonic_time()
 
 // round x up to a multiple of y
 static uint64_t
-round_up(uint64_t x, uint64_t y)
+next_interval(uint64_t x, uint64_t y)
 {
-    return ((x + y - 1) / y) * y;
+    uint64_t z = ((x + y) / y) * y;
+    assert(x < z);
+    return z;
 }
 
 struct daemon::deferred_command
@@ -1434,7 +1436,7 @@ daemon :: periodic_change_address(uint64_t now)
 void
 daemon :: periodic_maintain_cluster(uint64_t now)
 {
-    trip_periodic(round_up(now, m_s.FAILURE_DETECT_INTERVAL) + m_s.FAILURE_DETECT_SUSPECT_OFFSET,
+    trip_periodic(next_interval(now, m_s.FAILURE_DETECT_INTERVAL) + m_s.FAILURE_DETECT_SUSPECT_OFFSET,
                   &daemon::periodic_maintain_cluster);
 
     if (!m_config_manager.stable().in_command_chain(m_us.token))
@@ -2147,7 +2149,7 @@ daemon :: record_execution(uint64_t slot, uint64_t client, uint64_t nonce, repli
 void
 daemon :: periodic_describe_slots(uint64_t now)
 {
-    trip_periodic(round_up(now, m_s.REPORT_EVERY), &daemon::periodic_describe_slots);
+    trip_periodic(next_interval(now, m_s.REPORT_EVERY), &daemon::periodic_describe_slots);
     LOG(INFO) << "we are " << m_us << " and here's some info:"
               << " issued <=" << m_fs.next_slot_to_issue()
               << " | acked <=" << m_fs.next_slot_to_ack();
@@ -2564,7 +2566,7 @@ daemon :: process_pong(const replicant::connection& conn,
 void
 daemon :: periodic_exchange(uint64_t now)
 {
-    trip_periodic(round_up(now, m_s.FAILURE_DETECT_INTERVAL) + m_s.FAILURE_DETECT_PING_OFFSET,
+    trip_periodic(next_interval(now, m_s.FAILURE_DETECT_INTERVAL) + m_s.FAILURE_DETECT_PING_OFFSET,
                   &daemon::periodic_exchange);
     uint64_t version = m_config_manager.stable().version();
     m_failure_manager.ping(this, &daemon::send_no_disruption, version);
@@ -2573,7 +2575,7 @@ daemon :: periodic_exchange(uint64_t now)
 void
 daemon :: periodic_suspect_clients(uint64_t now)
 {
-    trip_periodic(round_up(now, m_s.FAILURE_DETECT_INTERVAL) + m_s.FAILURE_DETECT_SUSPECT_OFFSET,
+    trip_periodic(next_interval(now, m_s.FAILURE_DETECT_INTERVAL) + m_s.FAILURE_DETECT_SUSPECT_OFFSET,
                   &daemon::periodic_suspect_clients);
     const configuration& config(m_config_manager.stable());
     std::vector<uint64_t> clients;
@@ -2592,7 +2594,7 @@ daemon :: periodic_suspect_clients(uint64_t now)
 void
 daemon :: periodic_disconnect_clients(uint64_t now)
 {
-    trip_periodic(round_up(now, m_s.CLIENT_DISCONNECT_EVERY),
+    trip_periodic(next_interval(now, m_s.CLIENT_DISCONNECT_EVERY),
                   &daemon::periodic_disconnect_clients);
     const configuration& config(m_config_manager.stable());
     std::vector<uint64_t> our_clients;
