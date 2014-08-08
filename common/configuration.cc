@@ -423,6 +423,21 @@ configuration :: grow_command_chain()
     ++m_command_sz;
 }
 
+void
+configuration :: change_address(uint64_t token, const po6::net::location& address)
+{
+    assert(has_token(token));
+
+    for (size_t i = 0; i < m_members.size(); ++i)
+    {
+        if (m_members[i].token == token)
+        {
+            m_members[i].address = address;
+            return;
+        }
+    }
+}
+
 bool
 replicant :: operator < (const configuration& lhs, const configuration& rhs)
 {

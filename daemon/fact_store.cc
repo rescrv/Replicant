@@ -1350,7 +1350,7 @@ fact_store :: integrity_check(int tries_remaining, bool output, bool destructive
         }
     }
 
-    if (slots_issued.empty() || slots_issued.back().number > erase_slots_ge)
+    if (!slots_issued.empty() && slots_issued.back().number > erase_slots_ge)
     {
         if (!destructive)
         {

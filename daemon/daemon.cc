@@ -67,6 +67,7 @@
 #include "common/bootstrap.h"
 #include "common/macros.h"
 #include "common/network_msgtype.h"
+#include "common/packing.h"
 #include "common/special_clients.h"
 #include "common/special_objects.h"
 #include "daemon/daemon.h"
@@ -480,12 +481,6 @@ daemon :: run(bool daemonize,
         m_fs.save(m_us);
     }
 
-    if (restored && m_us.address != restored_us.address)
-    {
-        LOG(ERROR) << "cannot change address of server from " << restored_us.address << " to " << m_us.address;
-        return EXIT_FAILURE;
-    }
-
     if (restored)
     {
         m_config_manager = restored_config_manager;
@@ -650,6 +645,9 @@ daemon :: run(bool daemonize,
                 break;
             case REPLNET_SERVER_REGISTER_FAILED:
                 LOG(WARNING) << "dropping \"SERVER_REGISTER_FAILED\" received by server";
+                break;
+            case REPLNET_SERVER_CHANGE_ADDRESS:
+                process_change_address(conn, msg, up);
                 break;
             case REPLNET_CONFIG_PROPOSE:
                 process_config_propose(conn, msg, up);
@@ -844,6 +842,34 @@ daemon :: process_server_register(const replicant::connection& conn,
         msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_SERVER_REGISTER_FAILED;
         send(conn, msg);
     }
+}
+
+void
+daemon :: process_change_address(const replicant::connection& conn,
+                                 std::auto_ptr<e::buffer>,
+                                 e::unpacker up)
+{
+    po6::net::location old_address;
+    po6::net::location new_address;
+    up = up >> old_address >> new_address;
+    CHECK_UNPACK(SERVER_CHANGE_ADDRESS, up);
+    const chain_node* head = m_config_manager.stable().head();
+
+    if (head->token != m_us.token)
+    {
+        LOG(INFO) << "cannot change address on behalf of " << conn.token << " (from "
+                  << old_address << " to " << new_address
+                  << ") because we are not the head; the server will retry on its own";
+        return;
+    }
+
+    LOG(INFO) << "proposing new configuration on behalf of " << conn.token
+              << " which changes its address from " << old_address << " to "
+              << new_address;
+    configuration new_config = m_config_manager.latest();
+    new_config.change_address(conn.token, new_address);
+    new_config.bump_version();
+    propose_config(new_config);
 }
 
 #define SEND_CONFIG_RESP(NODE, ACTION, ID, TIME, US) \
@@ -1283,6 +1309,14 @@ daemon :: post_reconfiguration_hooks()
     const configuration& config(m_config_manager.stable());
     LOG(INFO) << "deploying configuration " << config;
 
+    // Check that our chain node has the correct address
+    const chain_node* us = config.node_from_token(m_us.token);
+
+    if (us && us->address != m_us.address)
+    {
+        trip_periodic(0, &daemon::periodic_change_address);
+    }
+
     // Inform all clients
     std::vector<uint64_t> clients;
     m_client_manager.list_clients(&clients);
@@ -1355,6 +1389,45 @@ daemon :: post_reconfiguration_hooks()
     else
     {
         LOG(INFO) << "the most recently deployed configuration can tolerate the expected " << f_d << " failures";
+    }
+}
+
+void
+daemon :: periodic_change_address(uint64_t now)
+{
+    const chain_node* us = m_config_manager.latest().node_from_token(m_us.token);
+
+    if (!us || us->address == m_us.address)
+    {
+        return;
+    }
+
+    const chain_node* head = m_config_manager.latest().head();
+    trip_periodic(now + m_s.CHANGE_ADDRESS_INTERVAL, &daemon::periodic_change_address);
+
+    if (head->token == us->token)
+    {
+        LOG(INFO) << "address in latest configuration has this node listed as accessible at "
+                  << us->address << " but it is bound to " << m_us.address
+                  << "; proposing a new configuration with an up-to-date address";
+        configuration new_config = m_config_manager.latest();
+        new_config.change_address(m_us.token, m_us.address);
+        new_config.bump_version();
+        propose_config(new_config);
+    }
+    else
+    {
+        LOG(INFO) << "address in latest configuration has this node listed as accessible at "
+                  << us->address << " but it is bound to " << m_us.address
+                  << "; sending a request to " << *head << " to update this node's address";
+
+        size_t sz = BUSYBEE_HEADER_SIZE
+                  + pack_size(REPLNET_SERVER_CHANGE_ADDRESS)
+                  + pack_size(us->address)
+                  + pack_size(m_us.address);
+        std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
+        msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_SERVER_CHANGE_ADDRESS << us->address << m_us.address;
+        send(*head, msg);
     }
 }
 
@@ -2080,6 +2153,11 @@ daemon :: periodic_describe_slots(uint64_t now)
               << " | acked <=" << m_fs.next_slot_to_ack();
     LOG(INFO) << "our stable configuration is " << m_config_manager.stable();
     LOG(INFO) << "the suffix of the chain stabilized through " << m_stable_version;
+
+    if (m_config_manager.stable().version() != m_config_manager.latest().version())
+    {
+        LOG(INFO) << "the latest outstanding configuration is " << m_config_manager.latest();
+    }
 
     if (m_heal_next.state == heal_next::HEALING ||
         m_heal_next.state == heal_next::HEALTHY_SENT)

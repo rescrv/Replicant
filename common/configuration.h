@@ -92,6 +92,7 @@ class configuration
         void add_to_chain(uint64_t token);
         void remove_from_chain(uint64_t token);
         void grow_command_chain();
+        void change_address(uint64_t token, const po6::net::location& address);
 
     private:
         friend bool operator == (const configuration& lhs, const configuration& rhs);

@@ -94,6 +94,9 @@ class daemon
         void process_server_register(const replicant::connection& conn,
                                      std::auto_ptr<e::buffer> msg,
                                      e::unpacker up);
+        void process_change_address(const replicant::connection& conn,
+                                    std::auto_ptr<e::buffer> msg,
+                                    e::unpacker up);
         void process_config_propose(const replicant::connection& conn,
                                     std::auto_ptr<e::buffer> msg,
                                     e::unpacker up);
@@ -119,6 +122,7 @@ class daemon
         // about this configuration w.r.t. previously issued ones and this call
         // will assert that
         void propose_config(const configuration& config);
+        void periodic_change_address(uint64_t now);
         void periodic_maintain_cluster(uint64_t now);
 
     // Client-related functions
