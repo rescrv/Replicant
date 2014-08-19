@@ -938,6 +938,12 @@ object_manager :: common_object_initialize(uint64_t slot,
     po6::threads::mutex::hold hold(obj->mtx());
     obj->lib = dlopen(buf, RTLD_NOW|RTLD_LOCAL);
 
+    if (unlink(buf) < 0)
+    {
+        PLOG(ERROR) << "could not unlink temporary library " << buf;
+        abort();
+    }
+
     if (!obj->lib)
     {
         const char* err = dlerror();
@@ -945,12 +951,6 @@ object_manager :: common_object_initialize(uint64_t slot,
                    << ": " << err << "; delete the object and try again";
         command_send_error_msg_response(slot, client, nonce, RESPONSE_DLOPEN_FAIL, err);
         return NULL;
-    }
-
-    if (unlink(buf) < 0)
-    {
-        PLOG(ERROR) << "could not unlink temporary library " << buf;
-        abort();
     }
 
     obj->sym = static_cast<replicant_state_machine*>(dlsym(obj->lib, "rsm"));
