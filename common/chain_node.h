@@ -46,16 +46,15 @@ class chain_node
         ~chain_node() throw ();
 
     public:
+        bool exactly_matches(const chain_node& other) const;
+
+    public:
         uint64_t token;
         po6::net::location address;
 };
 
 bool
 operator < (const chain_node& lhs, const chain_node& rhs);
-bool
-operator == (const chain_node& lhs, const chain_node& rhs);
-inline bool
-operator != (const chain_node& lhs, const chain_node& rhs) { return !(lhs == rhs); }
 
 std::ostream&
 operator << (std::ostream& lhs, const chain_node& rhs);

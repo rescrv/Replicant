@@ -117,9 +117,9 @@ replicant_daemon_SOURCES += daemon/object_manager.cc
 replicant_daemon_SOURCES += daemon/settings.cc
 replicant_daemon_SOURCES += daemon/snapshot.cc
 replicant_daemon_LDADD =
-replicant_daemon_LDADD += $(E_LIBS)
-replicant_daemon_LDADD += $(BUSYBEE_LIBS)
 replicant_daemon_LDADD += $(HYPERLEVELDB_LIBS)
+replicant_daemon_LDADD += $(BUSYBEE_LIBS)
+replicant_daemon_LDADD += $(E_LIBS)
 replicant_daemon_LDADD += libreplicant-state-machine.la
 replicant_daemon_LDADD += -lglog -ldl -lpthread
 
@@ -150,7 +150,7 @@ libreplicant_la_SOURCES += common/response_returncode.cc
 libreplicant_la_SOURCES += client/command.cc
 libreplicant_la_SOURCES += client/replicant.cc
 libreplicant_la_CXXFLAGS = $(CXXFLAGS) $(AM_CXXFLAGS)
-libreplicant_la_LIBADD = $(E_LIBS) $(BUSYBEE_LIBS)
+libreplicant_la_LIBADD = $(BUSYBEE_LIBS) $(E_LIBS)
 libreplicant_la_LDFLAGS = -version-info 1:0:0
 
 ################################################################################
@@ -169,6 +169,7 @@ replicantexec_PROGRAMS += replicant-backup-object
 replicantexec_PROGRAMS += replicant-restore-object
 replicantexec_PROGRAMS += replicant-debug-dump
 replicantexec_PROGRAMS += replicant-integrity-check
+replicantexec_PROGRAMS += replicant-list-servers
 endif
 
 noinst_HEADERS += tools/common.h
@@ -195,10 +196,13 @@ replicant_restore_object_SOURCES = tools/restore-object.cc
 replicant_restore_object_LDADD = libreplicant.la
 
 replicant_integrity_check_SOURCES = tools/integrity-check.cc common/chain_node.cc common/configuration.cc common/packing.cc common/response_returncode.cc daemon/configuration_manager.cc daemon/fact_store.cc
-replicant_integrity_check_LDADD = $(E_LIBS) $(HYPERLEVELDB_LIBS) -lglog
+replicant_integrity_check_LDADD = $(HYPERLEVELDB_LIBS) $(E_LIBS) -lglog
 
 replicant_debug_dump_SOURCES = tools/debug-dump.cc common/chain_node.cc common/configuration.cc common/packing.cc common/response_returncode.cc daemon/configuration_manager.cc daemon/fact_store.cc
-replicant_debug_dump_LDADD = $(E_LIBS) $(HYPERLEVELDB_LIBS) -lglog
+replicant_debug_dump_LDADD = $(HYPERLEVELDB_LIBS) $(E_LIBS) -lglog
+
+replicant_list_servers_SOURCES = tools/list-servers.cc
+replicant_list_servers_LDADD = libreplicant.la
 
 ################################################################################
 ################################### Examples ###################################

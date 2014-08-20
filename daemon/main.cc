@@ -41,6 +41,7 @@
 #include <busybee_utils.h>
 
 // Replicant
+#include "common/bootstrap.h"
 #include "daemon/daemon.h"
 
 int
@@ -59,9 +60,11 @@ main(int argc, const char* argv[])
     bool listen = false;
     const char* listen_host = "auto";
     long listen_port = 1982;
-    bool connect = false;
+    bool connect1 = false;
     const char* connect_host = "127.0.0.1";
     long connect_port = 1982;
+    bool connect2 = false;
+    const char* connect_string = NULL;
     const char* pidfile = "";
     bool has_pidfile = false;
     bool init = false;
@@ -93,10 +96,13 @@ main(int argc, const char* argv[])
             .metavar("port").as_long(&listen_port).set_true(&listen);
     ap.arg().name('c', "connect")
             .description("join an existing cluster through IP address or hostname")
-            .metavar("addr").as_string(&connect_host).set_true(&connect);
+            .metavar("addr").as_string(&connect_host).set_true(&connect1);
     ap.arg().name('P', "connect-port")
             .description("connect to an alternative port (default: 1982)")
-            .metavar("port").as_long(&connect_port).set_true(&connect);
+            .metavar("port").as_long(&connect_port).set_true(&connect1);
+    ap.arg().name('C', "connect-string")
+            .description("connect to a list of hosts (default: none)")
+            .metavar("hosts").as_string(&connect_string).set_true(&connect2);
     ap.arg().long_name("pidfile")
             .description("write the PID to a file (default: don't)")
             .metavar("file").as_string(&pidfile).set_true(&has_pidfile);
@@ -194,6 +200,19 @@ main(int argc, const char* argv[])
         return EXIT_FAILURE;
     }
 
+    std::vector<po6::net::hostname> hostnames;
+
+    if (connect2 && !replicant::bootstrap_parse_hosts(connect_string, &hostnames))
+    {
+        std::cerr << "cannot interpret the connection string to bootstrap the cluster" << std::endl;
+        return EXIT_FAILURE;
+    }
+
+    if (connect1)
+    {
+        hostnames.push_back(po6::net::hostname(connect_host, connect_port));
+    }
+
     google::InitGoogleLogging(argv[0]);
     google::InstallFailureSignalHandler();
 
@@ -210,7 +229,7 @@ main(int argc, const char* argv[])
                      po6::pathname(log ? log : data),
                      po6::pathname(pidfile), has_pidfile,
                      listen, bind_to,
-                     connect, po6::net::hostname(connect_host, connect_port),
+                     connect1 || connect2, hostnames,
                      init_obj, init_lib, init_str, init_rst);
     }
     catch (std::exception& e)

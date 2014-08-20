@@ -48,6 +48,13 @@ chain_node :: ~chain_node() throw ()
 }
 
 bool
+chain_node :: exactly_matches(const chain_node& other) const
+{
+    return this->token == other.token &&
+           this->address == other.address;
+}
+
+bool
 replicant :: operator < (const chain_node& lhs, const chain_node& rhs)
 {
     if (lhs.token == rhs.token)
@@ -56,13 +63,6 @@ replicant :: operator < (const chain_node& lhs, const chain_node& rhs)
     }
 
     return lhs.token < rhs.token;
-}
-
-bool
-replicant :: operator == (const chain_node& lhs, const chain_node& rhs)
-{
-    return lhs.token == rhs.token &&
-           lhs.address == rhs.address;
 }
 
 std::ostream&

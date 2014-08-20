@@ -171,8 +171,7 @@ configuration :: has_token(uint64_t token) const
 bool
 configuration :: is_member(const chain_node& node) const
 {
-    const chain_node* n = node_from_token(node.token);
-    return n && *n == node;
+    return node_from_token(node.token) != NULL;
 }
 
 const chain_node*
@@ -423,6 +422,21 @@ configuration :: grow_command_chain()
     ++m_command_sz;
 }
 
+void
+configuration :: change_address(uint64_t token, const po6::net::location& address)
+{
+    assert(has_token(token));
+
+    for (size_t i = 0; i < m_members.size(); ++i)
+    {
+        if (m_members[i].token == token)
+        {
+            m_members[i].address = address;
+            return;
+        }
+    }
+}
+
 bool
 replicant :: operator < (const configuration& lhs, const configuration& rhs)
 {
@@ -445,7 +459,7 @@ replicant :: operator == (const configuration& lhs, const configuration& rhs)
 
     for (size_t i = 0; i < lhs.m_members.size(); ++i)
     {
-        if (lhs.m_members[i] != rhs.m_members[i])
+        if (!lhs.m_members[i].exactly_matches(rhs.m_members[i]))
         {
             return false;
         }

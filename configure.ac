@@ -79,19 +79,29 @@ fi
 PKG_CHECK_MODULES([PO6], [libpo6 >= 0.5])
 PKG_CHECK_MODULES([E], [libe >= 0.7])
 PKG_CHECK_MODULES([BUSYBEE], [busybee >= 0.5])
-PKG_CHECK_MODULES([HYPERLEVELDB], [libhyperleveldb >= 1.0])
+if test x"${enable_all_components}" = xyes -o \
+        x"${enable_daemon}" = xyes; then
+    PKG_CHECK_MODULES([HYPERLEVELDB], [libhyperleveldb >= 1.0])
+fi
 
 # Checks for header files.
-AC_CHECK_HEADER([popt.h],,[AC_MSG_ERROR([
+if test x"${enable_all_components}" = xyes -o \
+        x"${enable_tools}" = xyes -o \
+        x"${enable_daemon}" = xyes; then
+    AC_CHECK_HEADER([popt.h],,[AC_MSG_ERROR([
 ---------------------------------------
 Replicant relies upon the popt library.
 Please install popt to continue.
 ---------------------------------------])])
-AC_CHECK_HEADER([glog/logging.h],,[AC_MSG_ERROR([
+fi
+if test x"${enable_all_components}" = xyes -o \
+        x"${enable_daemon}" = xyes; then
+    AC_CHECK_HEADER([glog/logging.h],,[AC_MSG_ERROR([
 ---------------------------------------
 Replicant relies upon the glog library.
 Please install glog to continue.
 ---------------------------------------])])
+fi
 
 # Checks for typedefs, structures, and compiler characteristics.
 

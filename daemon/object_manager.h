@@ -65,7 +65,7 @@ class object_manager
         ~object_manager() throw ();
 
     public:
-        void enable_logging() { m_logging_enabled = true; }
+        void enable_logging();
         void set_callback(daemon* d, void (daemon::*command_cb)(uint64_t slot, uint64_t client, uint64_t nonce, response_returncode rc, const e::slice& data),
                                      void (daemon::*notify_cb)(uint64_t client, uint64_t nonce, response_returncode rc, const e::slice& data),
                                      void (daemon::*snapshot_cb)(std::auto_ptr<snapshot>),

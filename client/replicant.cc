@@ -101,12 +101,60 @@ replicant_destroy_output(const char* output, size_t)
     delete buf;
 }
 
+replicant_client :: replicant_client(const char* connection_string)
+    : m_gc(new e::garbage_collector())
+    , m_busybee_mapper(new replicant::mapper())
+    , m_busybee(new busybee_st(m_gc.get(), m_busybee_mapper.get(), 0))
+    , m_config(new replicant::configuration())
+    , m_bootstrap()
+    , m_token(0x4141414141414141ULL)
+    , m_nonce(1)
+    , m_cluster(0)
+    , m_state(REPLCL_DISCONNECTED)
+    , m_commands()
+    , m_complete()
+    , m_resend()
+    , m_last_error()
+    , m_cluster_jump(false)
+    , m_gc_ts()
+{
+    m_gc->register_thread(&m_gc_ts);
+
+    if (!bootstrap_parse_hosts(connection_string, &m_bootstrap))
+    {
+        replicant_returncode _status;
+        replicant_returncode* status = &_status;
+        ERROR(NEED_BOOTSTRAP) << "could not parse bootstrap connection string";
+    }
+}
+
 replicant_client :: replicant_client(const char* host, in_port_t port)
     : m_gc(new e::garbage_collector())
     , m_busybee_mapper(new replicant::mapper())
     , m_busybee(new busybee_st(m_gc.get(), m_busybee_mapper.get(), 0))
     , m_config(new replicant::configuration())
-    , m_bootstrap(host, port)
+    , m_bootstrap()
+    , m_token(0x4141414141414141ULL)
+    , m_nonce(1)
+    , m_cluster(0)
+    , m_state(REPLCL_DISCONNECTED)
+    , m_commands()
+    , m_complete()
+    , m_resend()
+    , m_last_error()
+    , m_cluster_jump(false)
+    , m_gc_ts()
+{
+    m_gc->register_thread(&m_gc_ts);
+    m_bootstrap.push_back(po6::net::hostname(host, port));
+}
+
+replicant_client :: replicant_client(po6::net::hostname* bootstrap, size_t bootstrap_sz)
+    : m_gc(new e::garbage_collector())
+    , m_busybee_mapper(new replicant::mapper())
+    , m_busybee(new busybee_st(m_gc.get(), m_busybee_mapper.get(), 0))
+    , m_config(new replicant::configuration())
+    , m_bootstrap(bootstrap, bootstrap + bootstrap_sz)
     , m_token(0x4141414141414141ULL)
     , m_nonce(1)
     , m_cluster(0)
@@ -491,6 +539,54 @@ replicant_client :: kill(int64_t id)
     m_resend.erase(id);
 }
 
+int64_t
+replicant_client :: list_servers(replicant_returncode* status,
+                                 std::string* servers)
+{
+    int64_t ret = maintain_connection(status);
+
+    if (ret < 0)
+    {
+        return ret;
+    }
+
+    std::ostringstream ostr;
+
+    for (const chain_node* n = m_config->members_begin();
+            n != m_config->members_end(); ++n)
+    {
+        ostr << n->address << "\n";
+    }
+
+    *servers = ostr.str();
+    return 0;
+}
+
+int64_t
+replicant_client :: connect_str(replicant_returncode* status,
+                                std::string* servers)
+{
+    int64_t ret = maintain_connection(status);
+
+    if (ret < 0)
+    {
+        return ret;
+    }
+
+    std::vector<po6::net::hostname> hns;
+
+    for (const chain_node* n = m_config->members_begin();
+            n != m_config->members_end(); ++n)
+    {
+        std::ostringstream ostr;
+        ostr << n->address.address;
+        hns.push_back(po6::net::hostname(ostr.str().c_str(), n->address.port));
+    }
+
+    *servers = replicant::bootstrap_hosts_to_string(&hns[0], hns.size());
+    return 0;
+}
+
 #ifdef _MSC_VER
 fd_set*
 #else
@@ -615,6 +711,9 @@ replicant_client :: inner_loop(replicant_returncode* status)
         UNEXPECTED_MESSAGE_CASE(*node, BOOTSTRAP);
         UNEXPECTED_MESSAGE_CASE(*node, SERVER_REGISTER);
         UNEXPECTED_MESSAGE_CASE(*node, SERVER_REGISTER_FAILED);
+        UNEXPECTED_MESSAGE_CASE(*node, SERVER_CHANGE_ADDRESS);
+        UNEXPECTED_MESSAGE_CASE(*node, SERVER_IDENTIFY);
+        UNEXPECTED_MESSAGE_CASE(*node, SERVER_IDENTITY);
         UNEXPECTED_MESSAGE_CASE(*node, CONFIG_PROPOSE);
         UNEXPECTED_MESSAGE_CASE(*node, CONFIG_ACCEPT);
         UNEXPECTED_MESSAGE_CASE(*node, CONFIG_REJECT);
@@ -691,40 +790,47 @@ replicant_client :: perform_bootstrap(replicant_returncode* status)
     m_token = generate_token();
     m_busybee->set_id(m_token);
     configuration initial;
-    replicant::bootstrap_returncode rc = replicant::bootstrap(m_bootstrap, &initial);
+    size_t idx = 0;
+    replicant::bootstrap_returncode rc = replicant::BOOTSTRAP_GARBAGE;
 
-    switch (rc)
+    for (idx = 0; idx < m_bootstrap.size(); ++idx)
     {
-        case replicant::BOOTSTRAP_SUCCESS:
-            m_state = REPLCL_BOOTSTRAPPED;
-            *m_config = initial;
+        rc = replicant::bootstrap(m_bootstrap[idx], &initial);
 
-            if (m_cluster > 0 && m_cluster != initial.cluster())
-            {
-                return report_cluster_jump(status);
-            }
+        switch (rc)
+        {
+            case replicant::BOOTSTRAP_SUCCESS:
+                m_state = REPLCL_BOOTSTRAPPED;
+                *m_config = initial;
 
-            m_cluster = initial.cluster();
-            m_cluster_jump = false;
-            return 0;
-        case replicant::BOOTSTRAP_SEE_ERRNO:
-            ERROR(NEED_BOOTSTRAP) << "cannot connect to cluster: " << e::error::strerror(errno);
-            break;
-        case replicant::BOOTSTRAP_COMM_FAIL:
-            ERROR(INTERNAL_ERROR) << "cannot connect to cluster: internal error: " << e::error::strerror(errno);
-            break;
-        case replicant::BOOTSTRAP_TIMEOUT:
-            ERROR(NEED_BOOTSTRAP) << "cannot connect to cluster: operation timed out";
-            break;
-        case replicant::BOOTSTRAP_CORRUPT_INFORM:
-            ERROR(NEED_BOOTSTRAP) << "cannot connect to cluster: server " << m_bootstrap << " sent a corrupt INFORM message";
-            break;
-        case replicant::BOOTSTRAP_NOT_CLUSTER_MEMBER:
-            ERROR(MISBEHAVING_SERVER) << "cannot connect to cluster: server " << m_bootstrap << " is not a member of the cluster";
-            break;
-        default:
-            ERROR(INTERNAL_ERROR) << "cannot connect to cluster: bootstrap failed with " << (unsigned) rc;
-            break;
+                if (m_cluster > 0 && m_cluster != initial.cluster())
+                {
+                    return report_cluster_jump(status);
+                }
+
+                m_cluster = initial.cluster();
+                m_cluster_jump = false;
+                return 0;
+            case replicant::BOOTSTRAP_SEE_ERRNO:
+                ERROR(NEED_BOOTSTRAP) << "cannot connect to cluster: " << e::error::strerror(errno);
+                break;
+            case replicant::BOOTSTRAP_COMM_FAIL:
+                ERROR(INTERNAL_ERROR) << "cannot connect to cluster: internal error: " << e::error::strerror(errno);
+                break;
+            case replicant::BOOTSTRAP_TIMEOUT:
+                ERROR(NEED_BOOTSTRAP) << "cannot connect to cluster: operation timed out";
+                break;
+            case replicant::BOOTSTRAP_CORRUPT_INFORM:
+                ERROR(NEED_BOOTSTRAP) << "cannot connect to cluster: server " << m_bootstrap[idx] << " sent a corrupt INFORM message";
+                break;
+            case replicant::BOOTSTRAP_NOT_CLUSTER_MEMBER:
+                ERROR(MISBEHAVING_SERVER) << "cannot connect to cluster: server " << m_bootstrap[idx] << " is not a member of the cluster";
+                break;
+            case replicant::BOOTSTRAP_GARBAGE:
+            default:
+                ERROR(INTERNAL_ERROR) << "cannot connect to cluster: bootstrap failed with " << (unsigned) rc;
+                break;
+        }
     }
 
     reset_to_disconnected();
@@ -1059,7 +1165,7 @@ replicant_client :: handle_disruption(const chain_node& from,
         e::intrusive_ptr<command> c = it->second;
 
         // If this op wasn't sent to the failed host, then skip it
-        if (c->sent_to() != from)
+        if (c->sent_to().token != from.token)
         {
             ++it;
             continue;

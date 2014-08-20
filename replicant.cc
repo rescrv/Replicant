@@ -45,6 +45,8 @@ main(int argc, const char* argv[])
     cmds.push_back(e::subcommand("backup-object",     "Create a backup of a replicated object"));
     cmds.push_back(e::subcommand("restore-object",    "Restore a replicated object from backup"));
     cmds.push_back(e::subcommand("integrity-check",   "Repair a Relicant daemon's data directory"));
+    cmds.push_back(e::subcommand("debug-dump",        "Dump the replicant data directory for debugging"));
+    cmds.push_back(e::subcommand("list-servers",      "List the servers which comprise the cluster"));
     return dispatch_to_subcommands(argc, argv,
                                    "replicant", "Replicant",
                                    PACKAGE_VERSION,

@@ -47,11 +47,26 @@ enum bootstrap_returncode
     BOOTSTRAP_COMM_FAIL,
     BOOTSTRAP_SEE_ERRNO,
     BOOTSTRAP_CORRUPT_INFORM,
-    BOOTSTRAP_NOT_CLUSTER_MEMBER
+    BOOTSTRAP_NOT_CLUSTER_MEMBER,
+    BOOTSTRAP_GARBAGE
 };
 
 bootstrap_returncode
 bootstrap(const po6::net::hostname& hn, configuration* config);
+
+bootstrap_returncode
+bootstrap_identity(const po6::net::hostname& hn, chain_node* cn);
+
+bootstrap_returncode
+bootstrap(const po6::net::hostname* hns, size_t hns_sz,
+          configuration* config);
+
+bool
+bootstrap_parse_hosts(const char* connection_string,
+                      std::vector<po6::net::hostname>* hosts);
+
+std::string
+bootstrap_hosts_to_string(const po6::net::hostname* hns, size_t hns_sz);
 
 std::ostream&
 operator << (std::ostream& lhs, const bootstrap_returncode& rhs);
