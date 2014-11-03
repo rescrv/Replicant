@@ -76,7 +76,7 @@ else
     AC_SUBST([LRT_LIBS], [""])
 fi
 
-PKG_CHECK_MODULES([PO6], [libpo6 >= 0.5])
+PKG_CHECK_MODULES([PO6], [libpo6 >= 0.6])
 PKG_CHECK_MODULES([E], [libe >= 0.7])
 PKG_CHECK_MODULES([BUSYBEE], [busybee >= 0.5])
 if test x"${enable_all_components}" = xyes -o \
