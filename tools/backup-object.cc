@@ -30,6 +30,10 @@
 // e
 #include <e/strescape.h>
 
+#if defined __FreeBSD__
+#include <sys/stat.h>
+#endif
+
 // Replicant
 #include "client/replicant.h"
 #include "tools/common.h"
