@@ -68,6 +68,9 @@
 #if defined __APPLE__
 #include "daemon/memstream.h"
 #endif
+#if defined __FreeBSD__
+#include <sys/stat.h>
+#endif
 
 using replicant::object_manager;
 
