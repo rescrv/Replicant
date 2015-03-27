@@ -1833,7 +1833,7 @@ daemon :: process_client_register(const replicant::connection& conn,
     }
 
     uint64_t slot = m_fs.next_slot_to_issue();
-    issue_command(slot, OBJECT_CLI_REG, client, 0, e::slice("", 0));
+    issue_command(slot, OBJECT_CLI_REG, client, 0, e::slice());
 }
 
 void
@@ -1860,7 +1860,7 @@ daemon :: process_client_disconnect(const replicant::connection& conn,
     }
 
     uint64_t slot = m_fs.next_slot_to_issue();
-    issue_command(slot, OBJECT_CLI_DIE, conn.token, nonce, e::slice("", 0));
+    issue_command(slot, OBJECT_CLI_DIE, conn.token, nonce, e::slice());
 }
 
 void
@@ -1890,7 +1890,7 @@ daemon :: process_client_timeout(const replicant::connection& conn,
     }
 
     uint64_t slot = m_fs.next_slot_to_issue();
-    issue_command(slot, OBJECT_CLI_DIE, client, UINT64_MAX, e::slice("", 0));
+    issue_command(slot, OBJECT_CLI_DIE, client, UINT64_MAX, e::slice());
 }
 
 void

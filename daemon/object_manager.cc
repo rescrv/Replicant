@@ -866,7 +866,7 @@ object_manager :: condition_destroy(object* obj, uint64_t cond)
     while (!waiters.empty())
     {
         const object::condition::waiter& w(*waiters.begin());
-        notify_send_response(w.client, w.nonce, RESPONSE_COND_DESTROYED, e::slice("", 0));
+        notify_send_response(w.client, w.nonce, RESPONSE_COND_DESTROYED, e::slice());
         waiters.erase(waiters.begin());
     }
 
@@ -897,7 +897,7 @@ object_manager :: condition_broadcast(object* obj, uint64_t cond, uint64_t* stat
            waiters.begin()->wait_for <= it->second.count)
     {
         const object::condition::waiter& w(*waiters.begin());
-        notify_send_response(w.client, w.nonce, RESPONSE_SUCCESS, e::slice("", 0));
+        notify_send_response(w.client, w.nonce, RESPONSE_SUCCESS, e::slice());
         waiters.erase(waiters.begin());
     }
 
@@ -1030,7 +1030,7 @@ object_manager :: del_object(uint64_t obj_id)
 void
 object_manager :: command_send_error_response(uint64_t slot, uint64_t client, uint64_t nonce, response_returncode rc)
 {
-    ((*m_daemon).*m_command_cb)(slot, client, nonce, rc, e::slice("", 0));
+    ((*m_daemon).*m_command_cb)(slot, client, nonce, rc, e::slice());
 }
 
 void
@@ -1049,7 +1049,7 @@ object_manager :: command_send_response(uint64_t slot, uint64_t client, uint64_t
 void
 object_manager :: notify_send_error_response(uint64_t client, uint64_t nonce, response_returncode rc)
 {
-    ((*m_daemon).*m_notify_cb)(client, nonce, rc, e::slice("", 0));
+    ((*m_daemon).*m_notify_cb)(client, nonce, rc, e::slice());
 }
 
 void
@@ -1248,7 +1248,7 @@ object_manager :: dispatch_command_wait(uint64_t,
     {
         if (cmd.state <= it->second.count)
         {
-            notify_send_response(cmd.client, cmd.nonce, RESPONSE_SUCCESS, e::slice("", 0));
+            notify_send_response(cmd.client, cmd.nonce, RESPONSE_SUCCESS, e::slice());
         }
         else
         {
@@ -1273,7 +1273,7 @@ object_manager :: dispatch_command_delete(uint64_t obj_id,
         condition_destroy(obj.get(), obj->conditions.begin()->first);
     }
 
-    command_send_response(cmd.slot, cmd.client, cmd.nonce, RESPONSE_SUCCESS, e::slice("", 0));
+    command_send_response(cmd.slot, cmd.client, cmd.nonce, RESPONSE_SUCCESS, e::slice());
 }
 
 void
