@@ -11,6 +11,7 @@
 /config.guess
 /config.h
 /config.h.in
+/compile
 /config.h.in~
 /config.log
 /config.status
@@ -38,3 +39,4 @@
 /replicant-restore-object
 /replicant.upack
 /stamp-h1
+/test-driver
