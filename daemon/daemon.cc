@@ -161,6 +161,7 @@ daemon :: daemon()
     : m_s()
     , m_gc()
     , m_gc_ts()
+    , m_quiescent_lock()
     , m_busybee_mapper()
     , m_busybee()
     , m_us()
@@ -754,6 +755,7 @@ daemon :: run(bool daemonize,
             exit_on_signal(SIGTERM);
         }
 
+        po6::threads::mutex::hold hold(&m_quiescent_lock);
         m_gc.quiescent_state(&m_gc_ts);
     }
 
@@ -2264,6 +2266,7 @@ daemon :: record_execution(uint64_t slot, uint64_t client, uint64_t nonce, repli
     e::buffer::packer pa = msg->pack_at(BUSYBEE_HEADER_SIZE);
     pa = pa << REPLNET_COMMAND_RESPONSE << nonce << rc;
     pa = pa.copy(data);
+    po6::threads::mutex::hold hold(&m_quiescent_lock);
     send_no_disruption(client, msg);
     m_fs.exec_slot(slot, rc, data);
 }
@@ -2638,6 +2641,7 @@ daemon :: send_notify(uint64_t client, uint64_t nonce, replicant::response_retur
     e::buffer::packer pa = msg->pack_at(BUSYBEE_HEADER_SIZE);
     pa = pa << REPLNET_CONDITION_NOTIFY << nonce << rc;
     pa = pa.copy(data);
+    po6::threads::mutex::hold hold(&m_quiescent_lock);
     send_no_disruption(client, msg);
 }
 
@@ -2846,7 +2850,7 @@ daemon :: recv(replicant::connection* conn, std::auto_ptr<e::buffer>* msg)
     while (s_continue)
     {
         run_periodic();
-        busybee_returncode rc = m_busybee->recv(&conn->token, msg);
+        busybee_returncode rc = m_busybee->recv(&m_gc_ts, &conn->token, msg);
 
         switch (rc)
         {

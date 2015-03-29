@@ -187,7 +187,7 @@ replicant :: bootstrap(const po6::net::hostname* hns, size_t hns_sz,
         }
     }
 
-    return rc;
+    return BOOTSTRAP_TIMEOUT;
 }
 
 bool

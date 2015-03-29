@@ -263,6 +263,7 @@ class daemon
         settings m_s;
         e::garbage_collector m_gc;
         e::garbage_collector::thread_state m_gc_ts;
+        po6::threads::mutex m_quiescent_lock;
         replicant::mapper m_busybee_mapper;
         std::auto_ptr<busybee_mta> m_busybee;
         chain_node m_us;
