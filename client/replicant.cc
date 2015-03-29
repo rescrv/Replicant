@@ -102,9 +102,8 @@ replicant_destroy_output(const char* output, size_t)
 }
 
 replicant_client :: replicant_client(const char* connection_string)
-    : m_gc(new e::garbage_collector())
-    , m_busybee_mapper(new replicant::mapper())
-    , m_busybee(new busybee_st(m_gc.get(), m_busybee_mapper.get(), 0))
+    : m_busybee_mapper(new replicant::mapper())
+    , m_busybee(new busybee_st(m_busybee_mapper.get(), 0))
     , m_config(new replicant::configuration())
     , m_bootstrap()
     , m_token(0x4141414141414141ULL)
@@ -116,10 +115,7 @@ replicant_client :: replicant_client(const char* connection_string)
     , m_resend()
     , m_last_error()
     , m_cluster_jump(false)
-    , m_gc_ts()
 {
-    m_gc->register_thread(&m_gc_ts);
-
     if (!bootstrap_parse_hosts(connection_string, &m_bootstrap))
     {
         replicant_returncode _status;
@@ -129,9 +125,8 @@ replicant_client :: replicant_client(const char* connection_string)
 }
 
 replicant_client :: replicant_client(const char* host, in_port_t port)
-    : m_gc(new e::garbage_collector())
-    , m_busybee_mapper(new replicant::mapper())
-    , m_busybee(new busybee_st(m_gc.get(), m_busybee_mapper.get(), 0))
+    : m_busybee_mapper(new replicant::mapper())
+    , m_busybee(new busybee_st(m_busybee_mapper.get(), 0))
     , m_config(new replicant::configuration())
     , m_bootstrap()
     , m_token(0x4141414141414141ULL)
@@ -143,16 +138,13 @@ replicant_client :: replicant_client(const char* host, in_port_t port)
     , m_resend()
     , m_last_error()
     , m_cluster_jump(false)
-    , m_gc_ts()
 {
-    m_gc->register_thread(&m_gc_ts);
     m_bootstrap.push_back(po6::net::hostname(host, port));
 }
 
 replicant_client :: replicant_client(po6::net::hostname* bootstrap, size_t bootstrap_sz)
-    : m_gc(new e::garbage_collector())
-    , m_busybee_mapper(new replicant::mapper())
-    , m_busybee(new busybee_st(m_gc.get(), m_busybee_mapper.get(), 0))
+    : m_busybee_mapper(new replicant::mapper())
+    , m_busybee(new busybee_st(m_busybee_mapper.get(), 0))
     , m_config(new replicant::configuration())
     , m_bootstrap(bootstrap, bootstrap + bootstrap_sz)
     , m_token(0x4141414141414141ULL)
@@ -164,14 +156,11 @@ replicant_client :: replicant_client(po6::net::hostname* bootstrap, size_t boots
     , m_resend()
     , m_last_error()
     , m_cluster_jump(false)
-    , m_gc_ts()
 {
-    m_gc->register_thread(&m_gc_ts);
 }
 
 replicant_client :: ~replicant_client() throw ()
 {
-    m_gc->deregister_thread(&m_gc_ts);
 }
 
 int64_t
@@ -600,7 +589,6 @@ replicant_client :: poll_fd()
 int64_t
 replicant_client :: inner_loop(replicant_returncode* status)
 {
-    m_gc->quiescent_state(&m_gc_ts);
     int64_t ret = maintain_connection(status);
 
     if (ret != 0)
@@ -1334,7 +1322,7 @@ void
 replicant_client :: reset_to_disconnected()
 {
     m_busybee_mapper.reset(new replicant::mapper());
-    m_busybee.reset(new busybee_st(m_gc.get(), m_busybee_mapper.get(), 0));
+    m_busybee.reset(new busybee_st(m_busybee_mapper.get(), 0));
     m_config.reset(new configuration());
     m_token = 0x4141414141414141ULL;
     // leave m_nonce
