@@ -1,4 +1,4 @@
-// Copyright (c) 2012, Robert Escriva
+// Copyright (c) 2012-2015, Robert Escriva
 // All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
@@ -25,13 +25,8 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
-// e
-#include <e/endian.h>
-#include <e/time.h>
-
 // STL
 #include <memory>
-#include <sstream>
 
 // BusyBee
 #include <busybee_constants.h>
@@ -39,166 +34,19 @@
 
 // Replicant
 #include "common/bootstrap.h"
-#include "common/macros.h"
+#include "common/configuration.h"
 #include "common/network_msgtype.h"
 
-using replicant::bootstrap_returncode;
-
-namespace replicant
-{
-
-bootstrap_returncode
-bootstrap_common(const po6::net::hostname& hn,
-                 std::auto_ptr<e::buffer> req,
-                 std::auto_ptr<e::buffer>* resp,
-                 uint64_t* token,
-                 po6::net::location* remote)
-{
-    try
-    {
-        busybee_single bbs(hn);
-
-        switch (bbs.send(req))
-        {
-            case BUSYBEE_SUCCESS:
-                break;
-            case BUSYBEE_TIMEOUT:
-                return BOOTSTRAP_TIMEOUT;
-            case BUSYBEE_SHUTDOWN:
-            case BUSYBEE_POLLFAILED:
-            case BUSYBEE_DISRUPTED:
-            case BUSYBEE_ADDFDFAIL:
-            case BUSYBEE_EXTERNAL:
-            case BUSYBEE_INTERRUPTED:
-                return BOOTSTRAP_COMM_FAIL;
-            default:
-                abort();
-        }
-
-        bbs.set_timeout(250);
-
-        // Receive the inform message
-        switch (bbs.recv(resp))
-        {
-            case BUSYBEE_SUCCESS:
-                break;
-            case BUSYBEE_TIMEOUT:
-                return BOOTSTRAP_TIMEOUT;
-            case BUSYBEE_SHUTDOWN:
-            case BUSYBEE_POLLFAILED:
-            case BUSYBEE_DISRUPTED:
-            case BUSYBEE_ADDFDFAIL:
-            case BUSYBEE_EXTERNAL:
-            case BUSYBEE_INTERRUPTED:
-                return BOOTSTRAP_COMM_FAIL;
-            default:
-                abort();
-        }
-
-        *token = bbs.token();
-        *remote = bbs.remote();
-        return BOOTSTRAP_SUCCESS;
-    }
-    catch (po6::error& e)
-    {
-        errno = e;
-        return BOOTSTRAP_SEE_ERRNO;
-    }
-}
-
-} // namespace
-
-#ifdef _MSC_VER
-    typedef std::shared_ptr<e::buffer> ptr_t;
-#else
-    typedef std::auto_ptr<e::buffer> ptr_t;
-#endif
-
-bootstrap_returncode
-replicant :: bootstrap(const po6::net::hostname& hn, configuration* config)
-{
-    ptr_t msg(e::buffer::create(BUSYBEE_HEADER_SIZE + pack_size(REPLNET_BOOTSTRAP)));
-    msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_BOOTSTRAP;
-    uint64_t token;
-    po6::net::location remote;
-    bootstrap_returncode rc = bootstrap_common(hn, msg, &msg, &token, &remote);
-
-    if (rc != BOOTSTRAP_SUCCESS)
-    {
-        return rc;
-    }
-
-    replicant_network_msgtype mt = REPLNET_NOP;
-    e::unpacker up = msg->unpack_from(BUSYBEE_HEADER_SIZE);
-    up >> mt >> *config;
-
-    if (up.error() || mt != REPLNET_INFORM || !config->validate())
-    {
-        return BOOTSTRAP_CORRUPT_INFORM;
-    }
-
-    if (!config->is_member(chain_node(token, remote)))
-    {
-        return BOOTSTRAP_NOT_CLUSTER_MEMBER;
-    }
-
-    return BOOTSTRAP_SUCCESS;
-}
-
-bootstrap_returncode
-replicant :: bootstrap_identity(const po6::net::hostname& hn, chain_node* cn)
-{
-    ptr_t msg(e::buffer::create(BUSYBEE_HEADER_SIZE + pack_size(REPLNET_BOOTSTRAP)));
-    msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_SERVER_IDENTIFY;
-    uint64_t token;
-    po6::net::location remote;
-    bootstrap_returncode rc = bootstrap_common(hn, msg, &msg, &token, &remote);
-
-    if (rc != BOOTSTRAP_SUCCESS)
-    {
-        return rc;
-    }
-
-    replicant_network_msgtype mt = REPLNET_NOP;
-    e::unpacker up = msg->unpack_from(BUSYBEE_HEADER_SIZE);
-    up >> mt >> *cn;
-
-    if (up.error() || mt != REPLNET_SERVER_IDENTITY)
-    {
-        return BOOTSTRAP_CORRUPT_INFORM;
-    }
-
-    return BOOTSTRAP_SUCCESS;
-}
-
-bootstrap_returncode
-replicant :: bootstrap(const po6::net::hostname* hns, size_t hns_sz,
-                       configuration* config)
-{
-    bootstrap_returncode rc;
-
-    for (size_t i = 0; i < hns_sz; ++i)
-    {
-        rc = bootstrap(hns[i], config);
-
-        if (rc == BOOTSTRAP_SUCCESS)
-        {
-            return BOOTSTRAP_SUCCESS;
-        }
-    }
-
-    return BOOTSTRAP_TIMEOUT;
-}
+using replicant::bootstrap;
 
 bool
-replicant :: bootstrap_parse_hosts(const char* connection_string,
-                                   std::vector<po6::net::hostname>* _hosts)
+bootstrap :: parse_hosts(const char* conn_str,
+                         std::vector<po6::net::hostname>* hosts)
 {
-    const size_t connection_string_sz = strlen(connection_string);
-    std::vector<po6::net::hostname> hosts;
-    std::vector<char> connstr(connection_string, connection_string + connection_string_sz + 1);
-    char* ptr = &connstr[0];
-    char* const end = ptr + connection_string_sz;
+    const size_t conn_str_sz = strlen(conn_str);
+    std::vector<char> cs(conn_str, conn_str + conn_str_sz + 1);
+    char* ptr = &cs[0];
+    char* const end = ptr + conn_str_sz;
 
     while (ptr < end)
     {
@@ -209,7 +57,7 @@ replicant :: bootstrap_parse_hosts(const char* connection_string,
 
         if (colon == NULL)
         {
-            hosts.push_back(po6::net::hostname(ptr, 1982));
+            hosts->push_back(po6::net::hostname(ptr, 1982));
             ptr = eoh + 1;
             continue;
         }
@@ -234,51 +82,194 @@ replicant :: bootstrap_parse_hosts(const char* connection_string,
             host.assign(ptr, colon);
         }
 
-        hosts.push_back(po6::net::hostname(host.c_str(), port));
+        hosts->push_back(po6::net::hostname(host.c_str(), port));
         ptr = eoh + 1;
-    }
-
-    for (size_t i = 0; i < hosts.size(); ++i)
-    {
-        _hosts->push_back(hosts[i]);
     }
 
     return true;
 }
 
+replicant_returncode
+bootstrap :: bootstrap_one(const po6::net::hostname& hn,
+                           configuration* config, e::error* err)
+{
+    try
+    {
+        const size_t sz = BUSYBEE_HEADER_SIZE
+                        + pack_size(REPLNET_BOOTSTRAP);
+        std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
+        msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_BOOTSTRAP;
+        busybee_single bbs(hn);
+
+        switch (bbs.send(msg))
+        {
+            case BUSYBEE_SUCCESS:
+                break;
+            case BUSYBEE_TIMEOUT:
+                err->set_loc(__FILE__, __LINE__);
+                err->set_msg() << "timed out connecting to " << hn;
+                return REPLICANT_TIMEOUT;
+            case BUSYBEE_SHUTDOWN:
+            case BUSYBEE_POLLFAILED:
+            case BUSYBEE_DISRUPTED:
+            case BUSYBEE_ADDFDFAIL:
+            case BUSYBEE_EXTERNAL:
+            case BUSYBEE_INTERRUPTED:
+                err->set_loc(__FILE__, __LINE__);
+                err->set_msg() << "communication error with " << hn;
+                return REPLICANT_COMM_FAILED;
+            default:
+                abort();
+        }
+
+        bbs.set_timeout(250);
+
+        switch (bbs.recv(&msg))
+        {
+            case BUSYBEE_SUCCESS:
+                break;
+            case BUSYBEE_TIMEOUT:
+                err->set_loc(__FILE__, __LINE__);
+                err->set_msg() << "timed out connecting to " << hn;
+                return REPLICANT_TIMEOUT;
+            case BUSYBEE_SHUTDOWN:
+            case BUSYBEE_POLLFAILED:
+            case BUSYBEE_DISRUPTED:
+            case BUSYBEE_ADDFDFAIL:
+            case BUSYBEE_EXTERNAL:
+            case BUSYBEE_INTERRUPTED:
+                err->set_loc(__FILE__, __LINE__);
+                err->set_msg() << "communication error with " << hn;
+                return REPLICANT_COMM_FAILED;
+            default:
+                abort();
+        }
+
+        network_msgtype mt = REPLNET_NOP;
+        e::unpacker up = msg->unpack_from(BUSYBEE_HEADER_SIZE);
+        up >> mt >> *config;
+
+        if (up.error() || mt != REPLNET_BOOTSTRAP || !config->validate())
+        {
+            err->set_loc(__FILE__, __LINE__);
+            err->set_msg() << "received a malformed bootstrap message from " << hn;
+            return REPLICANT_COMM_FAILED;
+        }
+
+        return REPLICANT_SUCCESS;
+    }
+    catch (po6::error& e)
+    {
+        err->set_loc(__FILE__, __LINE__);
+        err->set_msg() << "could not connect to " << hn << ": " << e::error::strerror(errno);
+        return REPLICANT_COMM_FAILED;
+    }
+}
+
 std::string
-replicant :: bootstrap_hosts_to_string(const po6::net::hostname* hns, size_t hns_sz)
+bootstrap :: conn_str(const po6::net::hostname* hns, size_t hns_sz)
 {
     std::ostringstream ostr;
 
     for (size_t i = 0; i < hns_sz; ++i)
     {
-        ostr << hns[i];
-
-        if (i + 1 < hns_sz)
+        if (i > 0)
         {
             ostr << ",";
         }
+
+        ostr << hns[i];
     }
 
     return ostr.str();
 }
 
-std::ostream&
-replicant :: operator << (std::ostream& lhs, const bootstrap_returncode& rhs)
+bootstrap :: bootstrap()
+    : m_hosts()
+    , m_valid(true)
 {
-    switch (rhs)
+}
+
+bootstrap :: bootstrap(const char* host, uint16_t port)
+    : m_hosts()
+    , m_valid(true)
+{
+    m_hosts.push_back(po6::net::hostname(host, port));
+}
+
+bootstrap :: bootstrap(const char* cs)
+    : m_hosts()
+    , m_valid(true)
+{
+    m_valid = parse_hosts(cs, &m_hosts);
+}
+
+bootstrap :: bootstrap(const char* host, uint16_t port, const char* cs)
+    : m_hosts()
+    , m_valid(true)
+{
+    m_valid = parse_hosts(cs, &m_hosts);
+    m_hosts.push_back(po6::net::hostname(host, port));
+}
+
+bootstrap :: bootstrap(const std::vector<po6::net::hostname>& hosts)
+    : m_hosts(hosts)
+    , m_valid(true)
+{
+}
+
+bootstrap :: ~bootstrap() throw ()
+{
+}
+
+replicant_returncode
+bootstrap :: do_it(configuration* config, e::error* err) const
+{
+    if (!m_valid)
     {
-        STRINGIFY(BOOTSTRAP_SUCCESS);
-        STRINGIFY(BOOTSTRAP_TIMEOUT);
-        STRINGIFY(BOOTSTRAP_COMM_FAIL);
-        STRINGIFY(BOOTSTRAP_SEE_ERRNO);
-        STRINGIFY(BOOTSTRAP_CORRUPT_INFORM);
-        STRINGIFY(BOOTSTRAP_NOT_CLUSTER_MEMBER);
-        STRINGIFY(BOOTSTRAP_GARBAGE);
-        default:
-            lhs << "unknown bootstrap error";
+        err->set_loc(__FILE__, __LINE__);
+        err->set_msg() << "invalid bootstrap connection string";
+        return REPLICANT_COMM_FAILED;
     }
 
-    return lhs;
+    replicant_returncode rc = REPLICANT_COMM_FAILED;
+    err->set_loc(__FILE__, __LINE__);
+    err->set_msg() << "no hosts to bootstrap from";
+
+    for (size_t i = 0; i < m_hosts.size(); ++i)
+    {
+        rc = bootstrap_one(m_hosts[i], config, err);
+
+        if (rc == REPLICANT_SUCCESS)
+        {
+            return REPLICANT_SUCCESS;
+        }
+    }
+
+    // return the error corresponding to the last failure
+    return rc;
+}
+
+std::string
+bootstrap :: conn_str() const
+{
+    return conn_str(&m_hosts[0], m_hosts.size());
+}
+
+bootstrap&
+bootstrap :: operator = (const bootstrap& rhs)
+{
+    if (this != &rhs)
+    {
+        m_hosts = rhs.m_hosts;
+        m_valid = rhs.m_valid;
+    }
+
+    return *this;
+}
+
+std::ostream&
+replicant :: operator << (std::ostream& lhs, const bootstrap& rhs)
+{
+    return lhs << rhs.conn_str();
 }

@@ -1,4 +1,4 @@
-// Copyright (c) 2012, Robert Escriva
+// Copyright (c) 2012-2015, Robert Escriva
 // All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
@@ -55,6 +55,7 @@
 #include <e/compat.h>
 #include <e/endian.h>
 #include <e/envconfig.h>
+#include <e/guard.h>
 #include <e/error.h>
 #include <e/strescape.h>
 #include <e/time.h>
@@ -66,14 +67,16 @@
 
 // Replicant
 #include "common/bootstrap.h"
+#include "common/constants.h"
+#include "common/ids.h"
+#include "common/generate_token.h"
 #include "common/macros.h"
 #include "common/network_msgtype.h"
 #include "common/packing.h"
-#include "common/special_clients.h"
-#include "common/special_objects.h"
+#include "common/quorum_calc.h"
 #include "daemon/daemon.h"
-#include "daemon/heal_next.h"
-#include "daemon/request_response.h"
+#include "daemon/leader.h"
+#include "daemon/scout.h"
 
 using replicant::daemon;
 
@@ -82,136 +85,123 @@ using replicant::daemon;
     { \
         if (UNPACKER.error()) \
         { \
-            replicant_network_msgtype CONCAT(_anon, __LINE__)(REPLNET_ ## MSGTYPE); \
+            network_msgtype CONCAT(_anon, __LINE__)(REPLNET_ ## MSGTYPE); \
             LOG(WARNING) << "received corrupt \"" \
                          << CONCAT(_anon, __LINE__) << "\" message"; \
             return; \
         } \
     } while (0)
 
-static bool s_continue = true;
+int s_interrupts = 0;
+bool s_debug_dump = false;
+bool s_debug_mode = false;
 
 static void
 exit_on_signal(int /*signum*/)
 {
-    RAW_LOG(ERROR, "signal received; triggering exit");
-    s_continue = false;
+    RAW_LOG(ERROR, "interrupted: exiting");
+    __sync_fetch_and_add(&s_interrupts, 1);
 }
 
+static void
+handle_debug_dump(int /*signum*/)
+{
+    s_debug_dump = true;
+}
+
+static void
+handle_debug_mode(int /*signum*/)
+{
+    s_debug_mode = !s_debug_mode;
+}
 static uint64_t
 monotonic_time()
 {
-    return e::time();
-}
+    timespec ts;
 
-// round x up to a multiple of y
-static uint64_t
-next_interval(uint64_t x, uint64_t y)
-{
-    uint64_t z = ((x + y) / y) * y;
-    assert(x < z);
-    return z;
-}
-
-struct daemon::deferred_command
-{
-    deferred_command() : object(), client(), has_nonce(), nonce(), data() {}
-    deferred_command(uint64_t o, uint64_t c,
-                     e::compat::shared_ptr<e::buffer> d)
-        : object(o), client(c), has_nonce(false), nonce(0), data(d) {}
-    deferred_command(uint64_t o, uint64_t c, uint64_t n,
-                     e::compat::shared_ptr<e::buffer> d)
-        : object(o), client(c), has_nonce(true), nonce(n), data(d) {}
-    deferred_command(const deferred_command& other)
-        : object(other.object)
-        , client(other.client)
-        , has_nonce(other.has_nonce)
-        , nonce(other.nonce)
-        , data(other.data)
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) < 0)
     {
-    }
-    ~deferred_command() throw () {}
-    deferred_command& operator = (const deferred_command& rhs)
-    {
-        if (this != &rhs)
-        {
-            object = rhs.object;
-            client = rhs.client;
-            has_nonce = rhs.has_nonce;
-            nonce = rhs.nonce;
-            data = rhs.data;
-        }
-
-        return *this;
+        throw po6::error(errno);
     }
 
-    uint64_t object;
-    uint64_t client;
-    bool has_nonce; // else it's the slot
-    uint64_t nonce;
-    e::compat::shared_ptr<e::buffer> data;
-};
-
-daemon :: ~daemon() throw ()
-{
-    m_gc.deregister_thread(&m_gc_ts);
+    return ts.tv_sec * 1000000000 + ts.tv_nsec;
 }
 
 daemon :: daemon()
     : m_s()
     , m_gc()
     , m_gc_ts()
-    , m_quiescent_lock()
-    , m_busybee_mapper()
+    , m_busybee_mapper(&m_config_mtx, &m_config)
     , m_busybee()
+    , m_busybee_init(0)
     , m_us()
-    , m_have_bootstrapped(false)
-    , m_maintain_count(0)
+    , m_config_mtx()
+    , m_config()
     , m_bootstrap()
-    , m_bootstrap_thread(po6::threads::make_thread_wrapper(&daemon::background_bootstrap, this))
-    , m_bootstrap_mtx()
-    , m_bootstrap_cond(&m_bootstrap_mtx)
-    , m_config_manager()
-    , m_object_manager(&m_gc)
-    , m_failure_manager()
-    , m_client_manager()
-    , m_periodic_mtx()
     , m_periodic()
-    , m_send_mtx()
-    , m_deferred_mtx()
-    , m_deferred(new std::queue<deferred_command>())
-    , m_temporary_servers()
-    , m_heal_token(0)
-    , m_heal_next()
-    , m_stable_version(0)
-    , m_disrupted_backoff()
-    , m_disrupted_retry_scheduled(false)
-    , m_fs()
+    , m_unique_token(0)
+    , m_unique_base(0)
+    , m_unique_offset(0)
+    , m_last_seen()
+    , m_suspect_counts()
+    , m_unordered_mtx()
+    , m_unordered_cmds()
+    , m_first_unordered(0)
+    , m_deferred_msgs()
+    , m_msgs_waiting_for_nonces()
+    , m_acceptor()
+    , m_highest_ballot()
+    , m_first_scout(true)
+    , m_scout()
+    , m_scouts_since_last_leader(0)
+    , m_scout_wait_cycles(0)
+    , m_leader()
+    , m_replica()
+    , m_last_replica_snapshot(0)
+    , m_last_gc_slot(0)
 {
-    m_periodic_mtx.lock();
-    m_periodic.empty();
-    m_periodic_mtx.unlock();
-    m_deferred_mtx.lock();
-    m_deferred->empty();
-    m_deferred_mtx.unlock();
-    m_object_manager.set_callback(this, &daemon::record_execution,
-                                        &daemon::send_notify,
-                                        &daemon::handle_snapshot,
-                                        &daemon::issue_alarm,
-                                        &daemon::issue_suspect_callback);
-    trip_periodic(0, &daemon::periodic_describe_slots);
-    trip_periodic(0, &daemon::periodic_exchange);
-    trip_periodic(0, &daemon::periodic_suspect_clients);
-    trip_periodic(0, &daemon::periodic_disconnect_clients);
-    trip_periodic(0, &daemon::periodic_alarm);
+    register_periodic(25, &daemon::periodic_scout);
+    register_periodic(25, &daemon::periodic_abdicate);
+    register_periodic(10 * 1000, &daemon::periodic_warn_scout_stuck);
+    register_periodic(1000, &daemon::periodic_submit_dead_nodes);
+    register_periodic(1000, &daemon::periodic_generate_nonce_sequence);
+    register_periodic(10, &daemon::periodic_ping_acceptors);
+    register_periodic(100, &daemon::periodic_flush_enqueued_commands);
+    register_periodic(1000, &daemon::periodic_clean_dead_objects);
+    register_periodic(1000, &daemon::periodic_tick);
     m_gc.register_thread(&m_gc_ts);
 }
 
+daemon :: ~daemon() throw ()
+{
+    po6::threads::mutex::hold hold(&m_unordered_mtx);
+
+    while (!m_unordered_cmds.empty())
+    {
+        delete m_unordered_cmds.front();
+        m_unordered_cmds.pop_front();
+    }
+
+    while (!m_deferred_msgs.empty())
+    {
+        delete m_deferred_msgs.front().msg;
+        m_deferred_msgs.pop_front();
+    }
+
+    while (!m_msgs_waiting_for_nonces.empty())
+    {
+        delete m_msgs_waiting_for_nonces.front().msg;
+        m_msgs_waiting_for_nonces.pop_front();
+    }
+
+    m_gc.deregister_thread(&m_gc_ts);
+}
+
 static bool
-install_signal_handler(int signum)
+install_signal_handler(int signum, void (*f)(int))
 {
     struct sigaction handle;
-    handle.sa_handler = exit_on_signal;
+    handle.sa_handler = f;
     sigfillset(&handle.sa_mask);
     handle.sa_flags = SA_RESTART;
     return sigaction(signum, &handle, NULL) >= 0;
@@ -226,27 +216,39 @@ daemon :: run(bool daemonize,
               bool set_bind_to,
               po6::net::location bind_to,
               bool set_existing,
-              const std::vector<po6::net::hostname>& existing,
+              const bootstrap& existing,
               const char* init_obj,
               const char* init_lib,
               const char* init_str,
               const char* init_rst)
 {
-    if (!install_signal_handler(SIGHUP))
+    if (!install_signal_handler(SIGHUP, exit_on_signal))
     {
         std::cerr << "could not install SIGHUP handler; exiting" << std::endl;
         return EXIT_FAILURE;
     }
 
-    if (!install_signal_handler(SIGINT))
+    if (!install_signal_handler(SIGINT, exit_on_signal))
     {
         std::cerr << "could not install SIGINT handler; exiting" << std::endl;
         return EXIT_FAILURE;
     }
 
-    if (!install_signal_handler(SIGTERM))
+    if (!install_signal_handler(SIGTERM, exit_on_signal))
     {
         std::cerr << "could not install SIGTERM handler; exiting" << std::endl;
+        return EXIT_FAILURE;
+    }
+
+    if (!install_signal_handler(SIGUSR1, handle_debug_dump))
+    {
+        std::cerr << "could not install SIGUSR2 handler; exiting" << std::endl;
+        return EXIT_FAILURE;
+    }
+
+    if (!install_signal_handler(SIGUSR2, handle_debug_mode))
+    {
+        std::cerr << "could not install SIGUSR2 handler; exiting" << std::endl;
         return EXIT_FAILURE;
     }
 
@@ -254,15 +256,14 @@ daemon :: run(bool daemonize,
 
     if (sigfillset(&ss) < 0)
     {
-        PLOG(ERROR) << "could not block signals";
+        PLOG(ERROR) << "sigfillset";
         return EXIT_FAILURE;
     }
 
-    int err = pthread_sigmask(SIG_BLOCK, &ss, NULL);
+    sigdelset(&ss, SIGPROF);
 
-    if (err < 0)
+    if (pthread_sigmask(SIG_SETMASK, &ss, NULL) < 0)
     {
-        errno = err;
         PLOG(ERROR) << "could not block signals";
         return EXIT_FAILURE;
     }
@@ -321,162 +322,133 @@ daemon :: run(bool daemonize,
         LOG(INFO) << "provide \"--daemon\" on the command-line if you want to run in the background";
     }
 
-    bool restored = false;
-    chain_node restored_us;
-    configuration_manager restored_config_manager;
+    bool saved = false;
+    server saved_us;
+    bootstrap saved_bootstrap;
 
-    if (!m_fs.open(data, &restored, &restored_us, &restored_config_manager))
+    if (!m_acceptor.open(data, &saved, &saved_us, &saved_bootstrap))
     {
         return EXIT_FAILURE;
     }
 
-    if (strlen(data.dirname().get()))
-    {
-        if (chdir(data.dirname().get()) < 0)
-        {
-            PLOG(ERROR) << "could not change cwd to data directory";
-            return EXIT_FAILURE;
-        }
-    }
-
-    m_us.address = bind_to;
+    m_us.bind_to = bind_to;
     bool init = false;
 
     // case 1:  start a new cluster
-    if (!restored && !set_existing)
+    if (!saved && !set_existing)
     {
-        uint64_t cluster_id;
-        uint64_t this_token;
+        uint64_t cluster;
+        uint64_t this_server;
 
-        if (!generate_token(&m_us.token) ||
-            !generate_token(&cluster_id) ||
-            !generate_token(&this_token))
+        if (!generate_token(&cluster) ||
+            !generate_token(&this_server))
         {
             PLOG(ERROR) << "could not read random tokens from /dev/urandom";
-            m_fs.wipe();
             return EXIT_FAILURE;
         }
 
-        configuration initial(cluster_id, 0, this_token, 1, m_us);
-        m_config_manager.reset(initial);
-        m_fs.inform_configuration(initial);
-        LOG(INFO) << "started new cluster from command-line arguments: " << initial;
+        m_us.id = server_id(this_server);
+        m_config_mtx.lock();
+        m_config = configuration(cluster_id(cluster), version_id(1), 0, &m_us, 1);
+        m_config_mtx.unlock();
+        LOG(INFO) << "started " << m_config.cluster();
         init = init_obj && init_lib;
+
+        m_acceptor.adopt(ballot(1, m_us.id));
+        m_acceptor.accept(pvalue(m_acceptor.current_ballot(), 0, construct_become_member_command(m_us)));
+        m_replica.reset(new replica(this, m_config));
+        uint64_t snapshot_slot;
+        e::slice snapshot;
+        std::auto_ptr<e::buffer> snapshot_backing;
+        m_replica->take_blocking_snapshot(&snapshot_slot, &snapshot, &snapshot_backing);
+
+        if (!m_acceptor.record_snapshot(snapshot_slot, snapshot))
+        {
+            LOG(ERROR) << "error saving starting replica state to disk: " << e::error::strerror(errno);
+            return EXIT_FAILURE;
+        }
     }
     // case 2: joining a new cluster
-    else if (!restored && set_existing)
+    else if (!saved && set_existing)
     {
-        LOG(INFO) << "starting new daemon from command-line arguments using "
-                  << bootstrap_hosts_to_string(&existing[0], existing.size())
-                  << " as our bootstrap node";
-        configuration initial;
+        uint64_t this_server;
 
-        switch (bootstrap(&existing[0], existing.size(), &initial))
+        if (!generate_token(&this_server))
         {
-            case replicant::BOOTSTRAP_SUCCESS:
-                break;
-            case replicant::BOOTSTRAP_SEE_ERRNO:
-                LOG(ERROR) << "cannot connect to cluster: " << e::error::strerror(errno);
-                return EXIT_FAILURE;
-            case replicant::BOOTSTRAP_COMM_FAIL:
-                LOG(ERROR) << "cannot connect to cluster: internal error: " << e::error::strerror(errno);
-                return EXIT_FAILURE;
-            case replicant::BOOTSTRAP_TIMEOUT:
-                LOG(ERROR) << "cannot connect to cluster: operation timed out";
-                return EXIT_FAILURE;
-            case replicant::BOOTSTRAP_CORRUPT_INFORM:
-                LOG(ERROR) << "cannot connect to cluster: server sent a corrupt INFORM message";
-                return EXIT_FAILURE;
-            case replicant::BOOTSTRAP_NOT_CLUSTER_MEMBER:
-                LOG(ERROR) << "cannot connect to cluster: server is not a member of the cluster";
-                return EXIT_FAILURE;
-            case replicant::BOOTSTRAP_GARBAGE:
-            default:
-                LOG(ERROR) << "cannot connect to cluster: bootstrap failed";
-                return EXIT_FAILURE;
-        }
-
-        LOG(INFO) << "successfully bootstrapped with " << initial;
-        const chain_node* head = initial.head();
-
-        if (!generate_token(&m_us.token))
-        {
-            PLOG(ERROR) << "could not read server_id from /dev/urandom";
-            m_fs.wipe();
+            PLOG(ERROR) << "could not read random tokens from /dev/urandom";
             return EXIT_FAILURE;
         }
 
-        if (initial.has_token(m_us.token))
+        m_us.id = server_id(this_server);
+        join_the_cluster(existing);
+
+        if (m_config.has(m_us.bind_to) && !m_config.has(m_us.id))
         {
-            LOG(ERROR) << "by some freak coincidence, we've picked the same random number that someone else did previously";
-            LOG(ERROR) << "since we are picking 64-bit numbers, this is extremely unlikely";
-            LOG(ERROR) << "if you re-launch the daemon, we'll try picking a different number, but you will want to check for errors in your environment";
-            m_fs.wipe();
+            LOG(ERROR) << "configuration already has a server on our address";
+            LOG(ERROR) << "use the command line tools to remove said server and restart this one";
             return EXIT_FAILURE;
         }
 
-        // XXX check for address conflict
-
-        LOG(INFO) << "registering with the head of the configuration: " << *head;
-        std::auto_ptr<e::buffer> request;
-        request.reset(e::buffer::create(BUSYBEE_HEADER_SIZE
-                                       + pack_size(REPLNET_SERVER_REGISTER)
-                                       + pack_size(m_us)));
-        request->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_SERVER_REGISTER << m_us;
-        std::auto_ptr<e::buffer> response;
-
-        if (!request_response(head->address, 5000, request, "registering with ", &response))
+        if (!m_replica.get())
         {
-            m_fs.wipe();
             return EXIT_FAILURE;
         }
 
-        replicant_network_msgtype mt = REPLNET_NOP;
-        e::unpacker up = response->unpack_from(BUSYBEE_HEADER_SIZE);
-        up = up >> mt;
-
-        if (up.error())
-        {
-            LOG(ERROR) << "received corrupt response to registration request";
-            m_fs.wipe();
-            return EXIT_FAILURE;
-        }
-
-        if (mt == REPLNET_SERVER_REGISTER_FAILED)
-        {
-            LOG(ERROR) << "failed to register with the cluster";
-            LOG(ERROR) << "check to make sure that no one else is using our token or address";
-            LOG(ERROR) << "us=" << m_us;
-            m_fs.wipe();
-            return EXIT_FAILURE;
-        }
-
-        up = up >> initial;
-
-        if (up.error() ||
-            mt != REPLNET_INFORM ||
-            !initial.validate())
-        {
-            LOG(ERROR) << "received invalid INFORM message from " << *head;
-            m_fs.wipe();
-            return EXIT_FAILURE;
-        }
-
-        m_config_manager.reset(initial);
-        m_fs.inform_configuration(initial);
-        LOG(INFO) << "started new cluster from command-line arguments: " << initial;
-        LOG(INFO) << "joined existing cluster as " << m_us << ": " << initial;
+        saved_bootstrap = existing;
     }
     else
     {
-        LOG(INFO) << "restoring previous instance: " << restored_us.token;
-        m_us.token = restored_us.token;
+        LOG(INFO) << "re-joining cluster as " << saved_us.id;
+        m_us.id = saved_us.id;
 
         if (!set_bind_to)
         {
-            m_us.address = restored_us.address;
+            m_us.bind_to = saved_us.bind_to;
+        }
+
+        if (set_existing)
+        {
+            saved_bootstrap = existing;
+        }
+
+        e::slice snapshot;
+        std::auto_ptr<e::buffer> snapshot_backing;
+
+        if (!m_acceptor.load_latest_snapshot(&snapshot, &snapshot_backing))
+        {
+            LOG(ERROR) << "error loading replica state from disk: " << e::error::strerror(errno);
+            return EXIT_FAILURE;
+        }
+
+        m_replica.reset(replica::from_snapshot(this, snapshot));
+
+        if (m_replica.get() && !m_replica->config().has(m_us.id))
+        {
+            m_replica.reset();
+            join_the_cluster(saved_bootstrap);
+        }
+
+        if (!m_replica.get())
+        {
+            if (__sync_fetch_and_add(&s_interrupts, 0) == 0)
+            {
+                LOG(ERROR) << "gave up trying to join the cluster after 10s";
+            }
+
+            return EXIT_FAILURE;
         }
     }
+
+    if (!m_acceptor.save(m_us, saved_bootstrap))
+    {
+        return EXIT_FAILURE;
+    }
+
+    assert(m_replica.get());
+    //assert(m_replica->last_snapshot_num() > 0);
+    m_config_mtx.lock();
+    m_config = m_replica->config();
+    m_config_mtx.unlock();
 
     if (!init && init_rst)
     {
@@ -489,61 +461,18 @@ daemon :: run(bool daemonize,
         return EXIT_FAILURE;
     }
 
-    m_busybee.reset(new busybee_mta(&m_gc, &m_busybee_mapper, m_us.address, m_us.token, 0/*we don't use pause/unpause*/));
-    m_busybee->set_timeout(1);
+    m_busybee.reset(new busybee_mta(&m_gc, &m_busybee_mapper, m_us.bind_to, m_us.id.get(), 0/*we don't use pause/unpause*/));
+    e::atomic::store_32_release(&m_busybee_init, 1);
 
-    if (!restored)
+    if (!post_config_change_hook())
     {
-        m_fs.save(m_us);
+        return EXIT_SUCCESS;
     }
-
-    if (restored)
-    {
-        m_config_manager = restored_config_manager;
-    }
-
-    for (size_t slot = 1; slot < m_fs.next_slot_to_ack(); ++slot)
-    {
-        uint64_t object;
-        uint64_t client;
-        uint64_t nonce;
-        e::slice dat;
-        std::string backing;
-
-        if (!m_fs.get_slot(slot, &object, &client, &nonce, &dat, &backing))
-        {
-            LOG(ERROR) << "gap in the history; missing slot " << slot;
-            return EXIT_FAILURE;
-        }
-
-        if (object == OBJECT_OBJ_NEW ||
-            object == OBJECT_OBJ_DEL ||
-            object == OBJECT_OBJ_SNAPSHOT ||
-            object == OBJECT_OBJ_RESTORE ||
-            !IS_SPECIAL_OBJECT(object))
-        {
-            m_object_manager.enqueue(slot, object, client, nonce, dat);
-            m_object_manager.throttle(object, 16);
-        }
-        else if (object == OBJECT_CLI_REG)
-        {
-            m_client_manager.register_client(client);
-            m_client_manager.proof_of_life(client, monotonic_time());
-        }
-        else if (object == OBJECT_CLI_DIE)
-        {
-            m_client_manager.deregister_client(client);
-        }
-    }
-
-    m_object_manager.enable_logging();
 
     if (init)
     {
         assert(init_obj);
         assert(init_lib);
-        assert(m_fs.next_slot_to_issue() == 1);
-        assert(m_fs.next_slot_to_ack() == 1);
         std::vector<char> lib(sizeof(uint64_t) + sizeof(uint32_t));
 
         // Encode the object name
@@ -578,6 +507,8 @@ daemon :: run(bool daemonize,
             return EXIT_FAILURE;
         }
 
+        // XXX
+#if 0
         // if this is a restore
         if (init_rst)
         {
@@ -630,2237 +561,57 @@ daemon :: run(bool daemonize,
                 issue_command(2, obj, 0, 2, init_slice);
             }
         }
+#endif
     }
 
-    m_fs.warm_cache();
-    LOG(INFO) << "resuming normal operation";
-    post_reconfiguration_hooks();
-    m_bootstrap_mtx.lock();
-    m_have_bootstrapped = false;
-    m_bootstrap_mtx.unlock();
-    m_bootstrap = existing;
-    m_bootstrap_thread.start();
-
-    replicant::connection conn;
-    std::auto_ptr<e::buffer> msg;
-
-    while (recv(&conn, &msg))
+    while (__sync_fetch_and_add(&s_interrupts, 0) == 0)
     {
-        assert(msg.get());
-        replicant_network_msgtype mt = REPLNET_NOP;
-        e::unpacker up = msg->unpack_from(BUSYBEE_HEADER_SIZE);
-        up = up >> mt;
-
-        switch (mt)
-        {
-            case REPLNET_NOP:
-                break;
-            case REPLNET_BOOTSTRAP:
-                process_bootstrap(conn, msg, up);
-                break;
-            case REPLNET_INFORM:
-                process_inform(conn, msg, up);
-                break;
-            case REPLNET_SERVER_REGISTER:
-                process_server_register(conn, msg, up);
-                break;
-            case REPLNET_SERVER_REGISTER_FAILED:
-                LOG(WARNING) << "dropping \"SERVER_REGISTER_FAILED\" received by server";
-                break;
-            case REPLNET_SERVER_CHANGE_ADDRESS:
-                process_server_change_address(conn, msg, up);
-                break;
-            case REPLNET_SERVER_IDENTIFY:
-                process_server_identify(conn, msg, up);
-                break;
-            case REPLNET_SERVER_IDENTITY:
-                process_server_identity(conn, msg, up);
-                break;
-            case REPLNET_CONFIG_PROPOSE:
-                process_config_propose(conn, msg, up);
-                break;
-            case REPLNET_CONFIG_ACCEPT:
-                process_config_accept(conn, msg, up);
-                break;
-            case REPLNET_CONFIG_REJECT:
-                process_config_reject(conn, msg, up);
-                break;
-            case REPLNET_CLIENT_REGISTER:
-                process_client_register(conn, msg, up);
-                break;
-            case REPLNET_CLIENT_DISCONNECT:
-                process_client_disconnect(conn, msg, up);
-                break;
-            case REPLNET_CLIENT_TIMEOUT:
-                process_client_timeout(conn, msg, up);
-                break;
-            case REPLNET_CLIENT_UNKNOWN:
-                LOG(WARNING) << "dropping \"CLIENT_UNKNOWN\" received by server";
-                break;
-            case REPLNET_CLIENT_DECEASED:
-                LOG(WARNING) << "dropping \"CLIENT_DECEASED\" received by server";
-                break;
-            case REPLNET_COMMAND_SUBMIT:
-                process_command_submit(conn, msg, up);
-                break;
-            case REPLNET_COMMAND_ISSUE:
-                process_command_issue(conn, msg, up);
-                break;
-            case REPLNET_COMMAND_ACK:
-                process_command_ack(conn, msg, up);
-                break;
-            case REPLNET_COMMAND_RESPONSE:
-                LOG(WARNING) << "dropping \"RESPONSE\" received by server";
-                break;
-            case REPLNET_HEAL_REQ:
-                process_heal_req(conn, msg, up);
-                break;
-            case REPLNET_HEAL_RETRY:
-                process_heal_retry(conn, msg, up);
-                break;
-            case REPLNET_HEAL_RESP:
-                process_heal_resp(conn, msg, up);
-                break;
-            case REPLNET_HEAL_DONE:
-                process_heal_done(conn, msg, up);
-                break;
-            case REPLNET_STABLE:
-                process_stable(conn, msg, up);
-                break;
-            case REPLNET_CONDITION_WAIT:
-                process_condition_wait(conn, msg, up);
-                break;
-            case REPLNET_CONDITION_NOTIFY:
-                LOG(WARNING) << "dropping \"CONDITION_NOTIFY\" received by server";
-                break;
-            case REPLNET_PING:
-                process_ping(conn, msg, up);
-                break;
-            case REPLNET_PONG:
-                process_pong(conn, msg, up);
-                break;
-            default:
-                LOG(WARNING) << "unknown message type; here's some hex:  " << msg->hex();
-                break;
-        }
-
-        sigset_t pending;
-        sigemptyset(&pending);
-
-        if (sigpending(&pending) == 0 &&
-            (sigismember(&pending, SIGHUP) ||
-             sigismember(&pending, SIGINT) ||
-             sigismember(&pending, SIGTERM)))
-        {
-            exit_on_signal(SIGTERM);
-        }
-
-        po6::threads::mutex::hold hold(&m_quiescent_lock);
         m_gc.quiescent_state(&m_gc_ts);
-    }
 
-    m_bootstrap_mtx.lock();
-    m_bootstrap_cond.signal();
-    s_continue = false;
-    m_bootstrap_mtx.unlock();
-    m_bootstrap_thread.join();
-    LOG(INFO) << "replicant is gracefully shutting down";
-    LOG(INFO) << "replicant will now terminate";
-    return EXIT_SUCCESS;
-}
-
-void
-daemon :: process_bootstrap(const replicant::connection& conn,
-                            std::auto_ptr<e::buffer>,
-                            e::unpacker)
-{
-    LOG(INFO) << "providing configuration to "
-              << conn.token << "/" << conn.addr
-              << " as part of the bootstrap process";
-    send(conn, create_inform_message());
-}
-
-void
-daemon :: process_inform(const replicant::connection&,
-                         std::auto_ptr<e::buffer>,
-                         e::unpacker up)
-{
-    configuration new_config;
-    up = up >> new_config;
-    CHECK_UNPACK(INFORM, up);
-
-    if (m_config_manager.latest().cluster() != new_config.cluster())
-    {
-        LOG(INFO) << "potential cross-cluster conflict between us="
-                  << m_config_manager.latest().cluster()
-                  << " and them=" << new_config.cluster();
-        return;
-    }
-
-    m_fs.inform_configuration(new_config);
-
-    if (m_config_manager.stable().version() < new_config.version())
-    {
-        LOG(INFO) << "informed about configuration "
-                  << new_config.version()
-                  << " which replaces stable configuration "
-                  << m_config_manager.stable().version();
-
-        if (m_config_manager.contains(new_config))
+        if (m_acceptor.failed())
         {
-            m_config_manager.advance(new_config);
-        }
-        else
-        {
-            m_config_manager.reset(new_config);
-        }
-
-        post_reconfiguration_hooks();
-    }
-}
-
-void
-daemon :: process_server_register(const replicant::connection& conn,
-                                  std::auto_ptr<e::buffer>,
-                                  e::unpacker up)
-{
-    chain_node sender;
-    up = up >> sender;
-    CHECK_UNPACK(SERVER_REGISTER, up);
-    LOG(INFO) << "received \"SERVER_REGISTER\" message from "
-              << conn.token << "/" << conn.addr << " as " << sender;
-
-    bool success = true;
-
-    if (success && m_config_manager.any(&configuration::has_token, sender.token))
-    {
-        LOG(INFO) << "not acting on \"SERVER_REGISTER\" message because "
-                  << sender << " is in use already";
-        send(sender, create_inform_message());
-        success = false;
-    }
-
-    if (success && m_config_manager.stable().head()->token != m_us.token)
-    {
-        LOG(INFO) << "not acting on \"SERVER_REGISTER\" message because we are not the head";
-        send(sender, create_inform_message());
-        success = false;
-    }
-
-    configuration new_config = m_config_manager.latest();
-    assert(!new_config.has_token(sender.token));
-    assert(!new_config.is_member(sender));
-
-    new_config.bump_version();
-    new_config.add_member(sender);
-
-    if (success && new_config.validate())
-    {
-        LOG(INFO) << "propsing configuration " << new_config.version()
-                  << " to integrate " << sender << " as a cluster member";
-        m_temporary_servers.insert(std::make_pair(conn.token, new_config.version()));
-        propose_config(new_config);
-    }
-    else
-    {
-        LOG(ERROR) << "trying to register server, but the config doesn't validate; "
-                   << "telling the server that registration failed";
-        success = false;
-    }
-
-    if (!success)
-    {
-        std::auto_ptr<e::buffer> msg;
-        msg.reset(e::buffer::create(BUSYBEE_HEADER_SIZE + pack_size(REPLNET_SERVER_REGISTER_FAILED)));
-        msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_SERVER_REGISTER_FAILED;
-        send(conn, msg);
-    }
-}
-
-void
-daemon :: process_server_change_address(const replicant::connection& conn,
-                                        std::auto_ptr<e::buffer>,
-                                        e::unpacker up)
-{
-    po6::net::location old_address;
-    po6::net::location new_address;
-    up = up >> old_address >> new_address;
-    CHECK_UNPACK(SERVER_CHANGE_ADDRESS, up);
-    const chain_node* head = m_config_manager.stable().head();
-
-    if (head->token != m_us.token)
-    {
-        LOG(INFO) << "cannot change address on behalf of " << conn.token << " (from "
-                  << old_address << " to " << new_address
-                  << ") because we are not the head; the server will retry on its own";
-        return;
-    }
-
-    LOG(INFO) << "proposing new configuration on behalf of " << conn.token
-              << " which changes its address from " << old_address << " to "
-              << new_address;
-    configuration new_config = m_config_manager.latest();
-    new_config.change_address(conn.token, new_address);
-    new_config.bump_version();
-    propose_config(new_config);
-}
-
-void
-daemon :: process_server_identify(const replicant::connection& conn,
-                                  std::auto_ptr<e::buffer>,
-                                  e::unpacker)
-{
-    size_t sz = BUSYBEE_HEADER_SIZE
-              + pack_size(REPLNET_SERVER_IDENTITY)
-              + pack_size(m_us);
-    std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
-    msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_SERVER_IDENTITY << m_us;
-    send(conn, msg);
-}
-
-void
-daemon :: process_server_identity(const replicant::connection& conn,
-                                  std::auto_ptr<e::buffer>,
-                                  e::unpacker up)
-{
-    chain_node them;
-    up = up >> them;
-    CHECK_UNPACK(SERVER_IDENTITY, up);
-
-    if (conn.token != them.token)
-    {
-        m_busybee->drop(conn.token);
-    }
-}
-
-#define SEND_CONFIG_RESP(NODE, ACTION, ID, TIME, US) \
-    do \
-    { \
-        size_t CONCAT(_sz, __LINE__) = BUSYBEE_HEADER_SIZE \
-                                     + pack_size(REPLNET_CONFIG_ ## ACTION) \
-                                     + 2 * sizeof(uint64_t) \
-                                     + pack_size(US); \
-        std::auto_ptr<e::buffer> CONCAT(_msg, __LINE__)( \
-                e::buffer::create(CONCAT(_sz, __LINE__))); \
-        CONCAT(_msg, __LINE__)->pack_at(BUSYBEE_HEADER_SIZE) \
-            << (REPLNET_CONFIG_ ## ACTION) << ID << TIME << US; \
-        send(NODE, CONCAT(_msg, __LINE__)); \
-    } \
-    while(0)
-
-void
-daemon :: process_config_propose(const replicant::connection& conn,
-                                 std::auto_ptr<e::buffer> msg,
-                                 e::unpacker up)
-{
-    uint64_t proposal_id;
-    uint64_t proposal_time;
-    chain_node sender;
-    std::vector<configuration> config_chain;
-    up = up >> proposal_id >> proposal_time >> sender >> config_chain;
-    CHECK_UNPACK(CONFIG_PROPOSE, up);
-    LOG(INFO) << "received proposal " << proposal_id << ":" << proposal_time << " from server=" << conn.token; // XXX dump config_chain
-
-    if (config_chain.empty())
-    {
-        LOG(ERROR) << "dropping proposal " << proposal_id << ":" << proposal_time
-                   << " because it contains no configurations (file a bug): "
-                   << msg->as_slice().hex();
-        return;
-    }
-
-    if (!conn.matches(sender))
-    {
-        LOG(ERROR) << "dropping proposal " << proposal_id << ":" << proposal_time
-                   << "because the sender (" << conn.token << ") does not match "
-                   << "the claimed sender (" << sender.token << "); please file a bug: "
-                   << msg->as_slice().hex();
-        return;
-    }
-
-    if (m_fs.is_rejected_configuration(proposal_id, proposal_time))
-    {
-        SEND_CONFIG_RESP(sender, REJECT, proposal_id, proposal_time, m_us);
-        LOG(INFO) << "proposal " << proposal_id << ":" << proposal_time << " previously rejected; response sent";
-        return;
-    }
-
-    if (m_fs.is_accepted_configuration(proposal_id, proposal_time))
-    {
-        SEND_CONFIG_RESP(sender, ACCEPT, proposal_id, proposal_time, m_us);
-        LOG(INFO) << "proposal " << proposal_id << ":" << proposal_time << " previously accpted; response sent";
-        return;
-    }
-
-    if (m_fs.is_proposed_configuration(proposal_id, proposal_time))
-    {
-        LOG(INFO) << "proposal " << proposal_id << ":" << proposal_time << " previously proposed; waiting to receive a response";
-        return;
-    }
-
-    // idx_stable should be the index of our stable configuration within
-    // config_chain
-    size_t idx_stable = 0;
-
-    while (idx_stable < config_chain.size() &&
-           config_chain[idx_stable] != m_config_manager.stable())
-    {
-        ++idx_stable;
-    }
-
-    if (idx_stable == config_chain.size() &&
-        config_chain[0].cluster() == m_config_manager.stable().cluster() &&
-        config_chain[0].version() > m_config_manager.stable().version())
-    {
-        LOG(INFO) << "proposal " << proposal_id << ":" << proposal_time
-                  << " is rooted in a stable configuration (" << config_chain[0].version()
-                  << ") that supersedes our own;"
-                  << " treating it as an inform message";
-        m_fs.inform_configuration(config_chain[0]);
-        m_config_manager.reset(config_chain[0]);
-        post_reconfiguration_hooks();
-        idx_stable = 0;
-    }
-    else if (idx_stable == config_chain.size())
-    {
-        LOG(ERROR) << "rejecting proposal " << proposal_id << ":" << proposal_time
-                   << " that does not contain and supersede our stable configuration (proposed="
-                   << m_config_manager.stable().version() << ","
-                   << m_config_manager.latest().version() << "; proposal="
-                   << config_chain[0].version() << "," << config_chain[config_chain.size() - 1].version()
-                   << ")";
-        m_fs.propose_configuration(proposal_id, proposal_time, &config_chain.front(), config_chain.size());
-        return reject_proposal(sender, proposal_id, proposal_time);
-    }
-
-    configuration* configs = &config_chain.front() + idx_stable;
-    size_t configs_sz = config_chain.size() - idx_stable;
-    m_fs.propose_configuration(proposal_id, proposal_time, configs, configs_sz);
-
-    // Make sure that we could propose it
-    if (!m_config_manager.is_compatible(configs, configs_sz))
-    {
-        LOG(INFO) << "rejecting proposal " << proposal_id << ":" << proposal_time
-                  << " that does not merge with current proposals";
-        return reject_proposal(sender, proposal_id, proposal_time);
-    }
-
-    for (size_t i = 0; i < configs_sz; ++i)
-    {
-        // Check that the configs are valid
-        if (!configs[i].validate())
-        {
-            LOG(ERROR) << "rejecting proposal " << proposal_id << ":" << proposal_time
-                       << " that contains a corrupt configuration at position " << i;
-            return reject_proposal(sender, proposal_id, proposal_time);
-        }
-
-        // Check that everything is from the same cluster
-        if (i + 1 < configs_sz &&
-            configs[i].cluster() != configs[i + 1].cluster())
-        {
-            LOG(ERROR) << "rejecting proposal " << proposal_id << ":" << proposal_time
-                       << " that jumps between clusters at position " << i;
-            return reject_proposal(sender, proposal_id, proposal_time);
-        }
-
-        // Check the sequential links
-        if (i + 1 < configs_sz &&
-            (configs[i].version() + 1 != configs[i + 1].version() ||
-             configs[i].this_token() != configs[i + 1].prev_token()))
-        {
-            LOG(ERROR) << "rejecting proposal " << proposal_id << ":" << proposal_time
-                       << " that violates the configuration chain invariant at position " << i;
-            return reject_proposal(sender, proposal_id, proposal_time);
-        }
-
-        // Check that the proposed chain meets the quorum requirement
-        for (size_t j = i + 1; j < configs_sz; ++j)
-        {
-            if (!configs[j].quorum_of(configs[i]))
-            {
-                // This should never happen, so it's an error
-                LOG(ERROR) << "rejecting proposal " << proposal_id << ":" << proposal_time
-                           << " that violates the configuration quorum invariant";
-                return reject_proposal(sender, proposal_id, proposal_time);
-            }
-        }
-
-        const configuration* bad;
-
-        if (!m_config_manager.contains_quorum_of_all(configs[i], &bad))
-        {
-            LOG(ERROR) << "rejecting proposal " << proposal_id << ":" << proposal_time
-                       << " that violates the configuration quorum invariant with "
-                       << *bad;
-            return reject_proposal(sender, proposal_id, proposal_time);
-        }
-    }
-
-    const chain_node* prev = configs[configs_sz - 1].prev(m_us.token);
-
-    if (!prev || prev->token != sender.token)
-    {
-        // This should never happen, so it's an error
-        LOG(ERROR) << "rejecting proposal " << proposal_id << ":" << proposal_time
-                   << " that did not propagate along the chain";
-        return reject_proposal(sender, proposal_id, proposal_time);
-    }
-
-    // If this proposal introduces new configuration versions
-    if (m_config_manager.latest().version() < configs[configs_sz - 1].version())
-    {
-        m_config_manager.merge(proposal_id, proposal_time, configs, configs_sz);
-
-        if (configs[configs_sz - 1].config_tail()->token == m_us.token)
-        {
-            LOG(INFO) << "proposal " << proposal_id << ":" << proposal_time << " hit the config_tail; adopting";
-            m_config_manager.advance(configs[configs_sz - 1]);
-            post_reconfiguration_hooks();
-            accept_proposal(sender, proposal_id, proposal_time);
-        }
-        else
-        {
-            // We must send the whole config_chain and cannot fall back on
-            // what we see with configs.
-            size_t sz = BUSYBEE_HEADER_SIZE
-                      + pack_size(REPLNET_CONFIG_PROPOSE)
-                      + 2 * sizeof(uint64_t)
-                      + pack_size(m_us)
-                      + pack_size(config_chain);
-            msg.reset(e::buffer::create(sz));
-            msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_CONFIG_PROPOSE
-                                              << proposal_id << proposal_time
-                                              << m_us << config_chain;
-            const chain_node* next = config_chain.back().next(m_us.token);
-            assert(next);
-            LOG(INFO) << "forwarding proposal " << proposal_id << ":" << proposal_time << " to " << *next;
-            send(*next, msg);
-        }
-    }
-}
-
-void
-daemon :: process_config_accept(const replicant::connection& conn,
-                                std::auto_ptr<e::buffer> msg,
-                                e::unpacker up)
-{
-    uint64_t proposal_id;
-    uint64_t proposal_time;
-    chain_node sender;
-    up = up >> proposal_id >> proposal_time >> sender;
-    CHECK_UNPACK(CONFIG_ACCEPT, up);
-
-    if (!conn.matches(sender))
-    {
-        LOG(ERROR) << "dropping \"CONFIG_ACCEPT\" for proposal "
-                   << proposal_id << ":" << proposal_time
-                   << "because the sender (" << conn.token << ") does not match "
-                   << "the claimed sender (" << sender.token
-                   << "); please file a bug: " << msg->as_slice().hex();
-        return;
-    }
-
-    if (!m_fs.is_proposed_configuration(proposal_id, proposal_time))
-    {
-        LOG(ERROR) << "dropping \"CONFIG_ACCEPT\" for proposal "
-                   << proposal_id << ":" << proposal_time
-                   << " from " << conn.token
-                   << " because we never saw the proposal";
-        return;
-    }
-
-    if (m_fs.is_rejected_configuration(proposal_id, proposal_time))
-    {
-        LOG(ERROR) << "dropping \"CONFIG_ACCEPT\" for proposal "
-                   << proposal_id << ":" << proposal_time
-                   << " from " << conn.token << " because we rejected it earlier";
-        return;
-    }
-
-    if (m_fs.is_accepted_configuration(proposal_id, proposal_time))
-    {
-        // This is a duplicate accept, so we can drop it
-        return;
-    }
-
-    configuration new_config;
-
-    if (!m_config_manager.get_proposal(proposal_id, proposal_time, &new_config))
-    {
-        // This proposal was made obsolete by an "INFORM" message
-        return;
-    }
-
-    const chain_node* next = new_config.next(m_us.token);
-
-    if (!next || next->token != sender.token)
-    {
-        LOG(ERROR) << "dropping \"CONFIG_ACCEPT\" message that comes from the wrong place"
-                   << " " << sender << " instead of " << *next;
-        return;
-    }
-
-    LOG(INFO) << "accepting proposal " << proposal_id << ":" << proposal_time;
-    m_fs.accept_configuration(proposal_id, proposal_time);
-    m_config_manager.advance(new_config);
-    post_reconfiguration_hooks();
-    const chain_node* prev = new_config.prev(m_us.token);
-
-    if (prev)
-    {
-        SEND_CONFIG_RESP(*prev, ACCEPT, proposal_id, proposal_time, m_us);
-    }
-}
-
-void
-daemon :: process_config_reject(const replicant::connection& conn,
-                                std::auto_ptr<e::buffer> msg,
-                                e::unpacker up)
-{
-    uint64_t proposal_id;
-    uint64_t proposal_time;
-    chain_node sender;
-    up = up >> proposal_id >> proposal_time >> sender;
-    CHECK_UNPACK(CONFIG_REJECT, up);
-
-    if (!conn.matches(sender))
-    {
-        LOG(ERROR) << "dropping \"CONFIG_REJECT\" for proposal "
-                   << proposal_id << ":" << proposal_time
-                   << "because the sender (" << conn.token << ") does not match "
-                   << "the claimed sender (" << sender.token
-                   << "); please file a bug: " << msg->as_slice().hex();
-        return;
-    }
-
-    if (!m_fs.is_proposed_configuration(proposal_id, proposal_time))
-    {
-        LOG(ERROR) << "dropping \"CONFIG_REJECT\" for proposal "
-                   << proposal_id << ":" << proposal_time
-                   << " from " << conn.token
-                   << " because we never saw the proposal";
-        return;
-    }
-
-    if (m_fs.is_accepted_configuration(proposal_id, proposal_time))
-    {
-        LOG(ERROR) << "dropping \"CONFIG_REJECT\" for proposal "
-                   << proposal_id << ":" << proposal_time
-                   << " from " << conn.token << " because we accepted it earlier";
-        return;
-    }
-
-    if (m_fs.is_rejected_configuration(proposal_id, proposal_time))
-    {
-        // This is a duplicate reject, so we can drop it
-        return;
-    }
-
-    configuration new_config;
-
-    if (!m_config_manager.get_proposal(proposal_id, proposal_time, &new_config))
-    {
-        // This proposal was made obsolete by an "INFORM" message
-        return;
-    }
-
-    const chain_node* next = new_config.next(m_us.token);
-
-    if (!next || next->token != sender.token)
-    {
-        LOG(ERROR) << "dropping \"CONFIG_REJECT\" message that comes from the wrong place:"
-                   << " " << sender << " instead of " << *next;
-        return;
-    }
-
-    LOG(INFO) << "rejecting proposal " << proposal_id << ":" << proposal_time;
-    m_fs.reject_configuration(proposal_id, proposal_time);
-    m_config_manager.reject(proposal_id, proposal_time);
-    const chain_node* prev = new_config.prev(m_us.token);
-
-    if (prev)
-    {
-        SEND_CONFIG_RESP(*prev, REJECT, proposal_id, proposal_time, m_us);
-    }
-}
-
-void
-daemon :: accept_proposal(const chain_node& dest,
-                          uint64_t proposal_id,
-                          uint64_t proposal_time)
-{
-    m_fs.accept_configuration(proposal_id, proposal_time);
-    SEND_CONFIG_RESP(dest, ACCEPT, proposal_id, proposal_time, m_us);
-}
-
-void
-daemon :: reject_proposal(const chain_node& dest,
-                          uint64_t proposal_id,
-                          uint64_t proposal_time)
-{
-    m_fs.reject_configuration(proposal_id, proposal_time);
-    SEND_CONFIG_RESP(dest, REJECT, proposal_id, proposal_time, m_us);
-}
-
-std::auto_ptr<e::buffer>
-daemon :: create_inform_message()
-{
-    const configuration& config(m_config_manager.stable());
-    size_t sz = BUSYBEE_HEADER_SIZE
-              + pack_size(REPLNET_INFORM)
-              + pack_size(config);
-    std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
-    msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_INFORM << config;
-    return msg;
-}
-
-void
-daemon :: propose_config(const configuration& config)
-{
-    assert(config.cluster() == m_config_manager.latest().cluster());
-    assert(config.version() == m_config_manager.latest().version() + 1);
-    assert(config.validate());
-    assert(config.prev_token() == m_config_manager.latest().this_token());
-    assert(m_config_manager.contains_quorum_of_all(config));
-    uint64_t proposal_id = 0xdeadbeefcafebabeULL;
-    uint64_t proposal_time = e::time();
-    generate_token(&proposal_id);
-    std::vector<configuration> config_chain;
-    m_config_manager.get_config_chain(&config_chain);
-    config_chain.push_back(config);
-
-    configuration* configs = &config_chain.front();
-    size_t configs_sz = config_chain.size();
-    assert(configs_sz > 1);
-    assert(configs[configs_sz - 1] == config);
-    assert(configs[configs_sz - 1].head()->token == m_us.token);
-    m_fs.propose_configuration(proposal_id, proposal_time, configs, configs_sz);
-    m_config_manager.merge(proposal_id, proposal_time, configs, configs_sz);
-    LOG(INFO) << "proposing " << proposal_id << ":" << proposal_time << " " << config;
-
-    if (configs[configs_sz - 1].config_tail()->token == m_us.token)
-    {
-        m_fs.accept_configuration(proposal_id, proposal_time);
-        m_config_manager.advance(config);
-        post_reconfiguration_hooks();
-    }
-    else
-    {
-        size_t sz = BUSYBEE_HEADER_SIZE
-                  + pack_size(REPLNET_CONFIG_PROPOSE)
-                  + 2 * sizeof(uint64_t)
-                  + pack_size(m_us)
-                  + pack_size(config_chain);
-        std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
-        msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_CONFIG_PROPOSE
-                                          << proposal_id << proposal_time
-                                          << m_us << config_chain;
-        const chain_node* next = config_chain.back().next(m_us.token);
-        assert(next);
-        send(*next, msg);
-    }
-}
-
-void
-daemon :: post_reconfiguration_hooks()
-{
-    trip_periodic(0, &daemon::periodic_maintain_cluster);
-    po6::threads::mutex::hold hold(&m_bootstrap_mtx);
-    m_bootstrap_cond.signal();
-    m_have_bootstrapped = true;
-
-    const configuration& config(m_config_manager.stable());
-    LOG(INFO) << "deploying configuration " << config;
-
-    // Check that our chain node has the correct address
-    const chain_node* us = config.node_from_token(m_us.token);
-
-    if (us && us->address != m_us.address)
-    {
-        trip_periodic(0, &daemon::periodic_change_address);
-        m_have_bootstrapped = false;
-    }
-
-    // Inform all clients
-    std::vector<uint64_t> clients;
-    m_client_manager.list_clients(&clients);
-
-    for (size_t i = 0; i < clients.size(); ++i)
-    {
-        send_no_disruption(clients[i], create_inform_message());
-    }
-
-    // Inform all cluster members
-    for (const chain_node* n = config.members_begin();
-            n != config.members_end(); ++n)
-    {
-        send(*n, create_inform_message());
-    }
-
-    // Inform temporary IDs
-    for (std::map<uint64_t, uint64_t>::iterator it = m_temporary_servers.begin();
-            it != m_temporary_servers.end(); )
-    {
-        if (it->second <= m_config_manager.stable().version())
-        {
-            send_no_disruption(it->first, create_inform_message());
-            m_temporary_servers.erase(it);
-            it = m_temporary_servers.begin();
-        }
-        else
-        {
-            ++it;
-        }
-    }
-
-    // Heal chain commands
-    reset_healing();
-
-    const chain_node* tail = config.command_tail();
-
-    if (tail && tail->token == m_us.token)
-    {
-        while (m_fs.next_slot_to_ack() < m_fs.next_slot_to_issue())
-        {
-            acknowledge_command(m_fs.next_slot_to_ack());
-        }
-    }
-
-    if (!config.in_command_chain(m_us.token))
-    {
-        m_fs.clear_unacked_slots();
-    }
-
-    // Update the failure manager with full cluster membership
-    update_failure_detectors();
-    m_client_manager.proof_of_life(monotonic_time());
-
-    // Log to let people know
-    LOG(INFO) << "the latest stable configuration is " << m_config_manager.stable();
-    LOG(INFO) << "the latest proposed configuration is " << m_config_manager.latest();
-    uint64_t f_d = m_s.FAULT_TOLERANCE;
-    uint64_t f_c = m_config_manager.stable().fault_tolerance();
-
-    if (f_c < f_d)
-    {
-        LOG(WARNING) << "the most recently deployed configuration can tolerate at most "
-                     << f_c << " failures which is less than the " << f_d
-                     << " failures the cluster is expected to tolerate; "
-                     << "bring " << m_config_manager.stable().servers_needed_for(f_d)
-                     << " more servers online to restore "
-                     << f_d << "-fault tolerance";
-    }
-    else
-    {
-        LOG(INFO) << "the most recently deployed configuration can tolerate the expected " << f_d << " failures";
-    }
-}
-
-void
-daemon :: background_bootstrap()
-{
-    uint64_t maintain_count = 0;
-
-    while (true)
-    {
-        bool should_continue = true;
-        bool have_bootstrap = true;
-        m_bootstrap_mtx.lock();
-
-        while (s_continue &&
-               (m_have_bootstrapped ||
-                maintain_count == m_maintain_count))
-        {
-            m_bootstrap_cond.wait();
-        }
-
-        should_continue = s_continue;
-        have_bootstrap = m_have_bootstrapped;
-        maintain_count = m_maintain_count;
-        m_bootstrap_mtx.unlock();
-
-        if (!should_continue)
-        {
-            break;
-        }
-
-        if (have_bootstrap)
-        {
+            LOG(ERROR) << "acceptor has failed; exiting";
+            __sync_fetch_and_add(&s_interrupts, 1);
             continue;
         }
 
-        for (size_t i = 0; i < m_bootstrap.size(); ++i)
-        {
-            chain_node cn;
-            bootstrap_returncode rc;
-
-            if ((rc = bootstrap_identity(m_bootstrap[i], &cn)) != BOOTSTRAP_SUCCESS)
-            {
-                continue;
-            }
-
-            if (cn.token == m_us.token)
-            {
-                continue;
-            }
-
-            size_t sz = BUSYBEE_HEADER_SIZE
-                      + pack_size(REPLNET_SERVER_IDENTIFY);
-            std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
-            msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_SERVER_IDENTIFY;
-            send(cn, msg);
-        }
-    }
-}
-
-void
-daemon :: periodic_change_address(uint64_t now)
-{
-    const chain_node* us = m_config_manager.latest().node_from_token(m_us.token);
-
-    if (!us || us->address == m_us.address)
-    {
-        return;
-    }
-
-    const chain_node* head = m_config_manager.latest().head();
-    trip_periodic(now + m_s.CHANGE_ADDRESS_INTERVAL, &daemon::periodic_change_address);
-
-    if (head->token == us->token)
-    {
-        LOG(INFO) << "address in latest configuration has this node listed as accessible at "
-                  << us->address << " but it is bound to " << m_us.address
-                  << "; proposing a new configuration with an up-to-date address";
-        configuration new_config = m_config_manager.latest();
-        new_config.change_address(m_us.token, m_us.address);
-        new_config.bump_version();
-        propose_config(new_config);
-    }
-    else
-    {
-        LOG(INFO) << "address in latest configuration has this node listed as accessible at "
-                  << us->address << " but it is bound to " << m_us.address
-                  << "; sending a request to " << *head << " to update this node's address";
-
-        size_t sz = BUSYBEE_HEADER_SIZE
-                  + pack_size(REPLNET_SERVER_CHANGE_ADDRESS)
-                  + pack_size(us->address)
-                  + pack_size(m_us.address);
-        std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
-        msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_SERVER_CHANGE_ADDRESS << us->address << m_us.address;
-        send(*head, msg);
-    }
-}
-
-void
-daemon :: periodic_maintain_cluster(uint64_t now)
-{
-    trip_periodic(next_interval(now, m_s.FAILURE_DETECT_INTERVAL) + m_s.FAILURE_DETECT_SUSPECT_OFFSET,
-                  &daemon::periodic_maintain_cluster);
-    m_bootstrap_mtx.lock();
-    ++m_maintain_count;
-    m_bootstrap_cond.signal();
-    m_bootstrap_mtx.unlock();
-
-    if (!m_config_manager.stable().in_command_chain(m_us.token))
-    {
-        return;
-    }
-
-    const chain_node* nodes = m_config_manager.stable().members_begin();
-    const chain_node* end = m_config_manager.stable().members_end();
-    std::vector<uint64_t> tokens;
-    size_t cutoff = 0;
-
-    for (ssize_t i = 0; i < end - nodes; ++i)
-    {
-        if (nodes[i].token == m_us.token)
-        {
-            continue;
-        }
-
-        tokens.push_back(nodes[i].token);
-    }
-
-    m_failure_manager.get_suspicions(now, &tokens, &cutoff);
-
-    // separate the servers into sets of servers:
-    // stable_live:  servers that are in every config and not suspected
-    // stable_dead:  servers that are in every config and suspected
-    // unstable_live:  servers that are not in every config and not suspected
-    // unstable_dead:  servers that are not in every config and suspected
-    // removed_live:  servers that are not in any config and not suspected
-    // removed_dead:  servers that are not in any config and suspected
-    std::vector<uint64_t> stable_live_tokens;
-    std::vector<uint64_t> stable_dead_tokens;
-    std::vector<uint64_t> unstable_live_tokens;
-    std::vector<uint64_t> unstable_dead_tokens;
-    std::vector<uint64_t> removed_live_tokens;
-    std::vector<uint64_t> removed_dead_tokens;
-    stable_live_tokens.push_back(m_us.token);
-
-    for (size_t i = 0; i < cutoff; ++i)
-    {
-        if (m_config_manager.all(&configuration::in_config_chain, tokens[i]))
-        {
-            stable_live_tokens.push_back(tokens[i]);
-        }
-        else if (m_config_manager.any(&configuration::in_config_chain, tokens[i]))
-        {
-            unstable_live_tokens.push_back(tokens[i]);
-        }
-        else
-        {
-            removed_live_tokens.push_back(tokens[i]);
-        }
-    }
-
-    for (size_t i = cutoff; i < tokens.size(); ++i)
-    {
-        if (m_config_manager.all(&configuration::in_config_chain, tokens[i]))
-        {
-            stable_dead_tokens.push_back(tokens[i]);
-        }
-        else if (m_config_manager.any(&configuration::in_config_chain, tokens[i]))
-        {
-            unstable_dead_tokens.push_back(tokens[i]);
-        }
-        else
-        {
-            removed_dead_tokens.push_back(tokens[i]);
-        }
-    }
-
-    assert(stable_live_tokens.size() + stable_dead_tokens.size() +
-           unstable_live_tokens.size() + unstable_dead_tokens.size() +
-           removed_live_tokens.size() + removed_dead_tokens.size()
-           == tokens.size() + 1);
-
-    // Here we have a decision to make that balances safety from future failures
-    // with liveness now.  Dead nodes must be removed so that the system can
-    // make progress.  Every time a node is removed, the resulting configuration
-    // can tolerate fewer failures.  Our solution is to set a threshold that
-    // limits the number of nodes that may be removed.  If we cannot provide
-    // create a live chain within that threshold, we do nothing.
-    //
-    // Note that this calculation could be made faster by grouping or not
-    // computing some of the groups above.  rescrv explicitly chose to not do so
-    // for sake of clarity.  It's a small price to pay for comprehending this
-    // code.
-
-    if (stable_live_tokens.size() * 2 <= m_config_manager.smallest_config_chain())
-    {
-        LOG_EVERY_N(INFO, static_cast<int64_t>(SECONDS / m_s.FAILURE_DETECT_INTERVAL))
-            << "could not propose new configuration because only "
-            << stable_live_tokens.size() << " nodes are stable, which is not a quorum of "
-            << m_config_manager.smallest_config_chain();
-        return;
-    }
-
-    configuration new_config(m_config_manager.latest());
-
-    // remove the stable dead nodes
-    for (size_t i = 0; i < stable_dead_tokens.size(); ++i)
-    {
-        new_config.remove_from_chain(stable_dead_tokens[i]);
-    }
-
-    // remove the unstable dead nodes
-    for (size_t i = 0; i < unstable_dead_tokens.size(); ++i)
-    {
-        if (new_config.in_config_chain(unstable_dead_tokens[i]))
-        {
-            new_config.remove_from_chain(unstable_dead_tokens[i]);
-        }
-    }
-
-    // add nodes from the unstable/removed live nodes, preferring unstable,
-    // sorted by suspicion.  Note that because suspsicions was sorted by
-    // suspicion, and *_live_tokens were derived from it, the sort order is
-    // implicitly captured by a forward iteration.
-    uint64_t desired_size = 2 * m_s.FAULT_TOLERANCE + 1;
-
-    for (size_t i = 0; i < unstable_live_tokens.size(); ++i)
-    {
-        if (new_config.config_size() < desired_size &&
-            !new_config.in_config_chain(unstable_live_tokens[i]))
-        {
-            new_config.add_to_chain(unstable_live_tokens[i]);
-        }
-    }
-
-    for (size_t i = 0; i < removed_live_tokens.size(); ++i)
-    {
-        if (new_config.config_size() < desired_size &&
-            !new_config.in_config_chain(removed_live_tokens[i]))
-        {
-            new_config.add_to_chain(removed_live_tokens[i]);
-        }
-    }
-
-    if (new_config.head()->token != m_us.token)
-    {
-        return;
-    }
-
-    if (new_config == m_config_manager.latest())
-    {
-        // promote people once the config chain stabilizes
-        if (m_config_manager.stable().version() == m_config_manager.latest().version() &&
-            m_config_manager.stable().version() == m_stable_version &&
-            // checked above ^ *m_config_manager.latest().head() == m_us &&
-            m_config_manager.latest().command_size() < m_config_manager.latest().config_size())
-        {
-            configuration grow_config(m_config_manager.latest());
-            LOG(INFO) << "growing command chain to include more of the config chain by promoting "
-                      << *m_config_manager.latest().next(m_config_manager.latest().command_tail()->token);
-            grow_config.bump_version();
-            grow_config.grow_command_chain();
-            propose_config(grow_config);
-        }
-
-        return;
-    }
-
-    new_config.bump_version();
-
-    if (!new_config.validate())
-    {
-        LOG_EVERY_N(INFO, static_cast<int64_t>(SECONDS / m_s.FAILURE_DETECT_INTERVAL))
-            << "cannot propose " << new_config << " because it is invalid";
-        return;
-    }
-
-    const configuration* no_quorum = NULL;
-
-    if (!m_config_manager.contains_quorum_of_all(new_config, &no_quorum))
-    {
-        LOG_EVERY_N(INFO, static_cast<int64_t>(SECONDS / m_s.FAILURE_DETECT_INTERVAL))
-            << "cannot propose " << new_config << " because it violates quorum invariants with "
-            << *no_quorum;
-        return;
-    }
-
-    if (m_config_manager.stable().config_tail()->token != m_us.token ||
-        m_config_manager.stable().version() == m_stable_version)
-    {
-        LOG(INFO) << "proposing new configuration " << new_config;
-        propose_config(new_config);
-    }
-}
-
-void
-daemon :: process_condition_wait(const replicant::connection& conn,
-                                 std::auto_ptr<e::buffer>,
-                                 e::unpacker up)
-{
-    uint64_t nonce;
-    uint64_t object;
-    uint64_t cond;
-    uint64_t state;
-    up = up >> nonce >> object >> cond >> state;
-    CHECK_UNPACK(CONDITION_WAIT, up);
-
-    if (!conn.is_client)
-    {
-        LOG(WARNING) << "rejecting \"CONDITION_WAIT\" that did not come from a client";
-        size_t sz = BUSYBEE_HEADER_SIZE + pack_size(REPLNET_CLIENT_UNKNOWN);
-        std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
-        msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_CLIENT_UNKNOWN;
-        send_no_disruption(conn.token, msg);
-        return;
-    }
-    else if (!conn.is_live_client)
-    {
-        LOG(WARNING) << "rejecting \"CONDITION_WAIT\" that came from dead client " << conn.token;
-        size_t sz = BUSYBEE_HEADER_SIZE + pack_size(REPLNET_CLIENT_DECEASED);
-        std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
-        msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_CLIENT_DECEASED;
-        send_no_disruption(conn.token, msg);
-        return;
-    }
-
-    m_object_manager.wait(object, conn.token, nonce, cond, state);
-}
-
-void
-daemon :: process_client_register(const replicant::connection& conn,
-                                  std::auto_ptr<e::buffer>,
-                                  e::unpacker up)
-{
-    uint64_t client;
-    up = up >> client;
-    CHECK_UNPACK(CLIENT_REGISTER, up);
-    bool success = true;
-
-    if (conn.is_cluster_member)
-    {
-        LOG(WARNING) << "rejecting registration for client that comes from a cluster member";
-        success = false;
-    }
-
-    if (conn.is_client)
-    {
-        LOG(WARNING) << "rejecting registration for client that comes from an existing client";
-        success = false;
-    }
-
-    if (conn.token != client)
-    {
-        LOG(WARNING) << "rejecting registration for client (" << client
-                     << ") that does not match its token (" << conn.token << ")";
-        success = false;
-    }
-
-    const chain_node* head = m_config_manager.stable().head();
-
-    if (!head || head->token != m_us.token)
-    {
-        LOG(WARNING) << "rejecting registration for client because we are not the head";
-        success = false;
-    }
-
-    if (!success)
-    {
-        replicant::response_returncode rc = replicant::RESPONSE_REGISTRATION_FAIL;
-        size_t sz = BUSYBEE_HEADER_SIZE
-                  + pack_size(REPLNET_COMMAND_RESPONSE)
-                  + sizeof(uint64_t)
-                  + pack_size(rc);
-        std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
-        msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_COMMAND_RESPONSE << uint64_t(0) << rc;
-        send(conn, msg);
-        return;
-    }
-
-    uint64_t slot = m_fs.next_slot_to_issue();
-    issue_command(slot, OBJECT_CLI_REG, client, 0, e::slice());
-}
-
-void
-daemon :: process_client_disconnect(const replicant::connection& conn,
-                                    std::auto_ptr<e::buffer>,
-                                    e::unpacker up)
-{
-    uint64_t nonce;
-    up = up >> nonce;
-    CHECK_UNPACK(CLIENT_DISCONNECT, up);
-
-    if (!conn.is_client)
-    {
-        LOG(WARNING) << "rejecting \"CLIENT_DISCONNECT\" that doesn't come from a client";
-        return;
-    }
-
-    const chain_node* head = m_config_manager.stable().head();
-
-    if (!head || head->token != m_us.token)
-    {
-        LOG(WARNING) << "rejecting \"CLIENT_DISCONNECT\" because we are not the head";
-        return;
-    }
-
-    uint64_t slot = m_fs.next_slot_to_issue();
-    issue_command(slot, OBJECT_CLI_DIE, conn.token, nonce, e::slice());
-}
-
-void
-daemon :: process_client_timeout(const replicant::connection& conn,
-                                 std::auto_ptr<e::buffer>,
-                                 e::unpacker up)
-{
-    uint64_t version;
-    uint64_t client;
-    up = up >> version >> client;
-    CHECK_UNPACK(CLIENT_TIMEOUT, up);
-
-    if (!conn.is_cluster_member)
-    {
-        LOG(WARNING) << "rejecting \"CLIENT_TIMEOUT\" from " << conn.token
-                     << "/" << conn.addr << " which is not a cluster member";
-        return;
-    }
-
-    const chain_node* head = m_config_manager.stable().head();
-
-    if (!head || head->token != m_us.token ||
-        version != m_config_manager.stable().version())
-    {
-        // silently drop because the sender is obligated to retry
-        return;
-    }
-
-    uint64_t slot = m_fs.next_slot_to_issue();
-    issue_command(slot, OBJECT_CLI_DIE, client, UINT64_MAX, e::slice());
-}
-
-void
-daemon :: process_command_submit(const replicant::connection& conn,
-                                 std::auto_ptr<e::buffer> msg,
-                                 e::unpacker up)
-{
-    uint64_t object;
-    uint64_t client;
-    uint64_t nonce;
-    up = up >> object >> client >> nonce;
-    CHECK_UNPACK(COMMAND_SUBMIT, up);
-    e::slice data = up.as_slice();
-
-    // Check for special objects that a client tries to affect directly
-    if (object != OBJECT_OBJ_NEW && object != OBJECT_OBJ_DEL &&
-        object != OBJECT_OBJ_SNAPSHOT && object != OBJECT_OBJ_RESTORE &&
-        IS_SPECIAL_OBJECT(object) && !conn.is_cluster_member)
-    {
-        LOG(INFO) << "rejecting \"COMMAND_SUBMIT\" for special object that "
-                  << "was not sent by a cluster member";
-        return;
-    }
-
-    if (!(conn.is_cluster_member || (conn.is_client && conn.is_live_client)))
-    {
-        if (conn.is_client && !conn.is_live_client)
-        {
-            LOG(INFO) << "rejecting \"COMMAND_SUBMIT\" from " << conn.token
-                      << " because it is dead";
-            size_t sz = BUSYBEE_HEADER_SIZE + pack_size(REPLNET_CLIENT_DECEASED);
-            msg.reset(e::buffer::create(sz));
-            msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_CLIENT_DECEASED;
-            send_no_disruption(conn.token, msg);
-            return;
-        }
-        else
-        {
-            LOG(INFO) << "rejecting \"COMMAND_SUBMIT\" from " << conn.token
-                      << " because it is not a client or cluster member";
-            size_t sz = BUSYBEE_HEADER_SIZE + pack_size(REPLNET_CLIENT_UNKNOWN);
-            msg.reset(e::buffer::create(sz));
-            msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_CLIENT_UNKNOWN;
-            send_no_disruption(conn.token, msg);
-            return;
-        }
-    }
-
-    if (conn.is_client && conn.token != client)
-    {
-        LOG(INFO) << "rejecting \"COMMAND_SUBMIT\" from " << conn.token
-                  << " because it uses the wrong token";
-        size_t sz = BUSYBEE_HEADER_SIZE + pack_size(REPLNET_CLIENT_UNKNOWN);
-        msg.reset(e::buffer::create(sz));
-        msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_CLIENT_UNKNOWN;
-        send_no_disruption(conn.token, msg);
-        return;
-    }
-
-    uint64_t slot = 0;
-
-    if (m_fs.get_slot(client, nonce, &slot))
-    {
-        assert(slot > 0);
-        replicant::response_returncode rc;
-        std::string backing;
-
-        if (m_fs.get_exec(slot, &rc, &data, &backing))
-        {
-            size_t sz = BUSYBEE_HEADER_SIZE
-                      + pack_size(REPLNET_COMMAND_RESPONSE)
-                      + sizeof(uint64_t)
-                      + pack_size(rc)
-                      + data.size();
-            msg.reset(e::buffer::create(sz));
-            e::buffer::packer pa = msg->pack_at(BUSYBEE_HEADER_SIZE);
-            pa = pa << REPLNET_COMMAND_RESPONSE << nonce << rc;
-            pa = pa.copy(data);
-            send_no_disruption(client, msg);
-        }
-        // else: drop it, it's proposed, but not executed
-
-        return;
-    }
-
-    const chain_node* head = m_config_manager.stable().head();
-
-    // If we are not the head
-    if (!head || head->token != m_us.token)
-    {
-        // bounce the message
-        send(*head, msg);
-        return;
-    }
-
-    slot = m_fs.next_slot_to_issue();
-    issue_command(slot, object, client, nonce, data);
-}
-
-void
-daemon :: process_command_issue(const replicant::connection& conn,
-                                std::auto_ptr<e::buffer>,
-                                e::unpacker up)
-{
-    uint64_t slot = 0;
-    uint64_t object = 0;
-    uint64_t client = 0;
-    uint64_t nonce = 0;
-    up = up >> slot >> object >> client >> nonce;
-    CHECK_UNPACK(COMMAND_ISSUE, up);
-    e::slice data = up.as_slice();
-
-    if (!conn.is_prev)
-    {
-        // just drop it, not from the right host
-        return;
-    }
-
-    if (m_fs.is_acknowledged_slot(slot))
-    {
-        size_t sz = BUSYBEE_HEADER_SIZE
-                  + pack_size(REPLNET_COMMAND_ACK)
-                  + sizeof(uint64_t);
-        std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
-        msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_COMMAND_ACK << slot;
-        send(conn, msg);
-        return;
-    }
-
-    const chain_node* tail = m_config_manager.stable().command_tail();
-
-    if (m_fs.is_issued_slot(slot) && (!tail || tail->token != m_us.token))
-    {
-        // just drop it, we're waiting for an ACK ourselves
-        return;
-    }
-
-    issue_command(slot, object, client, nonce, data);
-}
-
-void
-daemon :: process_command_ack(const replicant::connection& conn,
-                              std::auto_ptr<e::buffer>,
-                              e::unpacker up)
-{
-    uint64_t slot = 0;
-    up = up >> slot;
-    CHECK_UNPACK(COMMAND_ACK, up);
-
-    if (!conn.is_next)
-    {
-        // just drop it
-        return;
-    }
-
-    if (!m_fs.is_issued_slot(slot))
-    {
-        LOG(WARNING) << "dropping \"COMMAND_ACK\" for slot that was not issued";
-        return;
-    }
-
-    if (m_heal_next.state != heal_next::HEALTHY)
-    {
-        m_heal_next.acknowledged = slot + 1;
-        transfer_more_state();
-    }
-
-    acknowledge_command(slot);
-}
-
-void
-daemon :: issue_command(uint64_t slot,
-                        uint64_t object,
-                        uint64_t client,
-                        uint64_t nonce,
-                        const e::slice& data)
-{
-    if (slot != m_fs.next_slot_to_issue())
-    {
-        LOG(WARNING) << "dropping command issue that violates monotonicity "
-                     << "slot=" << slot << " expected=" << m_fs.next_slot_to_issue();
-        return;
-    }
-
-#ifdef REPL_LOG_COMMANDS
-    LOG(INFO) << "ISSUE slot=" << slot
-              << " object=" << object
-              << " client=" << client
-              << " nonce=" << nonce
-              << " data=" << data.hex();
-#endif
-
-    m_fs.issue_slot(slot, object, client, nonce, data);
-    m_client_manager.proof_of_life(client, monotonic_time());
-    const chain_node* next = m_config_manager.stable().next(m_us.token);
-
-    if (next)
-    {
-        if (m_heal_next.state >= heal_next::HEALTHY_SENT)
-        {
-            size_t sz = BUSYBEE_HEADER_SIZE
-                      + pack_size(REPLNET_COMMAND_ISSUE)
-                      + 4 * sizeof(uint64_t)
-                      + data.size();
-            std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
-            e::buffer::packer pa = msg->pack_at(BUSYBEE_HEADER_SIZE);
-            pa = pa << REPLNET_COMMAND_ISSUE
-                    << slot << object << client << nonce;
-            pa.copy(data);
-            send(*next, msg);
-        }
-    }
-
-    const chain_node* tail = m_config_manager.stable().command_tail();
-
-    if ((tail && tail->token == m_us.token) ||
-        !m_config_manager.stable().in_command_chain(m_us.token))
-    {
-        acknowledge_command(slot);
-    }
-}
-
-void
-daemon :: defer_command(uint64_t object,
-                        uint64_t client,
-                        const e::slice& _data)
-{
-    e::compat::shared_ptr<e::buffer> data(e::buffer::create(_data.size()));
-    data->resize(_data.size());
-    memmove(data->data(), _data.data(), _data.size());
-
-    {
-        po6::threads::mutex::hold hold(&m_deferred_mtx);
-        m_deferred->push(deferred_command(object, client, data));
-    }
-
-    trip_periodic(0, &daemon::periodic_execute_deferred);
-}
-
-void
-daemon :: defer_command(uint64_t object,
-                        uint64_t client, uint64_t nonce,
-                        const e::slice& _data)
-{
-    e::compat::shared_ptr<e::buffer> data(e::buffer::create(_data.size()));
-    data->resize(_data.size());
-    memmove(data->data(), _data.data(), _data.size());
-
-    {
-        po6::threads::mutex::hold hold(&m_deferred_mtx);
-        m_deferred->push(deferred_command(object, client, nonce, data));
-    }
-
-    trip_periodic(0, &daemon::periodic_execute_deferred);
-}
-
-void
-daemon :: submit_command(uint64_t object,
-                         uint64_t client, uint64_t nonce,
-                         const e::slice& data)
-{
-    size_t sz = BUSYBEE_HEADER_SIZE
-              + pack_size(REPLNET_COMMAND_SUBMIT)
-              + 3 * sizeof(uint64_t)
-              + data.size();
-    std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
-    e::buffer::packer pa = msg->pack_at(BUSYBEE_HEADER_SIZE)
-        << REPLNET_COMMAND_SUBMIT << object << client << nonce;
-    pa.copy(data);
-
-    const chain_node* head = m_config_manager.stable().head();
-
-    if (head)
-    {
-        send(*head, msg);
-    }
-}
-
-void
-daemon :: acknowledge_command(uint64_t slot)
-{
-    if (m_fs.is_acknowledged_slot(slot))
-    {
-        // eliminate the dupe silently
-        return;
-    }
-
-    if (slot != m_fs.next_slot_to_ack())
-    {
-        LOG(WARNING) << "dropping command ACK that violates monotonicity "
-                     << "slot=" << slot << " expected=" << m_fs.next_slot_to_issue();
-        return;
-    }
-
-    uint64_t object;
-    uint64_t client;
-    uint64_t nonce;
-    e::slice data;
-    std::string backing;
-
-    if (!m_fs.get_slot(slot, &object, &client, &nonce, &data, &backing))
-    {
-        LOG(ERROR) << "cannot ack slot " << slot << " because there are gaps in our history (file a bug)";
-        abort();
-        return;
-    }
-
-#ifdef REPL_LOG_COMMANDS
-    LOG(INFO) << "ACK slot=" << slot
-              << " object=" << object
-              << " client=" << client
-              << " nonce=" << nonce
-              << " data=" << data.hex();
-#endif
-
-    m_fs.ack_slot(slot);
-    const chain_node* prev = m_config_manager.stable().prev(m_us.token);
-
-    if (prev)
-    {
-        size_t sz = BUSYBEE_HEADER_SIZE
-                  + pack_size(REPLNET_COMMAND_ACK)
-                  + sizeof(uint64_t);
-        std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
-        msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_COMMAND_ACK << slot;
-        send(*prev, msg);
-    }
-
-    if (object == OBJECT_CLI_REG || object == OBJECT_CLI_DIE)
-    {
-        replicant::response_returncode rc = RESPONSE_SUCCESS;
-
-        if (object == OBJECT_CLI_REG)
-        {
-            LOG(INFO) << "registering client " << client;
-            m_fs.reg_client(client);
-            m_client_manager.register_client(client);
-            m_client_manager.proof_of_life(client, monotonic_time());
-            update_failure_detectors();
-        }
-        else
-        {
-            LOG(INFO) << "disconnecting client " << client;
-            m_fs.die_client(client);
-            m_client_manager.deregister_client(client);
-            update_failure_detectors();
-        }
-
-        size_t sz = BUSYBEE_HEADER_SIZE
-                  + pack_size(REPLNET_COMMAND_RESPONSE)
-                  + sizeof(uint64_t) + pack_size(replicant::RESPONSE_SUCCESS);
-        std::auto_ptr<e::buffer> response(e::buffer::create(sz));
-        response->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_COMMAND_RESPONSE << nonce << rc;
-        send_no_disruption(client, response);
-    }
-    else
-    {
-        m_object_manager.enqueue(slot, object, client, nonce, data);
-    }
-}
-
-void
-daemon :: record_execution(uint64_t slot, uint64_t client, uint64_t nonce, replicant::response_returncode rc, const e::slice& data)
-{
-    size_t sz = BUSYBEE_HEADER_SIZE
-              + pack_size(REPLNET_COMMAND_RESPONSE)
-              + sizeof(uint64_t)
-              + pack_size(rc)
-              + data.size();
-    std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
-    e::buffer::packer pa = msg->pack_at(BUSYBEE_HEADER_SIZE);
-    pa = pa << REPLNET_COMMAND_RESPONSE << nonce << rc;
-    pa = pa.copy(data);
-    po6::threads::mutex::hold hold(&m_quiescent_lock);
-    send_no_disruption(client, msg);
-    m_fs.exec_slot(slot, rc, data);
-}
-
-void
-daemon :: periodic_describe_slots(uint64_t now)
-{
-    trip_periodic(next_interval(now, m_s.REPORT_EVERY), &daemon::periodic_describe_slots);
-    LOG(INFO) << "we are " << m_us << " and here's some info:"
-              << " issued <=" << m_fs.next_slot_to_issue()
-              << " | acked <=" << m_fs.next_slot_to_ack();
-    LOG(INFO) << "our stable configuration is " << m_config_manager.stable();
-    LOG(INFO) << "the suffix of the chain stabilized through " << m_stable_version;
-
-    if (m_config_manager.stable().version() != m_config_manager.latest().version())
-    {
-        LOG(INFO) << "the latest outstanding configuration is " << m_config_manager.latest();
-    }
-
-    if (m_heal_next.state == heal_next::HEALING ||
-        m_heal_next.state == heal_next::HEALTHY_SENT)
-    {
-        LOG(INFO) << "we've transfered through " << m_heal_next.acknowledged
-                  << " and have begun transfer up to " << m_heal_next.proposed;
-    }
-}
-
-void
-daemon :: periodic_execute_deferred(uint64_t)
-{
-    while (!m_deferred->empty())
-    {
-        const deferred_command& dc(m_deferred->front());
-        uint64_t slot = m_fs.next_slot_to_issue();
-
-        if (dc.has_nonce)
-        {
-            issue_command(slot, dc.object, dc.client, dc.nonce, dc.data->as_slice());
-        }
-        else
-        {
-            issue_command(slot, dc.object, dc.client, slot, dc.data->as_slice());
-        }
-
-        m_deferred->pop();
-    }
-}
-
-void
-daemon :: process_heal_req(const replicant::connection& conn,
-                           std::auto_ptr<e::buffer>,
-                           e::unpacker up)
-{
-    uint64_t token;
-    up = up >> token;
-    CHECK_UNPACK(HEAL_REQ, up);
-
-    const chain_node* prev = m_config_manager.stable().prev(m_us.token);
-
-    if (!prev || prev->token != conn.token)
-    {
-        // just drop it
-        return;
-    }
-
-    if (token <= m_heal_token)
-    {
-        size_t sz = BUSYBEE_HEADER_SIZE
-                  + pack_size(REPLNET_HEAL_RETRY)
-                  + sizeof(uint64_t);
-        uint64_t new_token = m_heal_token + 1;
-        std::auto_ptr<e::buffer> resp(e::buffer::create(sz));
-        resp->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_HEAL_RETRY << new_token;
-        send(conn, resp);
-        LOG(INFO) << "received request for healing from our predecessor " << conn.token
-                  << " with healing_id=" << token << ", but that token is too low;"
-                  << " requesting a retry";
-    }
-    else
-    {
-        uint64_t to_ack = m_fs.next_slot_to_ack();
-        size_t sz = BUSYBEE_HEADER_SIZE
-                  + pack_size(REPLNET_HEAL_RESP)
-                  + 2 * sizeof(uint64_t);
-        std::auto_ptr<e::buffer> resp(e::buffer::create(sz));
-        resp->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_HEAL_RESP << token << to_ack;
-        send(conn, resp);
-        LOG(INFO) << "resetting healing process with our predecessor " << conn.token
-                  << ": healing_id=" << token << " to_ack=" << to_ack;
-        maybe_send_stable();
-    }
-}
-
-void
-daemon :: process_heal_retry(const replicant::connection& conn,
-                             std::auto_ptr<e::buffer>,
-                             e::unpacker up)
-{
-    uint64_t token;
-    up = up >> token;
-    CHECK_UNPACK(HEAL_RETRY, up);
-    LOG(INFO) << "received healing retry from successor " << conn.token
-              << " with healing_id=" << token;
-    m_heal_token = std::max(m_heal_token, token) + 1;
-    reset_healing();
-}
-
-void
-daemon :: process_heal_resp(const replicant::connection& conn,
-                            std::auto_ptr<e::buffer>,
-                            e::unpacker up)
-{
-    uint64_t token;
-    uint64_t to_ack;
-    up = up >> token >> to_ack;
-    CHECK_UNPACK(HEAL_RESP, up);
-
-    const chain_node* next = m_config_manager.stable().next(m_us.token);
-
-    if (!next || next->token != conn.token ||
-        token != m_heal_next.token)
-    {
-        // just drop it
-        return;
-    }
-
-    // Process all acks up to, but not including, next to_ack
-    while (m_fs.next_slot_to_ack() < m_fs.next_slot_to_issue() &&
-           m_fs.next_slot_to_ack() < to_ack)
-    {
-        acknowledge_command(m_fs.next_slot_to_ack());
-    }
-
-    // take the min in case the next host is way ahead of us
-    to_ack = std::min(to_ack, m_fs.next_slot_to_ack());
-    m_heal_next.state = heal_next::HEALING;
-    m_heal_next.acknowledged = to_ack;
-    m_heal_next.proposed = to_ack;
-
-    LOG(INFO) << "initiating state transfer to " << conn.token << " starting at slot " << to_ack;
-    transfer_more_state();
-}
-
-void
-daemon :: process_heal_done(const replicant::connection& conn,
-                            std::auto_ptr<e::buffer> msg,
-                            e::unpacker up)
-{
-    uint64_t token;
-    up = up >> token;
-    CHECK_UNPACK(HEAL_DONE, up);
-
-    if (conn.is_next &&
-        m_heal_next.token == token &&
-        m_heal_next.state == heal_next::HEALTHY_SENT)
-    {
-        // we can move m_heal_next from HEALTHY_SENT to HEALTHY
-        m_heal_next.state = heal_next::HEALTHY;
-        LOG(INFO) << "the connection with the next node is 100% healed";
-        const chain_node* tail = m_config_manager.stable().command_tail();
-
-        if (tail && tail->token == m_us.token &&
-            m_stable_version < m_config_manager.stable().version())
-        {
-            m_stable_version = m_config_manager.stable().version();
-            LOG(INFO) << "command tail stabilizes at configuration " << m_stable_version;
-        }
-    }
-    else if (conn.is_prev)
-    {
-        msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_HEAL_DONE << token;
-        send(conn, msg);
-        LOG(INFO) << "the connection with the prev node is 100% healed";
-    }
-
-    maybe_send_stable();
-}
-
-void
-daemon :: process_stable(const replicant::connection&,
-                         std::auto_ptr<e::buffer>,
-                         e::unpacker up)
-{
-    uint64_t stable;
-    up = up >> stable;
-    CHECK_UNPACK(HEAL_DONE, up);
-
-    if (m_stable_version < stable)
-    {
-        LOG(INFO) << "suffix of the chain (all nodes after us) stabilizes at configuration " << stable;
-    }
-
-    m_stable_version = std::max(m_stable_version, stable);
-    maybe_send_stable();
-}
-
-void
-daemon :: transfer_more_state()
-{
-    m_heal_next.window = m_fs.next_slot_to_issue() - m_heal_next.acknowledged;
-    m_heal_next.window = std::max(m_heal_next.window, m_s.TRANSFER_WINDOW_LOWER_BOUND);
-    m_heal_next.window = std::min(m_heal_next.window, m_s.TRANSFER_WINDOW_UPPER_BOUND);
-
-    while (m_heal_next.state < heal_next::HEALTHY_SENT &&
-           m_heal_next.proposed < m_fs.next_slot_to_issue() &&
-           m_heal_next.proposed - m_heal_next.acknowledged <= m_heal_next.window)
-    {
-        uint64_t slot = m_heal_next.proposed;
-        uint64_t object;
-        uint64_t client;
-        uint64_t nonce;
-        e::slice data;
-        std::string backing;
-
-        if (!m_fs.get_slot(slot, &object, &client, &nonce, &data, &backing))
-        {
-            LOG(ERROR) << "cannot transfer slot " << m_heal_next.proposed << " because there are gaps in our history (file a bug)";
-            abort();
-        }
-
-        size_t sz = BUSYBEE_HEADER_SIZE
-                  + pack_size(REPLNET_COMMAND_ISSUE)
-                  + 4 * sizeof(uint64_t)
-                  + data.size();
-        std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
-        e::buffer::packer pa = msg->pack_at(BUSYBEE_HEADER_SIZE);
-        pa = pa << REPLNET_COMMAND_ISSUE << slot << object << client << nonce;
-        pa.copy(data);
-        const chain_node* next = m_config_manager.stable().next(m_us.token);
-        assert(next);
-
-        if (slot % 10000 == 0)
-        {
-            LOG(INFO) << "transferred through slot " << slot;
-        }
-
-        if (send(*next, msg))
-        {
-            ++m_heal_next.proposed;
-        }
-        else
-        {
-            break;
-        }
-    }
-
-    if (m_heal_next.state < heal_next::HEALTHY_SENT &&
-        m_heal_next.proposed == m_fs.next_slot_to_issue())
-    {
-        size_t sz = BUSYBEE_HEADER_SIZE
-                  + pack_size(REPLNET_HEAL_DONE)
-                  + sizeof(uint64_t);
-        std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
-        msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_HEAL_DONE << m_heal_next.token;
-        const chain_node* next = m_config_manager.stable().next(m_us.token);
-        assert(next);
-
-        if (send(*next, msg))
-        {
-            LOG(INFO) << "state transfer healing_id=" << m_heal_next.token << " complete; falling back to normal chain operation";
-            m_heal_next.state = heal_next::HEALTHY_SENT;
-            maybe_send_stable();
-        }
-    }
-}
-
-void
-daemon :: periodic_heal_next(uint64_t now)
-{
-    const chain_node* next = m_config_manager.stable().next(m_us.token);
-
-    // if there is no next node we're automatically healthy
-    if (!next)
-    {
-        m_heal_next.state = heal_next::HEALTHY;
-
-        // if we're the end of the command chain, report stability
-        if (m_config_manager.stable().in_command_chain(m_us.token) &&
-            m_stable_version < m_config_manager.stable().version())
-        {
-            m_stable_version = m_config_manager.stable().version();
-            LOG(INFO) << "command tail stabilizes at configuration " << m_stable_version;
-        }
-
-        maybe_send_stable();
-    }
-
-    // keep running this function until we are healed
-    if (m_heal_next.state != heal_next::HEALTHY)
-    {
-        trip_periodic(now + m_s.HEAL_NEXT_INTERVAL, &daemon::periodic_heal_next);
-    }
-
-    size_t sz;
-    std::auto_ptr<e::buffer> msg;
-
-    switch (m_heal_next.state)
-    {
-        case heal_next::BROKEN:
-            assert(next);
-            sz = BUSYBEE_HEADER_SIZE
-               + pack_size(REPLNET_HEAL_REQ)
-               + sizeof(uint64_t);
-            msg.reset(e::buffer::create(sz));
-            msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_HEAL_REQ
-                                              << m_heal_token;
-
-            if (send(*next, msg))
-            {
-                m_heal_next.state = heal_next::REQUEST_SENT;
-                m_heal_next.token = m_heal_token;
-                LOG(INFO) << "initiating healing with successor " << next->token
-                          << " with healing_id=" << m_heal_token;
-            }
-
-            ++m_heal_token;
-            break;
-        case heal_next::REQUEST_SENT:
-            m_heal_next.state = heal_next::BROKEN;
-            ++m_heal_token;
-            break;
-        case heal_next::HEALING:
-        case heal_next::HEALTHY_SENT:
-            // do nothing, wait for other side
-            break;
-        case heal_next::HEALTHY:
-            // do nothing, we won't run this periodic func anymore
-            break;
-        default:
-            abort();
-    }
-}
-
-void
-daemon :: reset_healing()
-{
-    m_heal_next = heal_next();
-    trip_periodic(0, &daemon::periodic_heal_next);
-}
-
-void
-daemon :: maybe_send_stable()
-{
-    if (m_heal_next.state < heal_next::HEALTHY_SENT)
-    {
-        return;
-    }
-
-    size_t sz = BUSYBEE_HEADER_SIZE
-              + pack_size(REPLNET_STABLE)
-              + sizeof(uint64_t);
-    std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
-    msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_STABLE
-                                      << m_stable_version;
-    const chain_node* prev = m_config_manager.stable().prev(m_us.token);
-
-    if (prev)
-    {
-        send(*prev, msg);
-    }
-}
-
-void
-daemon :: send_notify(uint64_t client, uint64_t nonce, replicant::response_returncode rc, const e::slice& data)
-{
-    size_t sz = BUSYBEE_HEADER_SIZE
-              + pack_size(REPLNET_CONDITION_NOTIFY)
-              + sizeof(uint64_t)
-              + pack_size(rc)
-              + data.size();
-    std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
-    e::buffer::packer pa = msg->pack_at(BUSYBEE_HEADER_SIZE);
-    pa = pa << REPLNET_CONDITION_NOTIFY << nonce << rc;
-    pa = pa.copy(data);
-    po6::threads::mutex::hold hold(&m_quiescent_lock);
-    send_no_disruption(client, msg);
-}
-
-void
-daemon :: handle_snapshot(std::auto_ptr<snapshot>)
-{
-}
-
-void
-daemon :: process_ping(const replicant::connection& conn,
-                       std::auto_ptr<e::buffer> msg,
-                       e::unpacker up)
-{
-    uint64_t version = 0;
-    uint64_t seqno = 0;
-    up = up >> version >> seqno;
-    CHECK_UNPACK(PING, up);
-
-    if (version < m_config_manager.stable().version())
-    {
-        size_t sz = BUSYBEE_HEADER_SIZE
-                  + pack_size(REPLNET_INFORM)
-                  + pack_size(m_config_manager.stable());
-        std::auto_ptr<e::buffer> inf(e::buffer::create(sz));
-        inf->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_INFORM << m_config_manager.stable();
-        send(conn, inf);
-    }
-
-    msg->clear();
-    msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_PONG << seqno;
-    send(conn, msg);
-}
-
-void
-daemon :: process_pong(const replicant::connection& conn,
-                       std::auto_ptr<e::buffer>,
-                       e::unpacker up)
-{
-    uint64_t seqno = 0;
-    up = up >> seqno;
-    CHECK_UNPACK(PONG, up);
-    uint64_t now = monotonic_time();
-    m_failure_manager.pong(conn.token, seqno, now);
-
-    if (conn.is_client)
-    {
-        m_client_manager.proof_of_life(conn.token, now);
-    }
-}
-
-void
-daemon :: periodic_exchange(uint64_t now)
-{
-    trip_periodic(next_interval(now, m_s.FAILURE_DETECT_INTERVAL) + m_s.FAILURE_DETECT_PING_OFFSET,
-                  &daemon::periodic_exchange);
-    uint64_t version = m_config_manager.stable().version();
-    m_failure_manager.ping(this, &daemon::send_no_disruption, version);
-}
-
-void
-daemon :: periodic_suspect_clients(uint64_t now)
-{
-    trip_periodic(next_interval(now, m_s.FAILURE_DETECT_INTERVAL) + m_s.FAILURE_DETECT_SUSPECT_OFFSET,
-                  &daemon::periodic_suspect_clients);
-    const configuration& config(m_config_manager.stable());
-    std::vector<uint64_t> clients;
-    m_client_manager.owned_clients(config.index(m_us.token),
-                                   config.config_size(),
-                                   &clients);
-    size_t cutoff = 0;
-    m_failure_manager.get_suspicions(now, &clients, &cutoff);
-
-    for (size_t i = cutoff; i < clients.size(); ++i)
-    {
-        m_object_manager.suspect(clients[i]);
-    }
-}
-
-void
-daemon :: periodic_disconnect_clients(uint64_t now)
-{
-    trip_periodic(next_interval(now, m_s.CLIENT_DISCONNECT_EVERY),
-                  &daemon::periodic_disconnect_clients);
-    const configuration& config(m_config_manager.stable());
-    std::vector<uint64_t> our_clients;
-    m_client_manager.owned_clients(config.index(m_us.token),
-                                   config.config_size(),
-                                   &our_clients);
-    std::vector<uint64_t> dead_clients;
-    m_client_manager.last_seen_before(now - m_s.CLIENT_DISCONNECT_TIMEOUT,
-                                      &dead_clients);
-    uint64_t version = m_config_manager.stable().version();
-    const chain_node* head = m_config_manager.stable().head();
-
-    if (!head)
-    {
-        return;
-    }
-
-    for (size_t i = 0; i < our_clients.size(); ++i)
-    {
-        if (!std::binary_search(dead_clients.begin(),
-                                dead_clients.end(),
-                                our_clients[i]))
-        {
-            continue;
-        }
-
-        po6::net::location addr;
-
-        if (m_busybee->get_addr(our_clients[i], &addr) == BUSYBEE_SUCCESS)
-        {
-            m_client_manager.proof_of_life(our_clients[i], now);
-            continue;
-        }
-
-        size_t sz = BUSYBEE_HEADER_SIZE
-                  + pack_size(REPLNET_CLIENT_TIMEOUT)
-                  + sizeof(uint64_t)
-                  + sizeof(uint64_t);
-        std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
-        msg->pack_at(BUSYBEE_HEADER_SIZE)
-            << REPLNET_CLIENT_TIMEOUT << version << our_clients[i];
-        send_no_disruption(head->token, msg);
-        LOG(INFO) << "session for " << our_clients[i] << " timed out";
-    }
-
-    std::vector<uint64_t> all_clients;
-    m_client_manager.list_clients(&all_clients);
-    m_object_manager.suspect_if_not_listed(all_clients);
-}
-
-void
-daemon :: update_failure_detectors()
-{
-    std::vector<uint64_t> nodes;
-    m_config_manager.get_all_nodes(&nodes);
-    std::vector<uint64_t> clients;
-    m_client_manager.list_clients(&clients);
-    std::vector<uint64_t> ids(nodes.size() + clients.size());
-    std::merge(nodes.begin(), nodes.end(),
-               clients.begin(), clients.end(),
-               ids.begin());
-
-    for (size_t i = 0; i < ids.size(); ++i)
-    {
-        if (ids[i] != m_us.token)
-        {
-            continue;
-        }
-
-        for (size_t j = i + 1; j < ids.size(); ++j)
-        {
-            ids[j - 1] = ids[j];
-        }
-
-        ids.pop_back();
-        break;
-    }
-
-    uint64_t now = monotonic_time();
-    m_failure_manager.track(now, ids,
-                            m_s.FAILURE_DETECT_INTERVAL,
-                            m_s.FAILURE_DETECT_WINDOW_SIZE);
-}
-
-void
-daemon :: issue_suspect_callback(uint64_t obj_id,
-                                 uint64_t cb_id,
-                                 const e::slice& data)
-{
-    submit_command(obj_id, CLIENT_SUSPECT, cb_id, data);
-}
-
-void
-daemon :: periodic_alarm(uint64_t now)
-{
-    uint64_t ms250 = 250ULL * 1000ULL * 1000ULL;
-    uint64_t when = now + ms250 - (now % ms250);
-    trip_periodic(when, &daemon::periodic_alarm);
-
-    if (m_config_manager.stable().head()->token != m_us.token)
-    {
-        return;
-    }
-
-    m_object_manager.periodic(now);
-}
-
-void
-daemon :: issue_alarm(uint64_t obj_id, const char* func)
-{
-    if (m_config_manager.stable().head()->token != m_us.token)
-    {
-        LOG(ERROR) << "alarm lost (should not happen)";
-        return;
-    }
-
-    e::slice data(func, strlen(func) + 1);
-    defer_command(obj_id, CLIENT_ALARM, data);
-}
-
-bool
-daemon :: recv(replicant::connection* conn, std::auto_ptr<e::buffer>* msg)
-{
-    while (s_continue)
-    {
+        flush_acceptor_messages();
         run_periodic();
-        busybee_returncode rc = m_busybee->recv(&m_gc_ts, &conn->token, msg);
+
+        bool debug_mode = s_debug_mode;
+        uint64_t token;
+        std::auto_ptr<e::buffer> msg;
+        m_busybee->set_timeout(1);
+        busybee_returncode rc = m_busybee->recv(&m_gc_ts, &token, &msg);
 
         switch (rc)
         {
             case BUSYBEE_SUCCESS:
                 break;
             case BUSYBEE_TIMEOUT:
+                continue;
             case BUSYBEE_INTERRUPTED:
+                if (s_debug_mode != debug_mode)
+                {
+                    if (s_debug_mode)
+                    {
+                        debug_dump();
+                        LOG(INFO) << "enabling debug mode; will log all state transitions";
+                    }
+                    else
+                    {
+                        LOG(INFO) << "disabling debug mode; will go back to normal operation";
+                    }
+                }
+                else if (s_debug_dump)
+                {
+                    debug_dump();
+                    s_debug_dump = false;
+                }
+
                 continue;
             case BUSYBEE_DISRUPTED:
-                handle_disruption(conn->token);
+                handle_disruption(server_id(token));
                 continue;
             case BUSYBEE_SHUTDOWN:
             case BUSYBEE_POLLFAILED:
@@ -2871,54 +622,1426 @@ daemon :: recv(replicant::connection* conn, std::auto_ptr<e::buffer>* msg)
                 return false;
         }
 
-        if (m_busybee->get_addr(conn->token, &conn->addr) != BUSYBEE_SUCCESS)
+        assert(msg.get());
+        server_id si(token);
+        network_msgtype mt = REPLNET_NOP;
+        e::unpacker up = msg->unpack_from(BUSYBEE_HEADER_SIZE);
+        up = up >> mt;
+
+        switch (mt)
         {
-            conn->addr = po6::net::location();
+            case REPLNET_NOP:
+                break;
+            case REPLNET_BOOTSTRAP:
+                process_bootstrap(si, msg, up);
+                break;
+            case REPLNET_SILENT_BOOTSTRAP:
+                process_silent_bootstrap(si, msg, up);
+                break;
+            case REPLNET_STATE_TRANSFER:
+                process_state_transfer(si, msg, up);
+                break;
+            case REPLNET_PAXOS_PHASE1A:
+                process_paxos_phase1a(si, msg, up);
+                break;
+            case REPLNET_PAXOS_PHASE1B:
+                process_paxos_phase1b(si, msg, up);
+                break;
+            case REPLNET_PAXOS_PHASE2A:
+                process_paxos_phase2a(si, msg, up);
+                break;
+            case REPLNET_PAXOS_PHASE2B:
+                process_paxos_phase2b(si, msg, up);
+                break;
+            case REPLNET_PAXOS_LEARN:
+                process_paxos_learn(si, msg, up);
+                break;
+            case REPLNET_PAXOS_SUBMIT:
+                process_paxos_submit(si, msg, up);
+                break;
+            case REPLNET_SERVER_BECOME_MEMBER:
+                process_server_become_member(si, msg, up);
+                break;
+            case REPLNET_UNIQUE_NUMBER:
+                process_unique_number(si, msg, up);
+                break;
+            case REPLNET_OBJECT_FAILED:
+                process_object_failed(si, msg, up);
+                break;
+            case REPLNET_POKE:
+                process_poke(si, msg, up);
+                break;
+            case REPLNET_COND_WAIT:
+                process_cond_wait(si, msg, up);
+                break;
+            case REPLNET_CALL:
+                process_call(si, msg, up);
+                break;
+            case REPLNET_GET_ROBUST_PARAMS:
+                process_get_robust_params(si, msg, up);
+                break;
+            case REPLNET_CALL_ROBUST:
+                process_call_robust(si, msg, up);
+                break;
+            case REPLNET_PING:
+                process_ping(si, msg, up);
+                break;
+            case REPLNET_PONG:
+                process_pong(si, msg, up);
+                break;
+            case REPLNET_CLIENT_RESPONSE:
+                LOG(WARNING) << "dropping \"CLIENT_RESPONSE\" received by server";
+                break;
+            case REPLNET_GARBAGE:
+                LOG(WARNING) << "dropping \"GARBAGE\" received by server";
+                break;
+            default:
+                LOG(WARNING) << "unknown message type; here's some hex:  " << msg->hex();
+                break;
+        }
+    }
+
+    LOG(INFO) << "replicant is gracefully shutting down";
+
+    uint64_t snapshot_slot;
+    e::slice snapshot;
+    std::auto_ptr<e::buffer> snapshot_backing;
+    m_replica->take_blocking_snapshot(&snapshot_slot, &snapshot, &snapshot_backing);
+
+    if (snapshot_slot == 0)
+    {
+        LOG(ERROR) << "could not take snapshot when shutting down";
+        return EXIT_FAILURE;
+    }
+    else if (!m_acceptor.record_snapshot(snapshot_slot, snapshot))
+    {
+        LOG(ERROR) << "error saving starting replica state to disk: " << e::error::strerror(errno);
+        m_replica.reset();
+    }
+
+    LOG(INFO) << "replicant will now terminate";
+    return EXIT_SUCCESS;
+}
+
+void
+daemon :: join_the_cluster(const bootstrap& existing)
+{
+    if (m_replica.get())
+    {
+        return;
+    }
+
+    bool success = false;
+    configuration c;
+
+    for (unsigned iteration = 0; __sync_fetch_and_add(&s_interrupts, 0) == 0 && iteration < 100; ++iteration)
+    {
+        LOG_IF(INFO, iteration == 0) << "bootstrapping off existing cluster using " << existing;
+        e::error err;
+
+        if (existing.do_it(&c, &err) != REPLICANT_SUCCESS)
+        {
+            LOG(ERROR) << err.msg();
+            return;
         }
 
-        const configuration& config(m_config_manager.stable());
-
-        for (const chain_node* n = config.members_begin();
-                n != config.members_end(); ++n)
+        if (c.has(m_us.id))
         {
-            if (n->token == conn->token)
+            success = true;
+            break;
+        }
+
+        sigset_t tmp;
+        sigset_t old;
+        sigemptyset(&tmp);
+        pthread_sigmask(SIG_SETMASK, &tmp, &old);
+        e::guard g_sigmask = e::makeguard(pthread_sigmask, SIG_SETMASK, &old, (sigset_t*)NULL);
+
+        if (iteration > 0)
+        {
+            if (iteration % 10 == 0)
             {
-                const chain_node* prev = config.prev(m_us.token);
-                const chain_node* next = config.next(m_us.token);
-                conn->is_cluster_member = true;
-                conn->is_client = false;
-                conn->is_prev = prev && n->token == prev->token;
-                conn->is_next = next && n->token == next->token;
-                return true;
+                LOG(INFO) << "still trying...";
+            }
+
+            struct timespec ts;
+            ts.tv_sec = 0;
+            ts.tv_nsec = 100 * 1000ULL * 1000ULL;
+            nanosleep(&ts, NULL);
+        }
+
+        for (size_t i = 0; i < c.servers().size(); ++i)
+        {
+            busybee_single bs(c.servers()[i].bind_to);
+            const size_t sz = BUSYBEE_HEADER_SIZE
+                            + pack_size(REPLNET_SERVER_BECOME_MEMBER)
+                            + pack_size(m_us);
+            std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
+            msg->pack_at(BUSYBEE_HEADER_SIZE)
+                << REPLNET_SERVER_BECOME_MEMBER << m_us;
+
+            try
+            {
+                bs.send(msg);
+                bs.set_timeout(10);
+                bs.recv(&msg);
+            }
+            catch (po6::error& e)
+            {
+                continue;
+            }
+
+            network_msgtype mt;
+            configuration tmpc;
+            e::unpacker up = msg->unpack_from(BUSYBEE_HEADER_SIZE);
+            up = up >> mt >> tmpc;
+
+            if (!up.error() &&
+                c.cluster() == tmpc.cluster() &&
+                c.version() < tmpc.version())
+            {
+                c = tmpc;
+            }
+        }
+    }
+
+    if (!success)
+    {
+        return;
+    }
+
+    LOG(INFO) << "joining " << c.cluster() << " as " << m_us.id;
+
+    for (size_t i = 0; !m_replica.get() && i < c.servers().size(); ++i)
+    {
+        busybee_single bs(c.servers()[i].bind_to);
+        const size_t sz = BUSYBEE_HEADER_SIZE
+                        + pack_size(REPLNET_STATE_TRANSFER);
+        std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
+        msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_STATE_TRANSFER;
+
+        try
+        {
+            bs.send(msg);
+            bs.recv(&msg);
+        }
+        catch (po6::error& e)
+        {
+            continue;
+        }
+
+        network_msgtype mt;
+        uint64_t slot;
+        e::slice snapshot;
+        e::unpacker up = msg->unpack_from(BUSYBEE_HEADER_SIZE);
+        up = up >> mt >> slot >> snapshot;
+
+        if (!up.error())
+        {
+            m_replica.reset(replica::from_snapshot(this, snapshot));
+        }
+    }
+
+    if (m_replica.get())
+    {
+        uint64_t snapshot_slot;
+        e::slice snapshot;
+        std::auto_ptr<e::buffer> snapshot_backing;
+        m_replica->take_blocking_snapshot(&snapshot_slot, &snapshot, &snapshot_backing);
+
+        if (snapshot_slot == 0)
+        {
+            LOG(ERROR) << "could not take snapshot of new state";
+            m_replica.reset();
+        }
+        else if (!m_acceptor.record_snapshot(snapshot_slot, snapshot))
+        {
+            LOG(ERROR) << "error saving starting replica state to disk: " << e::error::strerror(errno);
+            m_replica.reset();
+        }
+
+        m_config_mtx.lock();
+
+        if (m_replica.get())
+        {
+            m_config = m_replica->config();
+        }
+
+        m_config_mtx.unlock();
+    }
+}
+
+void
+daemon :: process_bootstrap(server_id si,
+                            std::auto_ptr<e::buffer>,
+                            e::unpacker)
+{
+    po6::net::location addr;
+
+    if (m_busybee->get_addr(si.get(), &addr) == BUSYBEE_SUCCESS)
+    {
+        LOG(INFO) << "introducing " << addr << " to the cluster";
+    }
+    else
+    {
+        LOG(INFO) << "introducing " << si << " to the cluster";
+    }
+
+    send_bootstrap(si);
+}
+
+void
+daemon :: process_silent_bootstrap(server_id si,
+                                   std::auto_ptr<e::buffer>,
+                                   e::unpacker)
+{
+    send_bootstrap(si);
+}
+
+void
+daemon :: send_bootstrap(server_id si)
+{
+    size_t sz = BUSYBEE_HEADER_SIZE
+              + pack_size(REPLNET_BOOTSTRAP)
+              + pack_size(m_config);
+    std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
+    msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_BOOTSTRAP << m_config;
+    send(si, msg);
+}
+
+void
+daemon :: process_state_transfer(server_id si,
+                                 std::auto_ptr<e::buffer>,
+                                 e::unpacker)
+{
+    uint64_t snapshot_slot;
+    e::slice snapshot;
+    std::auto_ptr<e::buffer> snapshot_backing;
+    m_replica->get_last_snapshot(&snapshot_slot, &snapshot, &snapshot_backing);
+
+    if (snapshot_slot == 0)
+    {
+        size_t sz = BUSYBEE_HEADER_SIZE
+                  + pack_size(REPLNET_NOP);
+        std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
+        msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_NOP;
+        send(si, msg);
+        return;
+    }
+
+    size_t sz = BUSYBEE_HEADER_SIZE
+              + pack_size(REPLNET_STATE_TRANSFER)
+              + sizeof(uint64_t)
+              + pack_size(snapshot);
+    std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
+    msg->pack_at(BUSYBEE_HEADER_SIZE)
+        << REPLNET_STATE_TRANSFER << snapshot_slot << snapshot;
+    send(si, msg);
+}
+
+void
+daemon :: send_paxos_phase1a(server_id to, const ballot& b)
+{
+    size_t sz = BUSYBEE_HEADER_SIZE
+              + pack_size(REPLNET_PAXOS_PHASE1A)
+              + pack_size(b);
+    std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
+    msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_PAXOS_PHASE1A << b;
+    send(to, msg);
+}
+
+void
+daemon :: process_paxos_phase1a(server_id si,
+                                std::auto_ptr<e::buffer>,
+                                e::unpacker up)
+{
+    ballot b;
+    up = up >> b;
+    CHECK_UNPACK(PAXOS_PHASE1A, up);
+
+    if (si == b.leader && b > m_acceptor.current_ballot())
+    {
+        m_acceptor.adopt(b);
+        LOG(INFO) << "phase 1a:  taking up " << b;
+        flush_enqueued_commands_with_stale_leader();
+    }
+
+    LOG_IF(ERROR, si != b.leader) << si << " is misusing " << b;
+    send_paxos_phase1b(b.leader);
+    observe_ballot(b);
+}
+
+void
+daemon :: send_paxos_phase1b(server_id to)
+{
+    const std::vector<pvalue>& pvals(m_acceptor.pvals());
+    size_t sz = BUSYBEE_HEADER_SIZE
+              + pack_size(REPLNET_PAXOS_PHASE1B)
+              + pack_size(m_acceptor.current_ballot())
+              + pack_size(pvals);
+    std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
+    msg->pack_at(BUSYBEE_HEADER_SIZE)
+        << REPLNET_PAXOS_PHASE1B
+        << m_acceptor.current_ballot()
+        << pvals;
+    send_when_acceptor_persistent(to, msg);
+}
+
+void
+daemon :: process_paxos_phase1b(server_id si,
+                                std::auto_ptr<e::buffer>,
+                                e::unpacker up)
+{
+    ballot b;
+    std::vector<pvalue> accepted;
+    up = up >> b >> accepted;
+    CHECK_UNPACK(PAXOS_PHASE1B, up);
+
+    if (m_us.id != b.leader)
+    {
+        return;
+    }
+
+    if (m_scout.get() && m_scout->current_ballot() == b)
+    {
+        if (m_scout->take_up(si, &accepted[0], accepted.size()))
+        {
+            LOG(INFO) << "phase 1b:  " << si << " has taken up " << b;
+        }
+
+        std::vector<server_id> missing = m_scout->missing();
+        bool all_missing_are_suspected = true;
+
+        for (size_t i = 0; i < missing.size(); ++i)
+        {
+            if (!suspect_failed(missing[i]))
+            {
+                all_missing_are_suspected = false;
             }
         }
 
-        conn->is_cluster_member = false;
-        conn->is_client = m_fs.lookup_client(conn->token, &conn->is_live_client);
-        conn->is_prev = false;
-        conn->is_next = false;
+        if (all_missing_are_suspected && m_scout->adopted())
+        {
+            LOG(INFO) << "phase 1 complete: transitioning to phase 2 on " << b;
+            m_leader.reset(new leader(*m_scout));
+            m_leader->send_all_proposals(this);
+            m_scout.reset();
+            m_scouts_since_last_leader = 0;
+            m_first_scout = false;
+        }
+    }
+
+    observe_ballot(b);
+}
+
+void
+daemon :: send_paxos_phase2a(server_id to, const pvalue& p)
+{
+    size_t sz = BUSYBEE_HEADER_SIZE
+              + pack_size(REPLNET_PAXOS_PHASE2A)
+              + pack_size(p);
+    std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
+    msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_PAXOS_PHASE2A << p;
+    send(to, msg);
+}
+
+void
+daemon :: process_paxos_phase2a(server_id si,
+                                std::auto_ptr<e::buffer>,
+                                e::unpacker up)
+{
+    pvalue p;
+    up = up >> p;
+    CHECK_UNPACK(PAXOS_PHASE2A, up);
+
+    if (p.s < m_acceptor.lowest_acceptable_slot())
+    {
+        LOG(INFO) << "TRACE XXX " << si << " " << p.s << " " << m_acceptor.lowest_acceptable_slot();
+        return;
+    }
+
+    if (si == p.b.leader && p.b == m_acceptor.current_ballot() && p.s >= m_config.first_slot())
+    {
+        m_acceptor.accept(p);
+        LOG_IF(INFO, s_debug_mode) << "p2a: " << p;
+    }
+
+    send_paxos_phase2b(p.b.leader, p);
+    LOG_IF(ERROR, si != p.b.leader) << si << " is misusing " << p.b;
+}
+
+void
+daemon :: send_paxos_phase2b(server_id to, const pvalue& p)
+{
+    size_t sz = BUSYBEE_HEADER_SIZE
+              + pack_size(REPLNET_PAXOS_PHASE2B)
+              + pack_size(m_acceptor.current_ballot())
+              + pack_size(p);
+    std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
+    msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_PAXOS_PHASE2B << m_acceptor.current_ballot() << p;
+    send_when_acceptor_persistent(to, msg);
+}
+
+void
+daemon :: process_paxos_phase2b(server_id si,
+                                std::auto_ptr<e::buffer>,
+                                e::unpacker up)
+{
+    ballot b;
+    pvalue p;
+    up = up >> b >> p;
+    CHECK_UNPACK(PAXOS_PHASE2B, up);
+
+    if (m_leader.get() && m_leader->current_ballot() == b && b == p.b)
+    {
+        if (m_leader->accept(si, p))
+        {
+            for (size_t i = 0; i < m_config.servers().size(); ++i)
+            {
+                send_paxos_learn(m_config.servers()[i].id, p);
+            }
+        }
+
+        LOG_IF(INFO, s_debug_mode) << "p2b: " << p;
+    }
+
+    observe_ballot(b);
+}
+
+void
+daemon :: send_paxos_learn(server_id to, const pvalue& pval)
+{
+    size_t sz = BUSYBEE_HEADER_SIZE
+              + pack_size(REPLNET_PAXOS_LEARN)
+              + pack_size(pval);
+    std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
+    msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_PAXOS_LEARN << pval;
+    send(to, msg);
+}
+
+void
+daemon :: process_paxos_learn(server_id si,
+                              std::auto_ptr<e::buffer>,
+                              e::unpacker msg_up)
+{
+    pvalue p;
+    msg_up = msg_up >> p;
+    CHECK_UNPACK(PAXOS_LEARN, msg_up);
+
+    if (si == p.b.leader)
+    {
+        m_replica->learn(p);
+
+        if (m_replica->config().version() > m_config.version())
+        {
+            m_config_mtx.lock();
+            m_config = m_replica->config();
+            m_config_mtx.unlock();
+            m_scout.reset();
+            m_leader.reset();
+
+            if (!post_config_change_hook())
+            {
+                return;
+            }
+        }
+
+        uint64_t start;
+        uint64_t limit;
+        m_replica->window(&start, &limit);
+
+        if (m_scout.get())
+        {
+            m_scout->set_window(start, limit);
+        }
+
+        if (m_leader.get())
+        {
+            m_leader->set_window(this, start, limit);
+            uint64_t fill = m_replica->fill_up_to();
+
+            if (start < fill)
+            {
+                m_leader->nop_fill(this, fill);
+            }
+        }
+
+        if (m_last_replica_snapshot < m_replica->last_snapshot_num())
+        {
+            uint64_t snapshot_slot;
+            e::slice snapshot;
+            std::auto_ptr<e::buffer> snapshot_backing;
+            m_replica->get_last_snapshot(&snapshot_slot, &snapshot, &snapshot_backing);
+
+            if (m_acceptor.record_snapshot(snapshot_slot, snapshot))
+            {
+                char buf[16];
+                e::pack64be(m_us.id.get(), buf);
+                e::pack64be(snapshot_slot, buf + 8);
+                std::string cmd(buf, buf + 16);
+                enqueue_paxos_command(SLOT_SERVER_SET_GC_THRESH, cmd);
+                LOG(INFO) << "snapshotting state at " << snapshot_slot;
+                m_last_replica_snapshot = snapshot_slot;
+            }
+            else
+            {
+                LOG(ERROR) << "could not save snapshot: " << e::error::strerror(errno);
+            }
+        }
+
+        if (m_last_gc_slot < m_replica->gc_up_to())
+        {
+            m_last_gc_slot = m_replica->gc_up_to();
+            m_acceptor.garbage_collect(m_last_gc_slot);
+
+            if (m_leader.get())
+            {
+                m_leader->garbage_collect(m_last_gc_slot);
+            }
+        }
+    }
+    else
+    {
+        LOG(ERROR) << si << " is misusing " << p.b;
+    }
+}
+
+void
+daemon :: send_paxos_submit(uint64_t slot_start,
+                            uint64_t slot_limit,
+                            const e::slice& command)
+{
+    const size_t sz = BUSYBEE_HEADER_SIZE
+                    + pack_size(REPLNET_PAXOS_SUBMIT)
+                    + 2 * sizeof(uint64_t)
+                    + pack_size(command);
+    std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
+    msg->pack_at(BUSYBEE_HEADER_SIZE)
+        << REPLNET_PAXOS_SUBMIT << slot_start << slot_limit << command;
+    send(m_acceptor.current_ballot().leader, msg);
+}
+
+void
+daemon :: process_paxos_submit(server_id,
+                               std::auto_ptr<e::buffer> msg,
+                               e::unpacker up)
+{
+    uint64_t slot_start;
+    uint64_t slot_limit;
+    e::slice command;
+    up = up >> slot_start >> slot_limit >> command;
+    CHECK_UNPACK(PAXOS_SUBMIT, up);
+
+    if (m_leader.get())
+    {
+        std::string c(command.cdata(), command.size());
+        m_leader->propose(this, slot_start, slot_limit, c);
+    }
+    else if (m_scout.get())
+    {
+        m_scout->enqueue(slot_start, slot_limit, command);
+    }
+    else if (m_acceptor.current_ballot().leader != m_us.id)
+    {
+        LOG_IF(INFO, s_debug_mode) << "forwarding command to leader of " << m_acceptor.current_ballot();
+        send(m_acceptor.current_ballot().leader, msg);
+    }
+}
+
+void
+daemon :: enqueue_paxos_command(slot_type t,
+                                const std::string& command)
+{
+    enqueue_paxos_command(server_id(), 0, t, command);
+}
+
+void
+daemon :: enqueue_paxos_command(server_id on_behalf_of,
+                                uint64_t request_nonce,
+                                slot_type t,
+                                const std::string& command)
+{
+    std::auto_ptr<unordered_command> auc;
+    auc.reset(new unordered_command(on_behalf_of, request_nonce, t, command));
+    unordered_command* uc = auc.get();
+    std::list<unordered_command*> ucl;
+    ucl.push_back(uc);
+    m_unordered_mtx.lock();
+    m_unordered_cmds.splice(m_unordered_cmds.end(), ucl);
+    m_unordered_mtx.unlock();
+    auc.release();
+    uint64_t command_nonce;
+
+    if (!generate_nonce(&command_nonce))
+    {
+        return;
+    }
+
+    uc->set_command_nonce(command_nonce);
+    uint64_t start;
+    uint64_t limit;
+    m_replica->window(&start, &limit);
+    uc->set_lowest_possible_slot(start);
+    send_unordered_command(uc);
+}
+
+void
+daemon :: enqueue_robust_paxos_command(server_id on_behalf_of,
+                                       uint64_t request_nonce,
+                                       uint64_t command_nonce,
+                                       uint64_t min_slot,
+                                       slot_type t,
+                                       const std::string& command)
+{
+    std::auto_ptr<unordered_command> auc;
+    auc.reset(new unordered_command(on_behalf_of, request_nonce, t, command));
+    unordered_command* uc = auc.get();
+    std::list<unordered_command*> ucl;
+    ucl.push_back(uc);
+    m_unordered_mtx.lock();
+    m_unordered_cmds.splice(m_unordered_cmds.end(), ucl);
+    m_unordered_mtx.unlock();
+    auc.release();
+    uc->set_command_nonce(command_nonce);
+    uc->set_lowest_possible_slot(min_slot);
+    uc->set_robust();
+    send_unordered_command(uc);
+}
+
+void
+daemon :: flush_enqueued_commands_with_stale_leader()
+{
+    po6::threads::mutex::hold hold(&m_unordered_mtx);
+
+    for (std::list<unordered_command*>::iterator it = m_unordered_cmds.begin();
+            it != m_unordered_cmds.end(); ++it)
+    {
+        unordered_command* uc = *it;
+
+        if (uc->last_used_ballot() < m_acceptor.current_ballot())
+        {
+            send_unordered_command(uc);
+        }
+    }
+}
+
+void
+daemon :: periodic_flush_enqueued_commands(uint64_t)
+{
+    po6::threads::mutex::hold hold(&m_unordered_mtx);
+
+    if (!m_unordered_cmds.empty() && m_first_unordered != m_unordered_cmds.front()->command_nonce())
+    {
+        m_first_unordered = m_unordered_cmds.front()->command_nonce();
+        return;
+    }
+
+    uint64_t counter = 0;
+
+    for (std::list<unordered_command*>::iterator it = m_unordered_cmds.begin();
+            counter < REPLICANT_SLOTS_WINDOW && it != m_unordered_cmds.end(); ++it)
+    {
+        unordered_command* uc = *it;
+        send_unordered_command(uc);
+        ++counter;
+    }
+}
+
+void
+daemon :: send_unordered_command(unordered_command* uc)
+{
+    if (uc->command_nonce() == 0)
+    {
+        uint64_t command_nonce;
+
+        if (!generate_nonce(&command_nonce))
+        {
+            return;
+        }
+
+        uc->set_command_nonce(command_nonce);
+    }
+
+    assert(uc->command_nonce() != 0);
+
+    if (!uc->robust())
+    {
+        uint64_t start;
+        uint64_t limit;
+        m_replica->window(&start, &limit);
+        assert(uc->lowest_possible_slot() <= start);
+        uc->set_lowest_possible_slot(start);
+    }
+
+    const uint64_t start = uc->lowest_possible_slot();
+    const uint64_t limit = start + REPLICANT_SERVER_DRIVEN_NONCE_HISTORY;
+
+    std::string cmd;
+    char c = static_cast<char>(uc->type());
+    cmd.append(&c, 1);
+    c = uc->robust() ? 1 : 0;
+    cmd.append(&c, 1);
+    char nbuf[8];
+    e::pack64be(uc->command_nonce(), nbuf);
+    cmd.append(nbuf, 8);
+    cmd.append(uc->command());
+
+    if (m_leader.get())
+    {
+        uc->set_last_used_ballot(m_leader->current_ballot());
+        m_leader->propose(this, start, limit, cmd);
+    }
+    else if (m_acceptor.current_ballot().leader != m_us.id)
+    {
+        uc->set_last_used_ballot(m_acceptor.current_ballot());
+        send_paxos_submit(start, limit, e::slice(cmd));
+    }
+}
+
+void
+daemon :: observe_ballot(const ballot& b)
+{
+    m_highest_ballot = std::max(b, m_highest_ballot);
+
+    if (m_scout.get() && m_scout->current_ballot() < m_highest_ballot)
+    {
+        LOG(INFO) << "stopping " << *m_scout << " because " << m_highest_ballot << " is floating around";
+        m_scout.reset();
+    }
+
+    if (m_leader.get() && m_leader->current_ballot() < m_highest_ballot)
+    {
+        LOG(INFO) << "stopping " << *m_leader << " because " << m_highest_ballot << " is floating around";
+        m_leader.reset();
+    }
+}
+
+void
+daemon :: periodic_scout(uint64_t)
+{
+    if (m_leader.get())
+    {
+        return;
+    }
+
+    if (!m_scout.get() && m_scout_wait_cycles == 0)
+    {
+        if (!m_first_scout &&
+            !m_replica->discontinuous() &&
+            m_acceptor.current_ballot().leader != server_id() &&
+            m_acceptor.current_ballot().leader != m_us.id &&
+            !suspect_failed(m_acceptor.current_ballot().leader))
+        {
+            return;
+        }
+
+        std::vector<server_id> servers = m_config.server_ids();
+        ballot next_ballot(m_highest_ballot.number + 1, m_us.id);
+        LOG(INFO) << "starting scout for " << next_ballot;
+        m_scout.reset(new scout(next_ballot, &servers[0], servers.size()));
+        m_scouts_since_last_leader += 1ULL << m_config.index(m_us.id);
+        m_scout_wait_cycles = m_scouts_since_last_leader;
+        uint64_t start;
+        uint64_t limit;
+        m_replica->window(&start, &limit);
+        m_scout->set_window(start, limit);
+    }
+
+    if (m_scout_wait_cycles > 0)
+    {
+        --m_scout_wait_cycles;
+        return;
+    }
+
+    assert(m_scout.get());
+
+    if (m_acceptor.current_ballot() > m_scout->current_ballot())
+    {
+        m_scout.reset();
+        return;
+    }
+
+    std::vector<server_id> sids = m_scout->missing();
+
+    for (size_t i = 0; i < sids.size(); ++i)
+    {
+        send_paxos_phase1a(sids[i], m_scout->current_ballot());
+    }
+}
+
+void
+daemon :: periodic_abdicate(uint64_t)
+{
+    if (!m_leader.get())
+    {
+        return;
+    }
+
+    const size_t quorum = m_leader->quorum_size();
+    const std::vector<server_id>& acceptors(m_leader->acceptors());
+    size_t not_suspected = 0;
+
+    for (size_t i = 0; i < acceptors.size(); ++i)
+    {
+        if (!suspect_failed(acceptors[i]))
+        {
+            ++not_suspected;
+        }
+    }
+
+    if (not_suspected < quorum)
+    {
+        LOG(WARNING) << "abdicating leadership of " << m_leader->current_ballot()
+                     << " because only " << not_suspected
+                     << " servers seem to be alive, and we need " << quorum
+                     << " to make progress";
+        m_leader.reset();
+    }
+}
+
+void
+daemon :: periodic_warn_scout_stuck(uint64_t)
+{
+    if (!m_scout.get())
+    {
+        return;
+    }
+
+    std::vector<server_id> missing = m_scout->missing();
+    bool all_missing_are_suspected = true;
+
+    for (size_t i = 0; i < missing.size(); ++i)
+    {
+        if (!suspect_failed(missing[i]))
+        {
+            all_missing_are_suspected = false;
+        }
+    }
+
+    if (!m_scout->adopted() && all_missing_are_suspected)
+    {
+        LOG(INFO) << *m_scout << " is not making progress because too many servers are offline";
+        const size_t sz = m_scout->acceptors().size();
+        const size_t quorum = quorum_calc(sz);
+        assert(missing.size() <= sz);
+        const size_t not_missing = sz - missing.size();
+        LOG(INFO) << "bring " << (quorum - not_missing)
+                  << " or more of the following servers online to restore liveness:";
+
+        for (size_t i = 0; i < missing.size(); ++i)
+        {
+            const server* s = m_config.get(missing[i]);
+            assert(s);
+            LOG(INFO) << *s;
+        }
+    }
+}
+
+bool
+daemon :: post_config_change_hook()
+{
+    m_bootstrap = m_config.current_bootstrap();
+
+    while (!m_config.has(m_us.id))
+    {
+        LOG(WARNING) << "exiting because we were removed from the configuration";
+        m_scout.reset();
+        m_leader.reset();
+        __sync_fetch_and_add(&s_interrupts, 1);
+        return false;
+    }
+
+    // don't move code above to below and vice versa
+    // this is a comment barrier
+
+    m_highest_ballot = std::max(m_highest_ballot, m_acceptor.current_ballot());
+    m_last_seen.resize(m_config.servers().size());
+    m_suspect_counts.resize(m_config.servers().size());
+    const uint64_t now = monotonic_time();
+
+    for (size_t i = 0; i < m_last_seen.size(); ++i)
+    {
+        m_last_seen[i] = now;
+        m_suspect_counts[i] = 0;
+    }
+
+    periodic_generate_nonce_sequence(now);
+    return true;
+}
+
+std::string
+daemon :: construct_become_member_command(const server& s)
+{
+    const size_t sz = pack_size(SLOT_SERVER_BECOME_MEMBER)
+                    + sizeof(uint8_t)
+                    + sizeof(uint64_t)
+                    + pack_size(s);
+    std::auto_ptr<e::buffer> cmd(e::buffer::create(sz));
+    cmd->pack_at(0)
+        << SLOT_SERVER_BECOME_MEMBER << uint8_t(0) << uint64_t(0) << s;
+    return std::string(cmd->as_slice().cdata(), cmd->size());
+}
+
+void
+daemon :: process_server_become_member(server_id si,
+                                       std::auto_ptr<e::buffer>,
+                                       e::unpacker up)
+{
+    server s;
+    up = up >> s;
+    CHECK_UNPACK(SERVER_BECOME_MEMBER, up);
+    LOG(INFO) << "received request from " << s << " to become a member";
+
+    if (m_replica.get() && m_replica->any_config_has(s.id))
+    {
+        LOG(INFO) << "request ignored because the ID is already in use";
+    }
+    else if (m_replica.get() && m_replica->any_config_has(s.bind_to))
+    {
+        LOG(INFO) << "request ignored because the address is already in use";
+    }
+    else
+    {
+        LOG(INFO) << "submitting the request to the cluster for consensus";
+        send_paxos_submit(0, UINT64_MAX, construct_become_member_command(s));
+    }
+
+    send_bootstrap(si);
+}
+
+void
+daemon :: process_unique_number(server_id si,
+                                std::auto_ptr<e::buffer> msg,
+                                e::unpacker up)
+{
+    uint64_t client_nonce;
+    up = up >> client_nonce;
+    CHECK_UNPACK(UNIQUE_NUMBER, up);
+    uint64_t cluster_nonce;
+
+    if (!generate_nonce(&cluster_nonce))
+    {
+        process_when_nonces_available(si, msg);
+        return;
+    }
+
+    const size_t sz = BUSYBEE_HEADER_SIZE
+                    + pack_size(REPLNET_CLIENT_RESPONSE)
+                    + sizeof(uint64_t)
+                    + sizeof(uint64_t);
+    msg.reset(e::buffer::create(sz));
+    msg->pack_at(BUSYBEE_HEADER_SIZE)
+        << REPLNET_CLIENT_RESPONSE << client_nonce << cluster_nonce;
+    send(si, msg);
+}
+
+void
+daemon :: periodic_generate_nonce_sequence(uint64_t)
+{
+    if (m_unique_token > 0 && m_unique_base > 0 && m_unique_offset < REPLICANT_NONCE_INCREMENT)
+    {
+        return;
+    }
+
+    uint64_t new_token;
+
+    if (!generate_token(&new_token))
+    {
+        LOG(ERROR) << "could not read from /dev/urandom";
+        return;
+    }
+
+    const size_t sz = pack_size(SLOT_INCREMENT_COUNTER)
+                    + pack_size(m_us.id)
+                    + sizeof(uint8_t)
+                    + 2 * sizeof(uint64_t);
+    std::auto_ptr<e::buffer> cmd(e::buffer::create(sz));
+    cmd->pack_at(0)
+        << SLOT_INCREMENT_COUNTER << uint8_t(0) << uint64_t(0) << m_us.id << new_token;
+    send_paxos_submit(0, UINT64_MAX, std::string(cmd->as_slice().cdata(), cmd->size()));
+    m_unique_token = new_token;
+}
+
+void
+daemon :: callback_nonce_sequence(server_id si, uint64_t token, uint64_t counter)
+{
+    if (si == m_us.id && token == m_unique_token)
+    {
+        m_unique_base = counter;
+        m_unique_offset = 0;
+
+        while (!m_msgs_waiting_for_nonces.empty())
+        {
+            si = m_msgs_waiting_for_nonces.front().si;
+            std::auto_ptr<e::buffer> msg(m_msgs_waiting_for_nonces.front().msg);
+            m_msgs_waiting_for_nonces.pop_front();
+            m_busybee->deliver(si.get(), msg);
+        }
+    }
+}
+
+bool
+daemon :: generate_nonce(uint64_t* nonce)
+{
+    if (m_unique_base > 0 && m_unique_offset < REPLICANT_NONCE_INCREMENT)
+    {
+        *nonce = m_unique_base + m_unique_offset;
+        ++m_unique_offset;
+
+        if (m_unique_offset + REPLICANT_NONCE_GENERATE_WHEN_FEWER_THAN == REPLICANT_NONCE_INCREMENT)
+        {
+            m_unique_token = 0;
+            periodic_generate_nonce_sequence(0);
+        }
+
         return true;
     }
 
     return false;
 }
 
-bool
-daemon :: send(const replicant::connection& conn, std::auto_ptr<e::buffer> msg)
+void
+daemon :: process_when_nonces_available(server_id si, std::auto_ptr<e::buffer> msg)
 {
-    po6::threads::mutex::hold hold(&m_send_mtx);
+    m_msgs_waiting_for_nonces.push_back(deferred_msg(0, si, msg.release()));
+}
 
-    if (m_disrupted_backoff.find(conn.token) != m_disrupted_backoff.end())
+void
+daemon :: process_object_failed(server_id si,
+                                std::auto_ptr<e::buffer>,
+                                e::unpacker)
+{
+    if (si == m_us.id)
+    {
+        m_replica->enqueue_failed_objects();
+    }
+}
+
+void
+daemon :: periodic_clean_dead_objects(uint64_t)
+{
+    m_replica->clean_dead_objects();
+}
+
+void
+daemon :: callback_condition(server_id si,
+                             uint64_t nonce,
+                             uint64_t state,
+                             const std::string& _data)
+{
+    e::slice data(_data);
+    const size_t sz = BUSYBEE_HEADER_SIZE
+                    + pack_size(REPLNET_CLIENT_RESPONSE)
+                    + sizeof(uint64_t)
+                    + pack_size(REPLICANT_SUCCESS)
+                    + sizeof(uint64_t)
+                    + pack_size(data);
+    std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
+    msg->pack_at(BUSYBEE_HEADER_SIZE)
+        << REPLNET_CLIENT_RESPONSE << nonce << REPLICANT_SUCCESS << state << data;
+    send_from_non_main_thread(si, msg);
+}
+
+void
+daemon :: callback_enqueued(uint64_t command_nonce,
+                            server_id* si,
+                            uint64_t* request_nonce)
+{
+    *si = server_id();
+    *request_nonce = 0;
+    po6::threads::mutex::hold hold(&m_unordered_mtx);
+
+    for (std::list<unordered_command*>::iterator it = m_unordered_cmds.begin();
+            it != m_unordered_cmds.end(); ++it)
+    {
+        unordered_command* uc = *it;
+
+        if (uc->command_nonce() == command_nonce)
+        {
+            m_unordered_cmds.erase(it);
+            *si = uc->on_behalf_of();
+            *request_nonce = uc->request_nonce();
+            delete uc;
+            return;
+        }
+    }
+}
+
+void
+daemon :: callback_client(server_id si, uint64_t nonce,
+                          replicant_returncode status,
+                          const std::string& result)
+{
+    e::slice output(result);
+    const size_t sz = BUSYBEE_HEADER_SIZE
+                    + pack_size(REPLNET_CLIENT_RESPONSE)
+                    + sizeof(uint64_t)
+                    + pack_size(status)
+                    + pack_size(output);
+    std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
+    msg->pack_at(BUSYBEE_HEADER_SIZE)
+        << REPLNET_CLIENT_RESPONSE << nonce << status << output;
+    send_from_non_main_thread(si, msg);
+}
+
+void
+daemon :: process_poke(server_id si,
+                       std::auto_ptr<e::buffer>,
+                       e::unpacker up)
+{
+    uint64_t client_nonce;
+    up = up >> client_nonce;
+    CHECK_UNPACK(POKE, up);
+
+    std::ostringstream ostr;
+    po6::net::location addr;
+
+    if (m_busybee->get_addr(si.get(), &addr) == BUSYBEE_SUCCESS)
+    {
+        ostr << m_us << " poked by " << addr << "/nonce(" << client_nonce << ")";
+    }
+    else
+    {
+        ostr << m_us << " poked by " << si << "/nonce(" << client_nonce << ")";
+    }
+
+    enqueue_paxos_command(si, client_nonce, SLOT_POKE, ostr.str());
+}
+
+void
+daemon :: process_cond_wait(server_id si,
+                            std::auto_ptr<e::buffer>,
+                            e::unpacker up)
+{
+    uint64_t client_nonce;
+    e::slice obj;
+    e::slice cond;
+    uint64_t state;
+    up = up >> client_nonce >> obj >> cond >> state;
+    CHECK_UNPACK(COND_WAIT, up);
+    m_replica->cond_wait(si, client_nonce, obj, cond, state);
+}
+
+void
+daemon :: process_call(server_id si,
+                       std::auto_ptr<e::buffer>,
+                       e::unpacker up)
+{
+    uint64_t client_nonce;
+    up = up >> client_nonce;
+    CHECK_UNPACK(CALL, up);
+    e::slice command(up.remainder());
+    enqueue_paxos_command(si, client_nonce, SLOT_CALL, std::string(command.cdata(), command.size()));
+}
+
+void
+daemon :: process_get_robust_params(server_id si,
+                                    std::auto_ptr<e::buffer> msg,
+                                    e::unpacker up)
+{
+    uint64_t client_nonce;
+    up = up >> client_nonce;
+    CHECK_UNPACK(GET_ROBUST_PARAMS, up);
+    uint64_t cluster_nonce;
+
+    if (!generate_nonce(&cluster_nonce))
+    {
+        process_when_nonces_available(si, msg);
+        return;
+    }
+
+    uint64_t start;
+    uint64_t limit;
+    m_replica->window(&start, &limit);
+    const size_t sz = BUSYBEE_HEADER_SIZE
+                    + pack_size(REPLNET_CLIENT_RESPONSE)
+                    + sizeof(uint64_t)
+                    + sizeof(uint64_t)
+                    + sizeof(uint64_t);
+    msg.reset(e::buffer::create(sz));
+    msg->pack_at(BUSYBEE_HEADER_SIZE)
+        << REPLNET_CLIENT_RESPONSE << client_nonce << cluster_nonce << start;
+    send(si, msg);
+}
+
+void
+daemon :: process_call_robust(server_id si,
+                              std::auto_ptr<e::buffer> msg,
+                              e::unpacker up)
+{
+    uint64_t client_nonce;
+    uint64_t command_nonce;
+    uint64_t min_slot;
+    up = up >> client_nonce >> command_nonce >> min_slot;
+    CHECK_UNPACK(CALL_ROBUST, up);
+    replicant_returncode status;
+    std::string output;
+
+    if (m_replica->has_output(command_nonce, min_slot, &status, &output))
+    {
+        callback_client(si, client_nonce, status, output);
+        return;
+    }
+
+    e::slice command(up.remainder());
+    enqueue_robust_paxos_command(si, client_nonce, command_nonce, min_slot, SLOT_CALL, std::string(command.cdata(), command.size()));
+}
+
+void
+daemon :: periodic_tick(uint64_t)
+{
+    std::string cmd;
+    e::packer pa(&cmd);
+    pa = pa << m_replica->last_tick();
+    enqueue_paxos_command(SLOT_TICK, cmd);
+}
+
+void
+daemon :: send_ping(server_id to)
+{
+    if (to == m_us.id)
+    {
+        return;
+    }
+
+    size_t sz = BUSYBEE_HEADER_SIZE
+              + pack_size(REPLNET_PING)
+              + pack_size(m_acceptor.current_ballot());
+    std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
+    msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_PING << m_acceptor.current_ballot();
+    send(to, msg);
+}
+
+void
+daemon :: process_ping(server_id si,
+                       std::auto_ptr<e::buffer>,
+                       e::unpacker up)
+{
+    ballot b;
+    up = up >> b;
+    CHECK_UNPACK(PING, up);
+    send_pong(si);
+    m_highest_ballot = std::max(b, m_highest_ballot);
+}
+
+void
+daemon :: send_pong(server_id to)
+{
+    if (to == m_us.id)
+    {
+        return;
+    }
+
+    size_t sz = BUSYBEE_HEADER_SIZE
+              + pack_size(REPLNET_PONG)
+              + pack_size(m_acceptor.current_ballot());
+    std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
+    msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_PONG << m_acceptor.current_ballot();
+    send(to, msg);
+}
+
+void
+daemon :: process_pong(server_id si,
+                       std::auto_ptr<e::buffer>,
+                       e::unpacker up)
+{
+    ballot b;
+    up = up >> b;
+    CHECK_UNPACK(PING, up);
+    m_highest_ballot = std::max(b, m_highest_ballot);
+    const std::vector<server>& servers(m_config.servers());
+
+    for (size_t i = 0; i < servers.size(); ++i)
+    {
+        if (servers[i].id == si)
+        {
+            m_last_seen[i] = monotonic_time();
+        }
+    }
+}
+
+void
+daemon :: periodic_ping_acceptors(uint64_t)
+{
+    const std::vector<server>& servers(m_config.servers());
+
+    for (size_t i = 0; i < servers.size(); ++i)
+    {
+        send_ping(servers[i].id);
+    }
+}
+
+bool
+daemon :: suspect_failed(server_id si)
+{
+    assert(!m_last_seen.empty());
+    const uint64_t now = monotonic_time();
+    const uint64_t last = *std::max_element(m_last_seen.begin(), m_last_seen.end());
+    const uint64_t self_suspicion = now - last;
+
+    if (si == m_us.id)
     {
         return false;
     }
 
-    switch (m_busybee->send(conn.token, msg))
+    const std::vector<server>& servers(m_config.servers());
+
+    for (size_t i = 0; i < servers.size(); ++i)
+    {
+        if (servers[i].id == si)
+        {
+            const uint64_t diff = now - m_last_seen[i];
+            const uint64_t susp = diff - self_suspicion;
+            return susp > m_s.SUSPICION_TIMEOUT;
+        }
+    }
+
+    return !m_config.has(si);
+}
+
+void
+daemon :: periodic_submit_dead_nodes(uint64_t)
+{
+    const std::vector<server>& servers(m_config.servers());
+    assert(m_last_seen.size() == servers.size());
+    assert(m_suspect_counts.size() == servers.size());
+    assert(!m_last_seen.empty());
+    const uint64_t now = monotonic_time();
+    const uint64_t last = *std::max_element(m_last_seen.begin(), m_last_seen.end());
+    const uint64_t self_suspicion = now - last;
+
+    for (size_t i = 0; i < servers.size(); ++i)
+    {
+        const uint64_t diff = now - m_last_seen[i];
+        const uint64_t susp = diff - self_suspicion;
+
+        if (servers[i].id != m_us.id && susp > m_s.SUSPICION_TIMEOUT)
+        {
+            ++m_suspect_counts[i];
+        }
+        else
+        {
+            m_suspect_counts[i] = 0;
+        }
+    }
+}
+
+bool
+daemon :: send(server_id si, std::auto_ptr<e::buffer> msg)
+{
+    if (si == m_us.id)
+    {
+        return m_busybee->deliver(si.get(), msg);
+    }
+
+    busybee_returncode rc = m_busybee->send(si.get(), msg);
+
+    switch (rc)
     {
         case BUSYBEE_SUCCESS:
             return true;
         case BUSYBEE_DISRUPTED:
-            handle_disruption(conn.token);
+            handle_disruption(si);
             return false;
         case BUSYBEE_SHUTDOWN:
         case BUSYBEE_POLLFAILED:
@@ -2926,29 +2049,27 @@ daemon :: send(const replicant::connection& conn, std::auto_ptr<e::buffer> msg)
         case BUSYBEE_TIMEOUT:
         case BUSYBEE_EXTERNAL:
         case BUSYBEE_INTERRUPTED:
+            LOG(ERROR) << "could not send message: " << rc;
         default:
             return false;
     }
 }
 
 bool
-daemon :: send(const chain_node& node, std::auto_ptr<e::buffer> msg)
+daemon :: send_from_non_main_thread(server_id si, std::auto_ptr<e::buffer> msg)
 {
-    po6::threads::mutex::hold hold(&m_send_mtx);
-
-    if (m_disrupted_backoff.find(node.token) != m_disrupted_backoff.end())
+    if (e::atomic::load_32_acquire(&m_busybee_init) == 0)
     {
         return false;
     }
 
-    m_busybee_mapper.set(node);
+    busybee_returncode rc = m_busybee->send(si.get(), msg);
 
-    switch (m_busybee->send(node.token, msg))
+    switch (rc)
     {
         case BUSYBEE_SUCCESS:
             return true;
         case BUSYBEE_DISRUPTED:
-            handle_disruption(node.token);
             return false;
         case BUSYBEE_SHUTDOWN:
         case BUSYBEE_POLLFAILED:
@@ -2956,223 +2077,209 @@ daemon :: send(const chain_node& node, std::auto_ptr<e::buffer> msg)
         case BUSYBEE_TIMEOUT:
         case BUSYBEE_EXTERNAL:
         case BUSYBEE_INTERRUPTED:
+            LOG(ERROR) << "could not send message: " << rc;
         default:
             return false;
     }
 }
 
 bool
-daemon :: send_no_disruption(uint64_t token, std::auto_ptr<e::buffer> msg)
+daemon :: send_when_acceptor_persistent(server_id si, std::auto_ptr<e::buffer> msg)
 {
-    const chain_node* node = m_config_manager.latest().node_from_token(token);
+    m_deferred_msgs.push_back(deferred_msg(m_acceptor.write_cut(), si, msg.release()));
+    return true;
+}
 
-    if (node)
-    {
-        m_busybee_mapper.set(*node);
-    }
+void
+daemon :: flush_acceptor_messages()
+{
+    uint64_t when = m_acceptor.sync_cut();
 
-    switch (m_busybee->send(token, msg))
+    while (!m_deferred_msgs.empty() && m_deferred_msgs.front().when <= when)
     {
-        case BUSYBEE_SUCCESS:
-            return true;
-        case BUSYBEE_DISRUPTED:
-            return false;
-        case BUSYBEE_SHUTDOWN:
-        case BUSYBEE_POLLFAILED:
-        case BUSYBEE_ADDFDFAIL:
-        case BUSYBEE_TIMEOUT:
-        case BUSYBEE_EXTERNAL:
-        case BUSYBEE_INTERRUPTED:
-        default:
-            return false;
+        deferred_msg* dm = &m_deferred_msgs.front();
+        std::auto_ptr<e::buffer> msg(dm->msg);
+        send(dm->si, msg);
+        m_deferred_msgs.pop_front();
     }
 }
 
 void
-daemon :: handle_disruption(uint64_t token)
+daemon :: handle_disruption(server_id si)
 {
-    m_disrupted_backoff.insert(token);
+    // suspect a disrupted server immediately
+    const std::vector<server>& servers(m_config.servers());
+    assert(m_last_seen.size() == servers.size());
 
-    if (!m_disrupted_retry_scheduled)
+    for (size_t i = 0; i < servers.size(); ++i)
     {
-        trip_periodic(e::time() + m_s.CONNECTION_RETRY, &daemon::periodic_handle_disruption);
-        m_disrupted_retry_scheduled = true;
+        if (servers[i].id == si)
+        {
+            m_last_seen[i] = 0;
+        }
+    }
+
+    // remove invalid messages
+
+    for (std::list<deferred_msg>::iterator it = m_deferred_msgs.begin();
+            it != m_deferred_msgs.end(); )
+    {
+        if (it->si == si)
+        {
+            it = m_deferred_msgs.erase(it);
+        }
+        else
+        {
+            ++it;
+        }
+    }
+
+    for (std::list<deferred_msg>::iterator it = m_msgs_waiting_for_nonces.begin();
+            it != m_msgs_waiting_for_nonces.end(); )
+    {
+        if (it->si == si)
+        {
+            it = m_msgs_waiting_for_nonces.erase(it);
+        }
+        else
+        {
+            ++it;
+        }
     }
 }
 
 void
-daemon :: periodic_handle_disruption(uint64_t now)
+daemon :: debug_dump()
 {
-    m_disrupted_retry_scheduled = false;
-    std::set<uint64_t> disrupted_backoff = m_disrupted_backoff;
-    m_disrupted_backoff.clear();
+    po6::threads::mutex::hold hold(&m_unordered_mtx);
+    LOG(INFO) << "============================ Debug Dump Begins Here ============================";
+    LOG(INFO) << "we are " << m_us;
+    LOG(INFO) << "our configuration is " << m_config;
+    LOG(INFO) << "we have " << m_unordered_cmds.size() << " unordered commands";
+    LOG(INFO) << "--------------------------------------------------------------------------------";
+    LOG(INFO) << "Acceptor: currently adopted " << m_acceptor.current_ballot() << " and accepted pvalues:";
+    const std::vector<pvalue>& pvals(m_acceptor.pvals());
 
-    for (std::set<uint64_t>::iterator it = disrupted_backoff.begin();
-            it != disrupted_backoff.end(); ++it)
+    for (size_t i = 0; i < pvals.size(); ++i)
     {
-        uint64_t token = *it;
-        handle_disruption_reset_reconfiguration(token);
-        handle_disruption_reset_healing(token);
+        LOG(INFO) << pvals[i];
     }
 
-    if (!m_disrupted_backoff.empty())
+    LOG(INFO) << "--------------------------------------------------------------------------------";
+
+    if (m_scout.get())
     {
-        trip_periodic(now + m_s.CONNECTION_RETRY, &daemon::periodic_handle_disruption);
-        m_disrupted_retry_scheduled = true;
+        LOG(INFO) << "Scout: " << m_scout->current_ballot();
+        LOG(INFO) << "window: [" << m_scout->window_start() << ", " << m_scout->window_limit() << ")";
+
+        for (size_t i = 0; i < m_scout->acceptors().size(); ++i)
+        {
+            LOG(INFO) << "acceptor[" << i << "] = " << m_scout->acceptors()[i];
+        }
+
+        for (size_t i = 0; i < m_scout->taken_up().size(); ++i)
+        {
+            LOG(INFO) << "taken-by[" << i << "] = " << m_scout->taken_up()[i];
+        }
+
+        LOG(INFO) << "adopted = " << (m_scout->adopted() ? "yes" : "no");
+        LOG(INFO) << "pvals:";
+
+        for (size_t i = 0; i < m_scout->pvals().size(); ++i)
+        {
+            LOG(INFO) << m_scout->pvals()[i];
+        }
     }
+    else
+    {
+        LOG(INFO) << "Scout: none";
+    }
+
+    LOG(INFO) << "--------------------------------------------------------------------------------";
+
+    if (m_leader.get())
+    {
+        LOG(INFO) << "Leader: " << m_leader->current_ballot();
+        LOG(INFO) << "window: [" << m_leader->window_start() << ", " << m_leader->window_limit() << ")";
+        LOG(INFO) << "a response from " << m_leader->quorum_size() << " of the following is a quorum of acceptors:";
+
+        for (size_t i = 0; i < m_leader->acceptors().size(); ++i)
+        {
+            LOG(INFO) << "acceptor[" << i << "] = " << m_leader->acceptors()[i];
+        }
+    }
+    else
+    {
+        LOG(INFO) << "Leader: none";
+    }
+
+    LOG(INFO) << "--------------------------------------------------------------------------------";
+
+    if (m_replica.get())
+    {
+        LOG(INFO) << "Replica: " << m_replica->config();
+        uint64_t start;
+        uint64_t limit;
+        m_replica->window(&start, &limit);
+        LOG(INFO) << "window: [" << start << ", " << limit << ")";
+        LOG(INFO) << "discontinuous: " << (m_replica->discontinuous() ? "yes" : "no");
+        std::vector<configuration> configs(m_replica->configs().begin(),
+                                           m_replica->configs().end());
+
+        for (size_t i = 0; i < configs.size(); ++i)
+        {
+            LOG(INFO) << "config[" << configs[i].first_slot() << "] = " << configs[i];
+        }
+    }
+    else
+    {
+        LOG(INFO) << "Replica: none";
+    }
+
+    LOG(INFO) << "============================= Debug Dump Ends Here =============================";
 }
+
+struct daemon::periodic
+{
+    periodic()
+        : interval_nanos(UINT64_MAX), next_run(0), fp() {}
+    periodic(uint64_t in, periodic_fptr f)
+        : interval_nanos(in), next_run(0), fp(f) {}
+    ~periodic() throw () {}
+
+    uint64_t interval_nanos;
+    uint64_t next_run;
+    periodic_fptr fp;
+};
 
 void
-daemon :: handle_disruption_reset_healing(uint64_t token)
+daemon :: register_periodic(unsigned interval_ms, periodic_fptr fp)
 {
-    const chain_node* next = m_config_manager.stable().next(m_us.token);
-
-    if (next)
-    {
-        if (token == next->token)
-        {
-            reset_healing();
-        }
-    }
-
-    maybe_send_stable();
+    uint64_t interval_nanos = interval_ms;
+    interval_nanos *= 1000000ULL;
+    m_periodic.push_back(periodic(interval_nanos, fp));
 }
 
-void
-daemon :: handle_disruption_reset_reconfiguration(uint64_t token)
+// round x up to a multiple of y
+static uint64_t
+next_interval(uint64_t x, uint64_t y)
 {
-    std::vector<configuration> config_chain;
-    std::vector<configuration_manager::proposal> proposals;
-    m_config_manager.get_config_chain(&config_chain);
-    m_config_manager.get_proposals(&proposals);
-
-    for (size_t i = 0; i < config_chain.size(); ++ i)
-    {
-        const chain_node* next = config_chain[i].next(m_us.token);
-
-        if (!next || next->token != token)
-        {
-            continue;
-        }
-
-        configuration_manager::proposal* prop = NULL;
-
-        for (size_t j = 0; j < proposals.size(); ++j)
-        {
-            if (proposals[j].version == config_chain[i].version())
-            {
-                prop = &proposals[j];
-                break;
-            }
-        }
-
-        if (!prop)
-        {
-            continue;
-        }
-
-        std::vector<configuration> cc(config_chain.begin(), config_chain.begin() + i + 1);
-        size_t sz = BUSYBEE_HEADER_SIZE
-                  + pack_size(REPLNET_CONFIG_PROPOSE)
-                  + 2 * sizeof(uint64_t)
-                  + pack_size(m_us)
-                  + pack_size(cc);
-        std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
-        msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_CONFIG_PROPOSE
-                                          << prop->id << prop->time
-                                          << m_us << cc;
-        send(*next, msg);
-    }
-}
-
-typedef void (daemon::*_periodic_fptr)(uint64_t now);
-typedef std::pair<uint64_t, _periodic_fptr> _periodic;
-
-static bool
-compare_periodic(const _periodic& lhs, const _periodic& rhs)
-{
-    return lhs.first > rhs.first;
-}
-
-void
-daemon :: trip_periodic(uint64_t when, periodic_fptr fp)
-{
-    po6::threads::mutex::hold hold(&m_periodic_mtx);
-
-    for (size_t i = 0; i < m_periodic.size(); ++i)
-    {
-        if (m_periodic[i].second == fp)
-        {
-            m_periodic[i].second = &daemon::periodic_nop;
-        }
-    }
-
-    // Clean up dead functions from the front
-    while (!m_periodic.empty() && m_periodic[0].second == &daemon::periodic_nop)
-    {
-        std::pop_heap(m_periodic.begin(), m_periodic.end(), compare_periodic);
-        m_periodic.pop_back();
-    }
-
-    // And from the back
-    while (!m_periodic.empty() && m_periodic.back().second == &daemon::periodic_nop)
-    {
-        m_periodic.pop_back();
-    }
-
-    m_periodic.push_back(std::make_pair(when, fp));
-    std::push_heap(m_periodic.begin(), m_periodic.end(), compare_periodic);
+    uint64_t z = ((x + y) / y) * y;
+    assert(x < z);
+    return z;
 }
 
 void
 daemon :: run_periodic()
 {
-    po6::threads::mutex::hold hold(&m_periodic_mtx);
     uint64_t now = monotonic_time();
 
-    while (!m_periodic.empty() && m_periodic[0].first <= now)
+    for (size_t i = 0; i < m_periodic.size(); ++i)
     {
-        if (m_periodic.size() > m_s.PERIODIC_SIZE_WARNING)
+        if (m_periodic[i].next_run <= now)
         {
-            LOG(WARNING) << "there are " << m_periodic.size()
-                         << " functions scheduled which exceeds the threshold of "
-                         << m_s.PERIODIC_SIZE_WARNING << " functions";
-        }
-
-        periodic_fptr fp;
-        std::pop_heap(m_periodic.begin(), m_periodic.end(), compare_periodic);
-        fp = m_periodic.back().second;
-        m_periodic.pop_back();
-        m_periodic_mtx.unlock();
-        (this->*fp)(now);
-        m_periodic_mtx.lock();
-    }
-}
-
-void
-daemon :: periodic_nop(uint64_t)
-{
-}
-
-bool
-daemon :: generate_token(uint64_t* token)
-{
-    po6::io::fd sysrand(open("/dev/urandom", O_RDONLY));
-
-    if (sysrand.get() < 0)
-    {
-        return false;
-    }
-
-    *token = 0;
-
-    while (*token < (1ULL << 32))
-    {
-        if (sysrand.read(token, sizeof(*token)) != sizeof(*token))
-        {
-            return false;
+            (this->*m_periodic[i].fp)(now);
+            m_periodic[i].next_run = next_interval(now, m_periodic[i].interval_nanos); 
         }
     }
-
-    return true;
 }

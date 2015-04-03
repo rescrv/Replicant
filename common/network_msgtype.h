@@ -1,4 +1,4 @@
-// Copyright (c) 2012, Robert Escriva
+// Copyright (c) 2012-2015, Robert Escriva
 // All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
@@ -25,61 +25,58 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
-#ifndef replicant_network_msgtype_h_
-#define replicant_network_msgtype_h_
+#ifndef replicant_common_network_msgtype_h_
+#define replicant_common_network_msgtype_h_
 
 // e
 #include <e/buffer.h>
 
-namespace replicant
-{
+// Replicant
+#include "namespace.h"
 
-// next avail 29
-enum replicant_network_msgtype
+BEGIN_REPLICANT_NAMESPACE
+
+enum network_msgtype
 {
     REPLNET_NOP                     = 0,
-    REPLNET_BOOTSTRAP               = 1,
-    REPLNET_INFORM                  = 2,
-    REPLNET_SERVER_REGISTER         = 3,
-    REPLNET_SERVER_REGISTER_FAILED  = 4,
-    REPLNET_SERVER_CHANGE_ADDRESS   = 26,
-    REPLNET_SERVER_IDENTIFY         = 27,
-    REPLNET_SERVER_IDENTITY         = 28,
-    REPLNET_CONFIG_PROPOSE          = 5,
-    REPLNET_CONFIG_ACCEPT           = 6,
-    REPLNET_CONFIG_REJECT           = 7,
-    REPLNET_CLIENT_REGISTER         = 8,
-    REPLNET_CLIENT_DISCONNECT       = 9,
-    REPLNET_CLIENT_TIMEOUT          = 10,
-    REPLNET_CLIENT_UNKNOWN          = 11,
-    REPLNET_CLIENT_DECEASED         = 12,
-    REPLNET_COMMAND_SUBMIT          = 13,
-    REPLNET_COMMAND_ISSUE           = 14,
-    REPLNET_COMMAND_ACK             = 15,
-    REPLNET_COMMAND_RESPONSE        = 16,
-    REPLNET_HEAL_REQ                = 17,
-    REPLNET_HEAL_RETRY              = 18,
-    REPLNET_HEAL_RESP               = 19,
-    REPLNET_HEAL_DONE               = 20,
-    REPLNET_STABLE                  = 21,
-    REPLNET_CONDITION_WAIT          = 22,
-    REPLNET_CONDITION_NOTIFY        = 23,
-    REPLNET_PING                    = 24,
-    REPLNET_PONG                    = 25
+
+    REPLNET_BOOTSTRAP               = 28,
+    REPLNET_SILENT_BOOTSTRAP        = 27,
+    REPLNET_PING                    = 29,
+    REPLNET_PONG                    = 30,
+    REPLNET_STATE_TRANSFER          = 31,
+
+    REPLNET_PAXOS_PHASE1A           = 32,
+    REPLNET_PAXOS_PHASE1B           = 33,
+    REPLNET_PAXOS_PHASE2A           = 34,
+    REPLNET_PAXOS_PHASE2B           = 35,
+    REPLNET_PAXOS_LEARN             = 36,
+    REPLNET_PAXOS_SUBMIT            = 37,
+
+    REPLNET_SERVER_BECOME_MEMBER    = 48,
+    REPLNET_UNIQUE_NUMBER           = 63,
+    REPLNET_OBJECT_FAILED           = 62,
+    REPLNET_POKE                    = 64,
+    REPLNET_COND_WAIT               = 69,
+    REPLNET_CALL                    = 70,
+    REPLNET_GET_ROBUST_PARAMS       = 72,
+    REPLNET_CALL_ROBUST             = 73,
+
+    REPLNET_CLIENT_RESPONSE         = 224,
+
+    REPLNET_GARBAGE                 = 255
 };
 
 std::ostream&
-operator << (std::ostream& lhs, replicant_network_msgtype rhs);
+operator << (std::ostream& lhs, network_msgtype rhs);
 
-e::buffer::packer
-operator << (e::buffer::packer lhs, const replicant_network_msgtype& rhs);
-
+e::packer
+operator << (e::packer lhs, const network_msgtype& rhs);
 e::unpacker
-operator >> (e::unpacker lhs, replicant_network_msgtype& rhs);
-
+operator >> (e::unpacker lhs, network_msgtype& rhs);
 size_t
-pack_size(const replicant_network_msgtype& rhs);
+pack_size(const network_msgtype& rhs);
 
-} // namespace replicant
+END_REPLICANT_NAMESPACE
 
-#endif // replicant_network_msgtype_h_
+#endif // replicant_common_network_msgtype_h_

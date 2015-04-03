@@ -33,7 +33,7 @@ AM_INIT_AUTOMAKE([foreign subdir-objects dist-bzip2])
 AM_SILENT_RULES([yes])
 LT_PREREQ([2.2])
 LT_INIT
-AC_CONFIG_SRCDIR([client/replicant.h])
+AC_CONFIG_SRCDIR([include/replicant.h])
 AC_CONFIG_HEADERS([config.h])
 AC_CONFIG_MACRO_DIR([m4])
 
@@ -79,10 +79,6 @@ fi
 PKG_CHECK_MODULES([PO6], [libpo6 >= 0.6])
 PKG_CHECK_MODULES([E], [libe >= 0.7])
 PKG_CHECK_MODULES([BUSYBEE], [busybee >= 0.5])
-if test x"${enable_all_components}" = xyes -o \
-        x"${enable_daemon}" = xyes; then
-    PKG_CHECK_MODULES([HYPERLEVELDB], [libhyperleveldb >= 1.0])
-fi
 
 # Checks for header files.
 if test x"${enable_all_components}" = xyes -o \
@@ -101,6 +97,11 @@ if test x"${enable_all_components}" = xyes -o \
 Replicant relies upon the glog library.
 Please install glog to continue.
 ---------------------------------------])])
+    AC_CHECK_HEADER([google/dense_hash_map],,[AC_MSG_ERROR([
+-------------------------------------------------
+Replicant relies upon the sparsehash library.
+Please install sparsehash to continue.
+-------------------------------------------------])])
 fi
 
 # Checks for typedefs, structures, and compiler characteristics.
@@ -127,9 +128,7 @@ AC_ARG_ENABLE([example_state_machines], [AS_HELP_STRING([--enable-example-state-
 AM_CONDITIONAL([ENABLE_EXAMPLES], [test x"${example_state_machines}" = xyes])
 
 AC_CHECK_FUNCS([clock_gettime mach_absolute_time])
-AC_CHECK_DECLS([open_memstream])
 
 AC_CONFIG_FILES([Makefile
-                 replicant.pc
-                 replicant.upack])
+                 replicant.pc])
 AC_OUTPUT

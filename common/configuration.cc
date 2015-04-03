@@ -1,4 +1,4 @@
-// Copyright (c) 2012, Robert Escriva
+// Copyright (c) 2015, Robert Escriva
 // All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
@@ -25,46 +25,59 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
+// C
+#include <assert.h>
+
 // STL
 #include <algorithm>
-#include <memory>
 
-// Google Log
-#include <glog/logging.h>
+// e
+#include <e/serialization.h>
 
 // Replicant
 #include "common/configuration.h"
+#include "common/packing.h"
 
-using replicant::chain_node;
 using replicant::configuration;
 
 configuration :: configuration()
     : m_cluster()
-    , m_prev_token()
-    , m_this_token()
     , m_version()
-    , m_members()
-    , m_chain()
-    , m_command_sz()
+    , m_first_slot()
+    , m_servers()
 {
 }
 
-configuration :: configuration(uint64_t c,
-                               uint64_t pt,
-                               uint64_t tt,
-                               uint64_t v,
-                               const chain_node& h)
+configuration :: configuration(cluster_id c,
+                               version_id v,
+                               uint64_t f,
+                               server* s,
+                               size_t s_sz)
     : m_cluster(c)
-    , m_prev_token(pt)
-    , m_this_token(tt)
     , m_version(v)
-    , m_members()
-    , m_chain()
-    , m_command_sz()
+    , m_first_slot(f)
+    , m_servers(s, s + s_sz)
 {
-    m_members.push_back(h);
-    m_chain.push_back(h.token);
-    m_command_sz = 1;
+}
+
+configuration :: configuration(const configuration& c, const server& s, uint64_t f)
+    : m_cluster(c.m_cluster)
+    , m_version(c.m_version.get() + 1)
+    , m_first_slot(f)
+    , m_servers(c.m_servers)
+{
+    assert(c.first_slot() < f);
+    assert(!has(s.id));
+    assert(!has(s.bind_to));
+    m_servers.push_back(s);
+}
+
+configuration :: configuration(const configuration& other)
+    : m_cluster(other.m_cluster)
+    , m_version(other.m_version)
+    , m_first_slot(other.m_first_slot)
+    , m_servers(other.m_servers)
+{
 }
 
 configuration :: ~configuration() throw ()
@@ -74,225 +87,33 @@ configuration :: ~configuration() throw ()
 bool
 configuration :: validate() const
 {
-    for (size_t i = 0; i < m_members.size(); ++i)
+    for (size_t i = 0; i < m_servers.size(); ++i)
     {
-        for (size_t j = i + 1; j < m_members.size(); ++j)
-        {
-            if (m_members[i].token == m_members[j].token ||
-                m_members[i].address == m_members[j].address)
-            {
-                return false;
-            }
-        }
-    }
-
-    if (m_command_sz > m_chain.size())
-    {
-        return false;
-    }
-
-    for (size_t i = 0; i < m_chain.size(); ++i)
-    {
-        const chain_node* n = node_from_token(m_chain[i]);
-
-        if (n == NULL)
+        if (m_servers[i].id == server_id() ||
+            m_servers[i].bind_to == po6::net::location())
         {
             return false;
         }
 
-        for (size_t j = i + 1; j < m_chain.size(); ++j)
+        for (size_t j = i + 1; j < m_servers.size(); ++j)
         {
-            if (m_chain[i] == m_chain[j])
+            if (m_servers[i].id == m_servers[j].id ||
+                m_servers[i].bind_to == m_servers[j].bind_to)
             {
                 return false;
             }
         }
     }
 
-    return true;
+    return !m_servers.empty();
 }
 
 bool
-configuration :: quorum_of(const configuration& other) const
+configuration :: has(server_id si) const
 {
-    assert(validate());
-    assert(other.validate());
-    assert(cluster() == other.cluster());
-    size_t count = 0;
-
-    for (size_t i = 0; i < m_chain.size(); ++i)
+    for (size_t i = 0; i < m_servers.size(); ++i)
     {
-        for (size_t j = 0; j < other.m_chain.size(); ++j)
-        {
-            if (m_chain[i] == other.m_chain[j])
-            {
-                ++count;
-                break;
-            }
-        }
-    }
-
-    size_t quorum = other.m_chain.size() / 2 + 1;
-    return count >= quorum;
-}
-
-uint64_t
-configuration :: fault_tolerance() const
-{
-    if (m_chain.empty())
-    {
-        return 0;
-    }
-
-    return (m_chain.size() - 1) / 2;
-}
-
-uint64_t
-configuration :: servers_needed_for(uint64_t f) const
-{
-    uint64_t needed = f * 2 + 1;
-
-    if (needed < m_chain.size())
-    {
-        return 0;
-    }
-    else
-    {
-        return needed - m_chain.size();
-    }
-}
-
-bool
-configuration :: has_token(uint64_t token) const
-{
-    return node_from_token(token) != NULL;
-}
-
-bool
-configuration :: is_member(const chain_node& node) const
-{
-    return node_from_token(node.token) != NULL;
-}
-
-const chain_node*
-configuration :: node_from_token(uint64_t token) const
-{
-    for (size_t i = 0; i < m_members.size(); ++i)
-    {
-        if (m_members[i].token == token)
-        {
-            return &m_members[i];
-        }
-    }
-
-    return NULL;
-}
-
-const chain_node*
-configuration :: head() const
-{
-    if (m_chain.empty())
-    {
-        return NULL;
-    }
-
-    const chain_node* n = node_from_token(m_chain[0]);
-    assert(n);
-    return n;
-}
-
-const chain_node*
-configuration :: command_tail() const
-{
-    assert(m_command_sz <= m_chain.size());
-
-    if (m_command_sz == 0)
-    {
-        return NULL;
-    }
-
-    const chain_node* n = node_from_token(m_chain[m_command_sz - 1]);
-    assert(n);
-    return n;
-}
-
-const chain_node*
-configuration :: config_tail() const
-{
-    if (m_chain.empty())
-    {
-        return NULL;
-    }
-
-    const chain_node* n = node_from_token(m_chain[m_chain.size() - 1]);
-    assert(n);
-    return n;
-}
-
-const chain_node*
-configuration :: prev(uint64_t token) const
-{
-    const uint64_t* p = NULL;
-    const uint64_t* cur = &m_chain.front();
-    const uint64_t* end = &m_chain.front() + m_chain.size();
-
-    for (; cur < end; ++cur)
-    {
-        if (*cur == token)
-        {
-            const chain_node* node = NULL;
-
-            if (p)
-            {
-                node = node_from_token(*p);
-                assert(node);
-            }
-
-            return node;
-        }
-
-        p = cur;
-    }
-
-    return NULL;
-}
-
-const chain_node*
-configuration :: next(uint64_t token) const
-{
-    const uint64_t* n = NULL;
-    const uint64_t* cur = &m_chain.front() + m_chain.size() - 1;
-    const uint64_t* end = &m_chain.front();
-
-    for (; cur >= end; --cur)
-    {
-        if (*cur == token)
-        {
-            const chain_node* node = NULL;
-
-            if (n)
-            {
-                node = node_from_token(*n);
-                assert(node);
-            }
-
-            return node;
-        }
-
-        n = cur;
-    }
-
-    return NULL;
-}
-
-bool
-configuration :: in_command_chain(uint64_t token) const
-{
-    assert(m_command_sz <= m_chain.size());
-
-    for (size_t i = 0; i < m_command_sz; ++i)
-    {
-        if (m_chain[i] == token)
+        if (m_servers[i].id == si)
         {
             return true;
         }
@@ -302,11 +123,11 @@ configuration :: in_command_chain(uint64_t token) const
 }
 
 bool
-configuration :: in_config_chain(uint64_t token) const
+configuration :: has(const po6::net::location& loc) const
 {
-    for (size_t i = 0; i < m_chain.size(); ++i)
+    for (size_t i = 0; i < m_servers.size(); ++i)
     {
-        if (m_chain[i] == token)
+        if (m_servers[i].bind_to == loc)
         {
             return true;
         }
@@ -315,291 +136,97 @@ configuration :: in_config_chain(uint64_t token) const
     return false;
 }
 
-uint64_t
-configuration :: command_size() const
+unsigned
+configuration :: index(server_id si) const
 {
-    return m_command_sz;
-}
-
-uint64_t
-configuration :: config_size() const
-{
-    return m_chain.size();
-}
-
-uint64_t
-configuration :: index(uint64_t token) const
-{
-    size_t idx = 0;
-
-    for (; idx < m_chain.size(); ++idx)
+    for (size_t i = 0; i < m_servers.size(); ++i)
     {
-        if (m_chain[idx] == token)
+        if (m_servers[i].id == si)
         {
-            break;
+            return i;
         }
     }
 
-    return idx;
+    return m_servers.size();
 }
 
-const chain_node*
-configuration :: members_begin() const
+std::vector<replicant::server_id>
+configuration :: server_ids() const
 {
-    return &m_members.front();
-}
+    std::vector<server_id> s;
 
-const chain_node*
-configuration :: members_end() const
-{
-    return &m_members.front() + m_members.size();
-}
-
-const uint64_t*
-configuration :: chain_begin() const
-{
-    return &m_chain.front();
-}
-
-const uint64_t*
-configuration :: chain_end() const
-{
-    return &m_chain.front() + m_chain.size();
-}
-
-void
-configuration :: bump_version()
-{
-    m_prev_token = m_this_token;
-    // XXX m_this_token = token
-    ++m_version;
-}
-
-void
-configuration :: add_member(const chain_node& node)
-{
-    assert(node_from_token(node.token) == NULL);
-    m_members.push_back(node);
-    std::sort(m_members.begin(), m_members.end());
-}
-
-void
-configuration :: add_to_chain(uint64_t token)
-{
-    assert(!in_config_chain(token));
-    m_chain.push_back(token);
-}
-
-void
-configuration :: remove_from_chain(uint64_t token)
-{
-    assert(in_config_chain(token));
-
-    for (size_t i = 0; i < m_chain.size(); ++i)
+    for (size_t i = 0; i < m_servers.size(); ++i)
     {
-        if (m_chain[i] == token)
-        {
-            if (i < m_command_sz)
-            {
-                --m_command_sz;
-            }
-
-            for (size_t j = i; j + 1 < m_chain.size(); ++j)
-            {
-                m_chain[j] = m_chain[j + 1];
-            }
-
-            m_chain.pop_back();
-            return;
-        }
-    }
-}
-
-void
-configuration :: grow_command_chain()
-{
-    assert(m_command_sz < m_chain.size());
-    ++m_command_sz;
-}
-
-void
-configuration :: change_address(uint64_t token, const po6::net::location& address)
-{
-    assert(has_token(token));
-
-    for (size_t i = 0; i < m_members.size(); ++i)
-    {
-        if (m_members[i].token == token)
-        {
-            m_members[i].address = address;
-            return;
-        }
-    }
-}
-
-bool
-replicant :: operator < (const configuration& lhs, const configuration& rhs)
-{
-    return lhs.version() < rhs.version();
-}
-
-bool
-replicant :: operator == (const configuration& lhs, const configuration& rhs)
-{
-    if (lhs.m_cluster != rhs.m_cluster ||
-        lhs.m_prev_token != rhs.m_prev_token ||
-        lhs.m_this_token != rhs.m_this_token ||
-        lhs.m_version != rhs.m_version ||
-        lhs.m_members.size() != rhs.m_members.size() ||
-        lhs.m_chain.size() != rhs.m_chain.size() ||
-        lhs.m_command_sz != rhs.m_command_sz)
-    {
-        return false;
+        s.push_back(m_servers[i].id);
     }
 
-    for (size_t i = 0; i < lhs.m_members.size(); ++i)
+    return s;
+}
+
+const replicant::server*
+configuration :: get(server_id si) const
+{
+    for (size_t i = 0; i < m_servers.size(); ++i)
     {
-        if (!lhs.m_members[i].exactly_matches(rhs.m_members[i]))
+        if (m_servers[i].id == si)
         {
-            return false;
+            return &m_servers[i];
         }
     }
 
-    for (size_t i = 0; i < lhs.m_chain.size(); ++i)
+    return NULL;
+}
+
+replicant::bootstrap
+configuration :: current_bootstrap() const
+{
+    std::vector<po6::net::hostname> hns;
+
+    for (size_t i = 0; i < m_servers.size(); ++i)
     {
-        if (lhs.m_chain[i] != rhs.m_chain[i])
-        {
-            return false;
-        }
+        hns.push_back(po6::net::hostname(m_servers[i].bind_to));
     }
 
-    return true;
+    return bootstrap(hns);
 }
 
 std::ostream&
 replicant :: operator << (std::ostream& lhs, const configuration& rhs)
 {
-    lhs << "configuration(cluster=" << rhs.m_cluster
-        << ", prev_token=" << rhs.m_prev_token
-        << ", this_token=" << rhs.m_this_token
-        << ", version=" << rhs.m_version
-        << ", command=[";
+    lhs << "configuration(cluster=" << rhs.cluster().get()
+        << ", version=" << rhs.version().get()
+        << ", first_slot=" << rhs.first_slot()
+        << ", [";
+    const std::vector<server>& servers(rhs.servers());
 
-    for (size_t i = 0; i < std::min((size_t)rhs.m_command_sz, rhs.m_chain.size()); ++i)
+    for (size_t i = 0; i < servers.size(); ++i)
     {
-        lhs << rhs.m_chain[i] << (i + 1 < std::min((size_t)rhs.m_command_sz, rhs.m_chain.size()) ? ", " : "");
-    }
+        if (i > 0)
+        {
+            lhs << ", ";
+        }
 
-    lhs << "], config=[";
-
-    for (size_t i = 0; i < rhs.m_chain.size(); ++i)
-    {
-        lhs << rhs.m_chain[i] << (i + 1 < rhs.m_chain.size() ? ", " : "");
-    }
-
-    lhs << "], members=[";
-
-    for (size_t i = 0; i < rhs.m_members.size(); ++i)
-    {
-        lhs << rhs.m_members[i] << (i + 1 < rhs.m_members.size() ? ", " : "");
+        lhs << servers[i];
     }
 
     lhs << "])";
     return lhs;
 }
 
-e::buffer::packer
-replicant :: operator << (e::buffer::packer lhs, const configuration& rhs)
+e::packer
+replicant :: operator << (e::packer lhs, const configuration& rhs)
 {
-    lhs = lhs << rhs.m_cluster
-              << rhs.m_prev_token
-              << rhs.m_this_token
-              << rhs.m_version
-              << uint64_t(rhs.m_members.size())
-              << rhs.m_command_sz
-              << uint64_t(rhs.m_chain.size());
-
-    for (uint64_t i = 0; i < rhs.m_members.size(); ++i)
-    {
-        lhs = lhs << rhs.m_members[i];
-    }
-
-    for (uint64_t i = 0; i < rhs.m_chain.size(); ++i)
-    {
-        lhs = lhs << rhs.m_chain[i];
-    }
-
-    return lhs;
+    return lhs << rhs.m_cluster << rhs.m_version << rhs.m_first_slot << rhs.m_servers;
 }
 
 e::unpacker
 replicant :: operator >> (e::unpacker lhs, configuration& rhs)
 {
-    uint64_t members_sz;
-    uint64_t chain_sz;
-    lhs = lhs >> rhs.m_cluster
-              >> rhs.m_prev_token
-              >> rhs.m_this_token
-              >> rhs.m_version
-              >> members_sz
-              >> rhs.m_command_sz
-              >> chain_sz;
-    rhs.m_members.resize(members_sz);
-    rhs.m_chain.resize(chain_sz);
-
-    for (uint64_t i = 0; i < rhs.m_members.size(); ++i)
-    {
-        lhs = lhs >> rhs.m_members[i];
-    }
-
-    for (uint64_t i = 0; i < rhs.m_chain.size(); ++i)
-    {
-        lhs = lhs >> rhs.m_chain[i];
-    }
-
-    return lhs;
-}
-
-
-char*
-replicant :: pack_config(const configuration& config, char* ptr)
-{
-    // XXX inefficient, lazy hack
-    std::auto_ptr<e::buffer> msg(e::buffer::create(pack_size(config)));
-    msg->pack_at(0) << config;
-    memmove(ptr, msg->data(), msg->size());
-    return ptr + msg->size();
+    return lhs >> rhs.m_cluster >> rhs.m_version >> rhs.m_first_slot >> rhs.m_servers;
 }
 
 size_t
 replicant :: pack_size(const configuration& rhs)
 {
-    size_t sz = sizeof(uint64_t) // rhs.m_cluster
-              + sizeof(uint64_t) // rhs.m_prev_token
-              + sizeof(uint64_t) // rhs.m_this_token
-              + sizeof(uint64_t) // rhs.m_version
-              + sizeof(uint64_t) // rhs.m_members.size()
-              + sizeof(uint64_t) // rhs.m_command_sz
-              + sizeof(uint64_t); // rhs.m_chain.size()
-
-    for (size_t i = 0; i < rhs.m_members.size(); ++i)
-    {
-        sz += pack_size(rhs.m_members[i]);
-    }
-
-    sz += sizeof(uint64_t) * rhs.m_chain.size();
-    return sz;
-}
-
-size_t
-replicant :: pack_size(const std::vector<configuration>& rhs)
-{
-    size_t sz = sizeof(uint32_t);
-
-    for (size_t i = 0; i < rhs.size(); ++i)
-    {
-        sz += pack_size(rhs[i]);
-    }
-
-    return sz;
+    return 3 * sizeof(uint64_t) + pack_size(rhs.m_servers);
 }

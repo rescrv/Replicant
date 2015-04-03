@@ -27,48 +27,41 @@
  */
 
 /* Replicant */
-#include <replicant_state_machine.h>
+#include <rsm.h>
 
 void*
-nop_create(struct replicant_state_machine_context* ctx)
+nop_create(struct rsm_context* ctx)
 {
-    return malloc(sizeof(int));
+    return (void*) -1;
 }
 
 void*
-nop_recreate(struct replicant_state_machine_context* ctx,
-             const char* data, size_t sz)
+nop_recreate(struct rsm_context* ctx,
+             const char* data, size_t data_sz)
 {
-    return malloc(sizeof(int));
+    return (void*) -1;
 }
 
-void
-nop_destroy(struct replicant_state_machine_context* ctx,
-            void* f)
-{
-    free(f);
-}
-
-void
-nop_snapshot(struct replicant_state_machine_context* ctx,
+int
+nop_snapshot(struct rsm_context* ctx,
              void* obj,
-             const char** data, size_t* sz)
+             char** data, size_t* data_sz)
 {
-    *data = malloc(sizeof(int));
-    *sz = sizeof(int);
+    *data = NULL;
+    *data_sz = 0;
+    return 0;
 }
 
 void
-nop_nop(struct replicant_state_machine_context* ctx,
+nop_nop(struct rsm_context* ctx,
         void* obj,
         const char* data, size_t data_sz)
 {
 }
 
-struct replicant_state_machine rsm = {
+struct state_machine rsm = {
     nop_create,
     nop_recreate,
-    nop_destroy,
     nop_snapshot,
     {{"nop", nop_nop},
      {NULL, NULL}}

@@ -1,4 +1,4 @@
-// Copyright (c) 2012, Robert Escriva
+// Copyright (c) 2015, Robert Escriva
 // All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
@@ -28,7 +28,7 @@
 #define __STDC_LIMIT_MACROS
 
 // Replicant
-#include "client/replicant.h"
+#include <replicant.h>
 #include "tools/common.h"
 
 int
@@ -37,11 +37,18 @@ main(int argc, const char* argv[])
     connect_opts conn;
     e::argparser ap;
     ap.autohelp();
-    ap.option_string("[OPTIONS] <object-id> <library-path>");
+    ap.option_string("[OPTIONS] <object> <library-path>");
     ap.add("Connect to a cluster:", conn.parser());
 
     if (!ap.parse(argc, argv))
     {
+        return EXIT_FAILURE;
+    }
+
+    if (ap.args_sz() != 2)
+    {
+        std::cerr << "command requires the object name and library path\n" << std::endl;
+        ap.usage();
         return EXIT_FAILURE;
     }
 
@@ -52,69 +59,18 @@ main(int argc, const char* argv[])
         return EXIT_FAILURE;
     }
 
-    if (ap.args_sz() != 2)
-    {
-        std::cerr << "please specify the library and object\n" << std::endl;
-        ap.usage();
-        return EXIT_FAILURE;
-    }
-
     try
     {
-        replicant_client r(conn.host(), conn.port());
+        replicant_client* r = replicant_client_create(conn.host(), conn.port());
         replicant_returncode re = REPLICANT_GARBAGE;
-        replicant_returncode le = REPLICANT_GARBAGE;
-        int64_t rid = 0;
-        int64_t lid = 0;
-        const char* errmsg;
-        size_t errmsg_sz;
+        int64_t rid = replicant_client_new_object(r, ap.args()[0], ap.args()[1], &re);
 
-        rid = r.new_object(ap.args()[0], ap.args()[1], &re, &errmsg, &errmsg_sz);
-
-        if (rid < 0)
+        if (!cli_finish(r, rid, &re))
         {
-            std::cerr << "could not create object: " << r.last_error().msg()
-                      << " (" << re << ")" << std::endl;
-            return EXIT_FAILURE;
-        }
-
-        lid = r.loop(-1, &le);
-
-        if (lid < 0)
-        {
-            std::cerr << "could not create object: " << r.last_error().msg()
-                      << " (" << le << ")" << std::endl;
-            return EXIT_FAILURE;
-        }
-
-        if (rid != lid)
-        {
-            std::cerr << "could not create object: internal error" << std::endl;
-            return EXIT_FAILURE;
-        }
-
-        if (re != REPLICANT_SUCCESS)
-        {
-            std::cerr << "could not create object: " << r.last_error().msg()
-                      << " (" << re << ")" << std::endl;
-            return EXIT_FAILURE;
-        }
-
-        replicant_returncode e = r.disconnect();
-
-        if (e != REPLICANT_SUCCESS)
-        {
-            std::cerr << "error disconnecting from cluster: " << r.last_error().msg()
-                          << " (" << e << ")" << std::endl;
             return EXIT_FAILURE;
         }
 
         return EXIT_SUCCESS;
-    }
-    catch (po6::error& e)
-    {
-        std::cerr << "system error: " << e.what() << std::endl;
-        return EXIT_FAILURE;
     }
     catch (std::exception& e)
     {

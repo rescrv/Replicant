@@ -33,39 +33,32 @@
 #include "common/network_msgtype.h"
 
 std::ostream&
-replicant :: operator << (std::ostream& lhs, replicant_network_msgtype rhs)
+replicant :: operator << (std::ostream& lhs, network_msgtype rhs)
 {
     switch (rhs)
     {
         STRINGIFY(REPLNET_NOP);
         STRINGIFY(REPLNET_BOOTSTRAP);
-        STRINGIFY(REPLNET_INFORM);
-        STRINGIFY(REPLNET_SERVER_REGISTER);
-        STRINGIFY(REPLNET_SERVER_REGISTER_FAILED);
-        STRINGIFY(REPLNET_SERVER_CHANGE_ADDRESS);
-        STRINGIFY(REPLNET_SERVER_IDENTIFY);
-        STRINGIFY(REPLNET_SERVER_IDENTITY);
-        STRINGIFY(REPLNET_CONFIG_PROPOSE);
-        STRINGIFY(REPLNET_CONFIG_ACCEPT);
-        STRINGIFY(REPLNET_CONFIG_REJECT);
-        STRINGIFY(REPLNET_CLIENT_REGISTER);
-        STRINGIFY(REPLNET_CLIENT_DISCONNECT);
-        STRINGIFY(REPLNET_CLIENT_TIMEOUT);
-        STRINGIFY(REPLNET_CLIENT_UNKNOWN);
-        STRINGIFY(REPLNET_CLIENT_DECEASED);
-        STRINGIFY(REPLNET_COMMAND_SUBMIT);
-        STRINGIFY(REPLNET_COMMAND_ISSUE);
-        STRINGIFY(REPLNET_COMMAND_ACK);
-        STRINGIFY(REPLNET_COMMAND_RESPONSE);
-        STRINGIFY(REPLNET_HEAL_REQ);
-        STRINGIFY(REPLNET_HEAL_RETRY);
-        STRINGIFY(REPLNET_HEAL_RESP);
-        STRINGIFY(REPLNET_HEAL_DONE);
-        STRINGIFY(REPLNET_STABLE);
-        STRINGIFY(REPLNET_CONDITION_WAIT);
-        STRINGIFY(REPLNET_CONDITION_NOTIFY);
+        STRINGIFY(REPLNET_SILENT_BOOTSTRAP);
         STRINGIFY(REPLNET_PING);
         STRINGIFY(REPLNET_PONG);
+        STRINGIFY(REPLNET_STATE_TRANSFER);
+        STRINGIFY(REPLNET_PAXOS_PHASE1A);
+        STRINGIFY(REPLNET_PAXOS_PHASE1B);
+        STRINGIFY(REPLNET_PAXOS_PHASE2A);
+        STRINGIFY(REPLNET_PAXOS_PHASE2B);
+        STRINGIFY(REPLNET_PAXOS_LEARN);
+        STRINGIFY(REPLNET_PAXOS_SUBMIT);
+        STRINGIFY(REPLNET_SERVER_BECOME_MEMBER);
+        STRINGIFY(REPLNET_UNIQUE_NUMBER);
+        STRINGIFY(REPLNET_OBJECT_FAILED);
+        STRINGIFY(REPLNET_POKE);
+        STRINGIFY(REPLNET_COND_WAIT);
+        STRINGIFY(REPLNET_CALL);
+        STRINGIFY(REPLNET_GET_ROBUST_PARAMS);
+        STRINGIFY(REPLNET_CALL_ROBUST);
+        STRINGIFY(REPLNET_CLIENT_RESPONSE);
+        STRINGIFY(REPLNET_GARBAGE);
         default:
             lhs << "unknown msgtype";
     }
@@ -73,24 +66,24 @@ replicant :: operator << (std::ostream& lhs, replicant_network_msgtype rhs)
     return lhs;
 }
 
-e::buffer::packer
-replicant :: operator << (e::buffer::packer lhs, const replicant_network_msgtype& rhs)
+e::packer
+replicant :: operator << (e::packer lhs, const network_msgtype& rhs)
 {
     uint8_t mt = static_cast<uint8_t>(rhs);
     return lhs << mt;
 }
 
 e::unpacker
-replicant :: operator >> (e::unpacker lhs, replicant_network_msgtype& rhs)
+replicant :: operator >> (e::unpacker lhs, network_msgtype& rhs)
 {
     uint8_t mt;
     lhs = lhs >> mt;
-    rhs = static_cast<replicant_network_msgtype>(mt);
+    rhs = static_cast<network_msgtype>(mt);
     return lhs;
 }
 
 size_t
-replicant :: pack_size(const replicant_network_msgtype&)
+replicant :: pack_size(const network_msgtype&)
 {
     return sizeof(uint8_t);
 }

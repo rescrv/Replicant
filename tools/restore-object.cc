@@ -1,4 +1,4 @@
-// Copyright (c) 2013, Robert Escriva
+// Copyright (c) 2015, Robert Escriva
 // All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
@@ -28,23 +28,32 @@
 #define __STDC_LIMIT_MACROS
 
 // e
-#include <e/strescape.h>
+#include <e/error.h>
 
 // Replicant
-#include "client/replicant.h"
+#include <replicant.h>
+#include "common/atomic_io.h"
 #include "tools/common.h"
 
 int
 main(int argc, const char* argv[])
 {
+    const char* output_cstr = NULL;
     connect_opts conn;
     e::argparser ap;
     ap.autohelp();
-    ap.option_string("[OPTIONS] <object-id> <library> <backup-file>");
+    ap.option_string("[OPTIONS] <object> <backup>");
     ap.add("Connect to a cluster:", conn.parser());
 
     if (!ap.parse(argc, argv))
     {
+        return EXIT_FAILURE;
+    }
+
+    if (ap.args_sz() != 2)
+    {
+        std::cerr << "command requires the object name and backup state\n" << std::endl;
+        ap.usage();
         return EXIT_FAILURE;
     }
 
@@ -55,60 +64,34 @@ main(int argc, const char* argv[])
         return EXIT_FAILURE;
     }
 
-    if (ap.args_sz() != 3)
+    std::string output;
+
+    if (output_cstr)
     {
-        std::cerr << "please specify the library, object, and backup file\n" << std::endl;
-        ap.usage();
+        output = output_cstr;
+    }
+    else
+    {
+        output = ap.args()[0];
+        output += ".backup";
+    }
+
+    std::string state;
+
+    if (!replicant::atomic_read(AT_FDCWD, ap.args()[1], &state))
+    {
+        std::cerr << "could not read state: " << e::error::strerror(errno) << std::endl;
         return EXIT_FAILURE;
     }
 
     try
     {
-        replicant_client r(conn.host(), conn.port());
+        replicant_client* r = replicant_client_create(conn.host(), conn.port());
         replicant_returncode re = REPLICANT_GARBAGE;
-        replicant_returncode le = REPLICANT_GARBAGE;
-        int64_t rid = 0;
-        int64_t lid = 0;
-        const char* errmsg;
-        size_t errmsg_sz;
+        int64_t rid = replicant_client_restore_object(r, ap.args()[0], state.data(), state.size(), &re);
 
-        rid = r.restore_object(ap.args()[0], ap.args()[1], ap.args()[2], &re, &errmsg, &errmsg_sz);
-
-        if (rid < 0)
+        if (!cli_finish(r, rid, &re))
         {
-            std::cerr << "could not restore object: " << r.last_error().msg()
-                      << " (" << re << ")" << std::endl;
-            return EXIT_FAILURE;
-        }
-
-        lid = r.loop(-1, &le);
-
-        if (lid < 0)
-        {
-            std::cerr << "could not restore object: " << r.last_error().msg()
-                      << " (" << le << ")" << std::endl;
-            return EXIT_FAILURE;
-        }
-
-        if (rid != lid)
-        {
-            std::cerr << "could not restore object: internal error" << std::endl;
-            return EXIT_FAILURE;
-        }
-
-        if (re != REPLICANT_SUCCESS)
-        {
-            std::cerr << "could not restore object: " << r.last_error().msg()
-                      << " (" << re << ")" << std::endl;
-            return EXIT_FAILURE;
-        }
-
-        replicant_returncode e = r.disconnect();
-
-        if (e != REPLICANT_SUCCESS)
-        {
-            std::cerr << "error disconnecting from cluster: " << r.last_error().msg()
-                          << " (" << e << ")" << std::endl;
             return EXIT_FAILURE;
         }
 

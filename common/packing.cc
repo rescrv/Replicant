@@ -28,106 +28,23 @@
 // Replicant
 #include "common/packing.h"
 
-e::buffer::packer
-replicant :: operator << (e::buffer::packer lhs, const po6::net::ipaddr& rhs)
+size_t
+replicant ::pack_size(const replicant_returncode&)
 {
-    assert(rhs.family() == AF_INET || rhs.family() == AF_INET6 || rhs.family() == AF_UNSPEC);
-    uint8_t type;
-    uint8_t data[16];
-    memset(data, 0, 16);
+    return e::pack_size(uint16_t());
+}
 
-    if (rhs.family() == AF_INET)
-    {
-        type = 4;
-        sockaddr_in sa;
-        rhs.pack(&sa, 0);
-        memmove(data, &sa.sin_addr.s_addr, 4);
-    }
-    else if (rhs.family() == AF_INET6)
-    {
-        type = 6;
-        sockaddr_in6 sa;
-        rhs.pack(&sa, 0);
-#ifdef _MSC_VER
-        memmove(data, &sa.sin6_addr.u.Byte, 16);
-#elif defined __APPLE__ || defined __FreeBSD__
-        memmove(data, &sa.sin6_addr.__u6_addr.__u6_addr8, 16);
-#else
-        memmove(data, &sa.sin6_addr.__in6_u.__u6_addr8, 16);
-#endif
-    }
-    else
-    {
-        type = 0;
-    }
-
-    lhs = lhs << type;
-    return lhs.copy(e::slice(data, 16));
+e::packer
+replicant ::operator << (e::packer lhs, const replicant_returncode& rhs)
+{
+    return lhs << static_cast<uint16_t>(rhs);
 }
 
 e::unpacker
-replicant :: operator >> (e::unpacker lhs, po6::net::ipaddr& rhs)
+replicant ::operator >> (e::unpacker lhs, replicant_returncode& rhs)
 {
-    uint8_t type;
-    lhs = lhs >> type;
-
-    if (lhs.remain() < 16)
-    {
-        return lhs.as_error();
-    }
-
-    e::slice rem = lhs.as_slice();
-
-    if (type == 4)
-    {
-        in_addr ia;
-        memmove(&ia.s_addr, rem.data(), 4);
-        rhs = po6::net::ipaddr(ia);
-        return lhs.advance(16);
-    }
-    else if (type == 6)
-    {
-        in6_addr ia;
-#ifdef _MSC_VER
-        memmove(ia.u.Byte, rem.data(), 16);
-#elif defined __APPLE__ || defined __FreeBSD__
-        memmove(ia.__u6_addr.__u6_addr8, rem.data(), 16);
-#else
-        memmove(ia.__in6_u.__u6_addr8, rem.data(), 16);
-#endif
-        rhs = po6::net::ipaddr(ia);
-        return lhs.advance(16);
-    }
-    else if (type == 0)
-    {
-        return lhs.advance(16);
-    }
-    else
-    {
-        return lhs.as_error();
-    }
-}
-
-size_t
-replicant :: pack_size(const po6::net::ipaddr&)
-{
-    return 17; // One byte for family, and 4/16 for address
-}
-
-e::buffer::packer
-replicant :: operator << (e::buffer::packer lhs, const po6::net::location& rhs)
-{
-    return lhs << rhs.address << rhs.port;
-}
-
-e::unpacker
-replicant :: operator >> (e::unpacker lhs, po6::net::location& rhs)
-{
-    return lhs >> rhs.address >> rhs.port;
-}
-
-size_t
-replicant :: pack_size(const po6::net::location& rhs)
-{
-    return pack_size(rhs.address) + sizeof(uint16_t);
+    uint16_t x;
+    lhs = lhs >> x;
+    rhs = static_cast<replicant_returncode>(x);
+    return lhs;
 }

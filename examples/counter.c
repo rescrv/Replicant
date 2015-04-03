@@ -29,10 +29,11 @@
 /* C */
 #include <assert.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* Replicant */
-#include <replicant_state_machine.h>
+#include <rsm.h>
 
 inline char*
 pack64be(uint64_t number, char* buffer)
@@ -64,101 +65,85 @@ unpack64be(const char* buffer, uint64_t* number)
 }
 
 void*
-counter_create(struct replicant_state_machine_context* ctx)
+counter_create(struct rsm_context* ctx)
 {
-    void* x = NULL;
-    uint64_t count = 0;
-    (void)(ctx); /* unusued */
+    uint64_t* x = malloc(sizeof(uint64_t));
 
-    x = malloc(sizeof(uint64_t));
-    count = 0;
-    pack64be(count, x);
+    if (!x)
+    {
+        return NULL;
+    }
+
+    *x = 0;
     return x;
 }
 
 void*
-counter_recreate(struct replicant_state_machine_context* ctx,
+counter_recreate(struct rsm_context* ctx,
                  const char* data, size_t data_sz)
 {
-    FILE* log = NULL;
-    void* x = NULL;
-    uint64_t count = 0;
-    (void)(ctx); /* unusued */
-
-    log = replicant_state_machine_log_stream(ctx);
+    uint64_t* x = NULL;
 
     if (data_sz != sizeof(uint64_t))
     {
-        fprintf(log, "recreation failed: corrupt snapshot\n");
+        rsm_log(ctx, "recreate failed: corrupt snapshot");
         return NULL;
     }
 
-    x = malloc(sizeof(uint64_t));
-    memmove(x, data, sizeof(uint64_t));
-    count = 0;
-    unpack64be(x, &count);
-    fprintf(log, "recreated counter object at %lu\n", count);
+    x = (uint64_t*)malloc(sizeof(uint64_t));
+
+    if (!x)
+    {
+        return NULL;
+    }
+
+    unpack64be(data, x);
+    rsm_log(ctx, "recreated counter object at %lu", *x);
     return x;
 }
 
-void
-counter_destroy(struct replicant_state_machine_context* ctx,
-                void* f)
-{
-    (void)(ctx); /* unusued */
-
-    if (f)
-    {
-        free(f);
-    }
-}
-
-void
-counter_snapshot(struct replicant_state_machine_context* ctx,
+int
+counter_snapshot(struct rsm_context* ctx,
                  void* obj,
-                 const char** data, size_t* data_sz)
+                 char** data, size_t* data_sz)
 {
-    char* ptr;
-    (void)(ctx); /* unusued */
+    *data = NULL;
+    *data_sz = 0;
+    char* ptr = (char*)malloc(sizeof(uint64_t));
 
-    ptr = malloc(sizeof(uint64_t));
+    if (!ptr)
+    {
+        return -1;
+    }
+
+    pack64be(*(uint64_t*)obj, ptr);
     *data = ptr;
     *data_sz = sizeof(uint64_t);
-
-    if (ptr)
-    {
-        memmove(ptr, obj, sizeof(uint64_t));
-    }
+    return 0;
 }
 
 void
-counter_counter(struct replicant_state_machine_context* ctx,
+counter_increment(struct rsm_context* ctx,
                 void* obj,
                 const char* data, size_t data_sz)
 {
-    uint64_t count;
-    (void)(data); /* unused */
-    (void)(data_sz); /* unused */
+    char buf[8];
+    uint64_t* count = (uint64_t*)obj;
+    ++*count;
 
-    count = 0;
-    unpack64be(obj, &count);
-    count += 1;
-    pack64be(count, obj);
-
-    if (count % 10000 == 0)
+    if (*count % 1000 == 0)
     {
-        FILE* log = replicant_state_machine_log_stream(ctx);
-        fprintf(log, "counter hit %lu\n", count);
+        rsm_log(ctx, "counter = %lu", *count);
     }
 
-    replicant_state_machine_set_response(ctx, obj, sizeof(uint64_t));
+    pack64be(*count, buf);
+    rsm_set_output(ctx, buf, sizeof(uint64_t));
 }
 
-struct replicant_state_machine rsm = {
+struct state_machine rsm = {
     counter_create,
     counter_recreate,
-    counter_destroy,
     counter_snapshot,
-    {{"counter", counter_counter},
+    {{"increment", counter_increment},
      {NULL, NULL}}
 };

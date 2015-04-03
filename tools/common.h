@@ -25,6 +25,9 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
+#ifndef replicant_tools_common_h_
+#define replicant_tools_common_h_
+
 // e
 #include <e/popt.h>
 
@@ -67,3 +70,43 @@ class connect_opts
         const char* m_host;
         long m_port;
 };
+
+void
+cli_log_error(struct replicant_client* r, replicant_returncode status)
+{
+    std::cerr << __FILE__ << ":" << __LINE__ << " "
+              << replicant_returncode_to_string(status) << " "
+              << replicant_client_error_message(r) << " @ "
+              << replicant_client_error_location(r) << std::endl;
+}
+
+bool
+cli_finish(struct replicant_client* r, int64_t ret, enum replicant_returncode* status)
+{
+    if (ret < 0)
+    {
+        cli_log_error(r, *status);
+        return false;
+    }
+
+    replicant_returncode lrc;
+    int64_t lid = replicant_client_wait(r, ret, -1, &lrc);
+
+    if (lid < 0)
+    {
+        cli_log_error(r, lrc);
+        return false;
+    }
+
+    assert(lid == ret);
+
+    if (*status != REPLICANT_SUCCESS)
+    {
+        cli_log_error(r, *status);
+        return false;
+    }
+
+    return true;
+}
+
+#endif // replicant_tools_common_h_

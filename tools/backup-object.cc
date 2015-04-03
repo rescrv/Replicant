@@ -1,4 +1,4 @@
-// Copyright (c) 2013, Robert Escriva
+// Copyright (c) 2015, Robert Escriva
 // All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
@@ -28,31 +28,35 @@
 #define __STDC_LIMIT_MACROS
 
 // e
-#include <e/strescape.h>
-
-#if defined __FreeBSD__
-#include <sys/stat.h>
-#endif
+#include <e/error.h>
 
 // Replicant
-#include "client/replicant.h"
+#include <replicant.h>
+#include "common/atomic_io.h"
 #include "tools/common.h"
 
 int
 main(int argc, const char* argv[])
 {
-    const char* _output = NULL;
+    const char* output_cstr = NULL;
     connect_opts conn;
     e::argparser ap;
     ap.autohelp();
-    ap.option_string("[OPTIONS] <object-id>");
-    ap.add("Connect to a cluster:", conn.parser());
+    ap.option_string("[OPTIONS] <object>");
     ap.arg().name('o', "output")
-            .description("store the backup in this file (default: <object-id>.backup)")
-            .as_string(&_output).metavar("file");
+            .description("store the backup in this file (default: <object>.backup)")
+            .as_string(&output_cstr).metavar("file");
+    ap.add("Connect to a cluster:", conn.parser());
 
     if (!ap.parse(argc, argv))
     {
+        return EXIT_FAILURE;
+    }
+
+    if (ap.args_sz() != 1)
+    {
+        std::cerr << "command requires the object name\n" << std::endl;
+        ap.usage();
         return EXIT_FAILURE;
     }
 
@@ -63,90 +67,34 @@ main(int argc, const char* argv[])
         return EXIT_FAILURE;
     }
 
-    if (ap.args_sz() != 1)
-    {
-        std::cerr << "please specify the object\n" << std::endl;
-        ap.usage();
-        return EXIT_FAILURE;
-    }
+    std::string output;
 
-    std::string output_file;
-
-    if (_output)
+    if (output_cstr)
     {
-        output_file = _output;
+        output = output_cstr;
     }
     else
     {
-        output_file = ap.args()[0];
+        output = ap.args()[0];
+        output += ".backup";
     }
-
-    output_file += ".backup";
 
     try
     {
-        replicant_client r(conn.host(), conn.port());
+        replicant_client* r = replicant_client_create(conn.host(), conn.port());
         replicant_returncode re = REPLICANT_GARBAGE;
-        replicant_returncode le = REPLICANT_GARBAGE;
-        int64_t rid = 0;
-        int64_t lid = 0;
-        const char* output;
-        size_t output_sz;
+        char* state = NULL;
+        size_t state_sz = 0;
+        int64_t rid = replicant_client_backup_object(r, ap.args()[0], &re, &state, &state_sz);
 
-        rid = r.backup_object(ap.args()[0], &re, &output, &output_sz);
-
-        if (rid < 0)
+        if (!cli_finish(r, rid, &re))
         {
-            std::cerr << "could not backup object: " << r.last_error().msg()
-                      << " (" << re << ")" << std::endl;
             return EXIT_FAILURE;
         }
 
-        lid = r.loop(-1, &le);
-
-        if (lid < 0)
+        if (!replicant::atomic_write(AT_FDCWD, output.c_str(), std::string(state, state_sz)))
         {
-            std::cerr << "could not backup object: " << r.last_error().msg()
-                      << " (" << le << ")" << std::endl;
-            return EXIT_FAILURE;
-        }
-
-        if (rid != lid)
-        {
-            std::cerr << "could not backup object: internal error" << std::endl;
-            return EXIT_FAILURE;
-        }
-
-        if (re != REPLICANT_SUCCESS)
-        {
-            std::cerr << "could not backup object: " << r.last_error().msg()
-                      << " (" << re << ")" << std::endl;
-            return EXIT_FAILURE;
-        }
-
-        po6::io::fd fd(open(output_file.c_str(), O_WRONLY|O_CREAT|O_TRUNC, S_IRUSR|S_IWUSR));
-
-        if (fd.get() < 0)
-        {
-            std::cerr << "could not open \"" << e::strescape(output_file)
-                      << "\" for writing: " << strerror(errno);
-            return EXIT_FAILURE;
-        }
-
-        if (fd.xwrite(output, output_sz) != static_cast<ssize_t>(output_sz))
-        {
-            std::cerr << "could not write to \"" << e::strescape(output_file)
-                      << "\": " << strerror(errno);
-            return EXIT_FAILURE;
-        }
-
-        replicant_destroy_output(output, output_sz);
-        replicant_returncode e = r.disconnect();
-
-        if (e != REPLICANT_SUCCESS)
-        {
-            std::cerr << "error disconnecting from cluster: " << r.last_error().msg()
-                          << " (" << e << ")" << std::endl;
+            std::cerr << "could not write state: " << e::error::strerror(errno) << std::endl;
             return EXIT_FAILURE;
         }
 

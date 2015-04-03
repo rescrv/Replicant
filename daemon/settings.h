@@ -25,19 +25,16 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
-#ifndef replicant_settings_h_
-#define replicant_settings_h_
+#ifndef replicant_daemon_settings_h_
+#define replicant_daemon_settings_h_
 
-// e
-#include <e/buffer.h>
+// C
+#include <stdint.h>
 
-#define NANOS 1ULL
-#define MICROS (1000ULL * NANOS)
-#define MILLIS (1000ULL * MICROS)
-#define SECONDS (1000ULL * MILLIS)
+// Replicant
+#include "namespace.h"
 
-namespace replicant
-{
+BEGIN_REPLICANT_NAMESPACE
 
 class settings
 {
@@ -45,41 +42,9 @@ class settings
         settings();
 
     public:
-        uint64_t FAULT_TOLERANCE;
-        uint64_t PERIODIC_SIZE_WARNING;
-        uint64_t REPORT_EVERY;
-        uint64_t CLIENT_DISCONNECT_EVERY;
-        uint64_t CLIENT_DISCONNECT_TIMEOUT;
-        uint64_t FAILURE_DETECT_INTERVAL;
-        uint64_t FAILURE_DETECT_PING_OFFSET;
-        uint64_t FAILURE_DETECT_SUSPECT_OFFSET;
-        uint64_t FAILURE_DETECT_WINDOW_SIZE;
-        uint64_t CHANGE_ADDRESS_INTERVAL;
-        uint64_t HEAL_NEXT_INTERVAL;
-        uint64_t TRANSFER_WINDOW_LOWER_BOUND;
-        uint64_t TRANSFER_WINDOW_UPPER_BOUND;
-        uint64_t CONNECTION_RETRY;
+        uint64_t SUSPICION_TIMEOUT;
 };
 
-inline
-settings :: settings()
-    : FAULT_TOLERANCE(2)
-    , PERIODIC_SIZE_WARNING(16)
-    , REPORT_EVERY(60 * SECONDS)
-    , CLIENT_DISCONNECT_EVERY(1 * SECONDS)
-    , CLIENT_DISCONNECT_TIMEOUT(30 * SECONDS)
-    , FAILURE_DETECT_INTERVAL(250 * MILLIS)
-    , FAILURE_DETECT_PING_OFFSET(5 * MILLIS)
-    , FAILURE_DETECT_SUSPECT_OFFSET(245 * MILLIS)
-    , FAILURE_DETECT_WINDOW_SIZE(6000)
-    , CHANGE_ADDRESS_INTERVAL(10 * SECONDS)
-    , HEAL_NEXT_INTERVAL(1 * SECONDS)
-    , TRANSFER_WINDOW_LOWER_BOUND(16)
-    , TRANSFER_WINDOW_UPPER_BOUND(4096)
-    , CONNECTION_RETRY(50 * MILLIS)
-{
-}
+END_REPLICANT_NAMESPACE
 
-} // namespace replicant
-
-#endif // replicant_settings_h_
+#endif // replicant_daemon_settings_h_
