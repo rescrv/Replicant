@@ -31,7 +31,7 @@
 #include <e/strescape.h>
 
 // Replicant
-#include "client/replicant.h"
+#include "client/_replicant.h"
 #include "tools/common.h"
 
 int

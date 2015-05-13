@@ -27,24 +27,28 @@
 
 ACLOCAL_AMFLAGS = -I m4 ${ACLOCAL_FLAGS}
 
-AM_CPPFLAGS  = $(PO6_CFLAGS) $(E_CFLAGS) $(BUSYBEE_CFLAGS) $(HYPERLEVELDB_CFLAGS)
-AM_CFLAGS    = $(WANAL_CFLAGS)
-AM_CXXFLAGS  = $(PO6_CFLAGS) $(E_CFLAGS) $(BUSYBEE_CFLAGS) $(HYPERLEVELDB_CFLAGS) $(WANAL_CXXFLAGS)
+AM_CPPFLAGS  = -DREPLICANT_EXEC_DIR="\"$(replicantexecdir)\"" -I${abs_top_srcdir}/include $(SPARSEHASH_CFLAGS) $(PO6_CFLAGS) $(E_CFLAGS) $(BUSYBEE_CFLAGS)
+AM_CFLAGS    = -fvisibility=hidden $(WANAL_CFLAGS)
+AM_CXXFLAGS  = -fvisibility=hidden -fvisibility-inlines-hidden $(SPARSEHASH_CFLAGS) $(PO6_CFLAGS) $(E_CFLAGS) $(BUSYBEE_CFLAGS) $(WANAL_CXXFLAGS)
 AM_MAKEFLAGS = --no-print-directory
+HELP2MAN_FLAGS = --no-discard-stderr --libtool --no-info --version-string=$(VERSION) --manual="Replicant User Manual"
 
-pkgconfigdir = $(libdir)/pkgconfig
 replicantexecdir = $(libexecdir)/$(PACKAGE)-$(VERSION)
+pkgconfigdir = $(libdir)/pkgconfig
+
+BUILT_SOURCES =
 
 EXTRA_DIST =
+
+CLEANFILES =
 
 include_HEADERS =
 noinst_HEADERS =
 
 lib_LTLIBRARIES =
+noinst_LTLIBRARIES =
 
 bin_PROGRAMS =
-noinst_PROGRAMS =
-check_PROGRAMS =
 
 replicantexec_PROGRAMS =
 replicantexec_LTLIBRARIES =
@@ -59,97 +63,131 @@ TESTS =
 
 EXTRA_DIST += LICENSE
 
+noinst_HEADERS += namespace.h
+noinst_HEADERS += visibility.h
+noinst_HEADERS += common/atomic_io.h
 noinst_HEADERS += common/bootstrap.h
-noinst_HEADERS += common/chain_node.h
 noinst_HEADERS += common/configuration.h
+noinst_HEADERS += common/constants.h
+noinst_HEADERS += common/generate_token.h
+noinst_HEADERS += common/ids.h
 noinst_HEADERS += common/macros.h
-noinst_HEADERS += common/mapper.h
 noinst_HEADERS += common/network_msgtype.h
 noinst_HEADERS += common/packing.h
-noinst_HEADERS += common/response_returncode.h
-noinst_HEADERS += common/special_clients.h
-noinst_HEADERS += common/special_objects.h
+noinst_HEADERS += common/quorum_calc.h
+noinst_HEADERS += common/server.h
 
 ################################################################################
 #################################### Daemon ####################################
 ################################################################################
 
-if ENABLE_DAEMON
 replicantexec_PROGRAMS += replicant-daemon
-lib_LTLIBRARIES += libreplicant-state-machine.la
-include_HEADERS += daemon/replicant_state_machine.h
-endif
 
-noinst_HEADERS += daemon/client_manager.h
-noinst_HEADERS += daemon/configuration_manager.h
-noinst_HEADERS += daemon/connection.h
+noinst_HEADERS += daemon/acceptor.h
+noinst_HEADERS += daemon/ballot.h
+noinst_HEADERS += daemon/commander.h
+noinst_HEADERS += daemon/condition.h
 noinst_HEADERS += daemon/daemon.h
-noinst_HEADERS += daemon/fact_store.h
-noinst_HEADERS += daemon/failure_detector.h
-noinst_HEADERS += daemon/failure_manager.h
-noinst_HEADERS += daemon/heal_next.h
-noinst_HEADERS += daemon/memstream.h
-noinst_HEADERS += daemon/object_manager.h
-noinst_HEADERS += daemon/replicant_state_machine_context.h
-noinst_HEADERS += daemon/replicant_state_machine.h
-noinst_HEADERS += daemon/request_response.h
+noinst_HEADERS += daemon/leader.h
+noinst_HEADERS += daemon/mapper.h
+noinst_HEADERS += daemon/object.h
+noinst_HEADERS += daemon/object_interface.h
+noinst_HEADERS += daemon/pvalue.h
+noinst_HEADERS += daemon/replica.h
+noinst_HEADERS += daemon/rsm.h
+noinst_HEADERS += daemon/scout.h
 noinst_HEADERS += daemon/settings.h
 noinst_HEADERS += daemon/snapshot.h
+noinst_HEADERS += daemon/slot_type.h
+noinst_HEADERS += daemon/unordered_command.h
 
 replicant_daemon_SOURCES =
+replicant_daemon_SOURCES += common/atomic_io.cc
 replicant_daemon_SOURCES += common/bootstrap.cc
-replicant_daemon_SOURCES += common/chain_node.cc
 replicant_daemon_SOURCES += common/configuration.cc
-replicant_daemon_SOURCES += common/mapper.cc
+replicant_daemon_SOURCES += common/generate_token.cc
+replicant_daemon_SOURCES += common/ids.cc
 replicant_daemon_SOURCES += common/network_msgtype.cc
 replicant_daemon_SOURCES += common/packing.cc
-replicant_daemon_SOURCES += common/response_returncode.cc
-replicant_daemon_SOURCES += daemon/client_manager.cc
-replicant_daemon_SOURCES += daemon/configuration_manager.cc
-replicant_daemon_SOURCES += daemon/connection.cc
+replicant_daemon_SOURCES += common/server.cc
+replicant_daemon_SOURCES += daemon/acceptor.cc
+replicant_daemon_SOURCES += daemon/ballot.cc
+replicant_daemon_SOURCES += daemon/commander.cc
+replicant_daemon_SOURCES += daemon/condition.cc
 replicant_daemon_SOURCES += daemon/daemon.cc
-replicant_daemon_SOURCES += daemon/fact_store.cc
-replicant_daemon_SOURCES += daemon/failure_detector.cc
-replicant_daemon_SOURCES += daemon/failure_manager.cc
-replicant_daemon_SOURCES += daemon/heal_next.cc
+replicant_daemon_SOURCES += daemon/leader.cc
 replicant_daemon_SOURCES += daemon/main.cc
-replicant_daemon_SOURCES += daemon/object_manager.cc
+replicant_daemon_SOURCES += daemon/mapper.cc
+replicant_daemon_SOURCES += daemon/object.cc
+replicant_daemon_SOURCES += daemon/pvalue.cc
+replicant_daemon_SOURCES += daemon/replica.cc
+replicant_daemon_SOURCES += daemon/scout.cc
 replicant_daemon_SOURCES += daemon/settings.cc
+replicant_daemon_SOURCES += daemon/slot_type.cc
 replicant_daemon_SOURCES += daemon/snapshot.cc
+replicant_daemon_SOURCES += daemon/unordered_command.cc
 replicant_daemon_LDADD =
-replicant_daemon_LDADD += $(HYPERLEVELDB_LIBS)
 replicant_daemon_LDADD += $(BUSYBEE_LIBS)
 replicant_daemon_LDADD += $(E_LIBS)
-replicant_daemon_LDADD += libreplicant-state-machine.la
-replicant_daemon_LDADD += -lglog -ldl -lpthread
+replicant_daemon_LDADD += -lglog -lpthread
 
-libreplicant_state_machine_la_SOURCES = daemon/replicant_state_machine_context.cc
-libreplicant_state_machine_la_LDFLAGS = -version-info 1:0:0
+################################################################################
+################################# State Machine ################################
+################################################################################
+
+lib_LTLIBRARIES += librsm.la
+noinst_LTLIBRARIES += libreplicant_object_interface.la
+include_HEADERS += include/rsm.h
+
+replicantexec_PROGRAMS += replicant-rsm-dlopen
+
+librsm_la_SOURCES = daemon/rsm.cc
+librsm_la_LIBADD = libreplicant_object_interface.la
+
+libreplicant_object_interface_la_SOURCES = daemon/object_interface.cc
+
+replicant_rsm_dlopen_SOURCES = daemon/rsm-dlopen.c
+replicant_rsm_dlopen_LDADD = librsm.la -ldl
 
 ################################################################################
 #################################### Client ####################################
 ################################################################################
 
-if ENABLE_CLIENT
 lib_LTLIBRARIES += libreplicant.la
-include_HEADERS += client/replicant.h
+include_HEADERS += include/replicant.h
 pkgconfig_DATA += replicant.pc
-endif
 
-noinst_HEADERS += client/command.h
-noinst_HEADERS += client/replicant.h
+noinst_HEADERS += client/client.h
+noinst_HEADERS += client/mapper.h
+noinst_HEADERS += client/pending_call.h
+noinst_HEADERS += client/pending_call_robust.h
+noinst_HEADERS += client/pending_cond_wait.h
+noinst_HEADERS += client/pending_generate_unique_number.h
+noinst_HEADERS += client/pending.h
+noinst_HEADERS += client/pending_poke.h
+noinst_HEADERS += client/pending_wait_new_config.h
+noinst_HEADERS += client/server_selector.h
 
 libreplicant_la_SOURCES =
 libreplicant_la_SOURCES += common/bootstrap.cc
-libreplicant_la_SOURCES += common/chain_node.cc
 libreplicant_la_SOURCES += common/configuration.cc
-libreplicant_la_SOURCES += common/mapper.cc
+libreplicant_la_SOURCES += common/generate_token.cc
+libreplicant_la_SOURCES += common/ids.cc
 libreplicant_la_SOURCES += common/network_msgtype.cc
 libreplicant_la_SOURCES += common/packing.cc
-libreplicant_la_SOURCES += common/response_returncode.cc
-libreplicant_la_SOURCES += client/command.cc
-libreplicant_la_SOURCES += client/replicant.cc
-libreplicant_la_CXXFLAGS = $(CXXFLAGS) $(AM_CXXFLAGS)
+libreplicant_la_SOURCES += common/server.cc
+libreplicant_la_SOURCES += client/c.cc
+libreplicant_la_SOURCES += client/client.cc
+libreplicant_la_SOURCES += client/mapper.cc
+libreplicant_la_SOURCES += client/pending_call.cc
+libreplicant_la_SOURCES += client/pending_call_robust.cc
+libreplicant_la_SOURCES += client/pending.cc
+libreplicant_la_SOURCES += client/pending_cond_wait.cc
+libreplicant_la_SOURCES += client/pending_generate_unique_number.cc
+libreplicant_la_SOURCES += client/pending_poke.cc
+libreplicant_la_SOURCES += client/pending_wait_new_config.cc
+libreplicant_la_SOURCES += client/server_selector.cc
+libreplicant_la_CXXFLAGS = $(AM_CXXFLAGS) $(CXXFLAGS)
 libreplicant_la_LIBADD = $(BUSYBEE_LIBS) $(E_LIBS)
 libreplicant_la_LDFLAGS = -version-info 1:0:0
 
@@ -157,31 +195,34 @@ libreplicant_la_LDFLAGS = -version-info 1:0:0
 ##################################### Tools ####################################
 ################################################################################
 
-if ENABLE_REPLICANT_STUB
 bin_PROGRAMS += replicant
-endif
-if ENABLE_TOOLS
-noinst_PROGRAMS += replicant-block
-noinst_PROGRAMS += replicant-cli
+replicantexec_PROGRAMS += replicant-debug
+replicantexec_PROGRAMS += replicant-poke
+replicantexec_PROGRAMS += replicant-generate-unique-number
 replicantexec_PROGRAMS += replicant-new-object
 replicantexec_PROGRAMS += replicant-del-object
+replicantexec_PROGRAMS += replicant-kill-object
 replicantexec_PROGRAMS += replicant-backup-object
 replicantexec_PROGRAMS += replicant-restore-object
-replicantexec_PROGRAMS += replicant-debug-dump
-replicantexec_PROGRAMS += replicant-integrity-check
-replicantexec_PROGRAMS += replicant-list-servers
-endif
+replicantexec_PROGRAMS += replicant-list-objects
+replicantexec_PROGRAMS += replicant-conn-str
+replicantexec_PROGRAMS += replicant-kill-server
+replicantexec_PROGRAMS += replicant-debug-call
+replicantexec_PROGRAMS += replicant-debug-condition
 
 noinst_HEADERS += tools/common.h
 
 replicant_SOURCES = replicant.cc
-replicant_CPPFLAGS = -DREPLICANT_EXEC_DIR="\"$(replicantexecdir)\"" $(AM_CPPFLAGS) $(CPPFLAGS)
+replicant_CPPFLAGS = $(AM_CPPFLAGS) $(CPPFLAGS)
 
-replicant_block_SOURCES = tools/block.cc
-replicant_block_LDADD = libreplicant.la
+replicant_debug_SOURCES = replicant-debug.cc
+replicant_debug_CPPFLAGS = $(AM_CPPFLAGS) $(CPPFLAGS)
 
-replicant_cli_SOURCES = tools/cli.cc
-replicant_cli_LDADD = libreplicant.la
+replicant_poke_SOURCES = tools/poke.cc
+replicant_poke_LDADD = libreplicant.la
+
+replicant_generate_unique_number_SOURCES = tools/generate-unique-number.cc
+replicant_generate_unique_number_LDADD = libreplicant.la
 
 replicant_new_object_SOURCES = tools/new-object.cc
 replicant_new_object_LDADD = libreplicant.la
@@ -189,54 +230,66 @@ replicant_new_object_LDADD = libreplicant.la
 replicant_del_object_SOURCES = tools/del-object.cc
 replicant_del_object_LDADD = libreplicant.la
 
-replicant_backup_object_SOURCES = tools/backup-object.cc
+replicant_kill_object_SOURCES = tools/kill-object.cc
+replicant_kill_object_LDADD = libreplicant.la
+
+replicant_backup_object_SOURCES = tools/backup-object.cc common/atomic_io.cc
+replicant_backup_object_CXXFLAGS = $(AM_CXXFLAGS) -fvisibility=default $(CXXFLAGS)
 replicant_backup_object_LDADD = libreplicant.la
 
-replicant_restore_object_SOURCES = tools/restore-object.cc
+replicant_restore_object_SOURCES = tools/restore-object.cc common/atomic_io.cc
+replicant_restore_object_CXXFLAGS = $(AM_CXXFLAGS) -fvisibility=default $(CXXFLAGS)
 replicant_restore_object_LDADD = libreplicant.la
 
-replicant_integrity_check_SOURCES = tools/integrity-check.cc common/chain_node.cc common/configuration.cc common/packing.cc common/response_returncode.cc daemon/configuration_manager.cc daemon/fact_store.cc
-replicant_integrity_check_LDADD = $(HYPERLEVELDB_LIBS) $(E_LIBS) -lglog
+replicant_list_objects_SOURCES = tools/list-objects.cc
+replicant_list_objects_LDADD = libreplicant.la
 
-replicant_debug_dump_SOURCES = tools/debug-dump.cc common/chain_node.cc common/configuration.cc common/packing.cc common/response_returncode.cc daemon/configuration_manager.cc daemon/fact_store.cc
-replicant_debug_dump_LDADD = $(HYPERLEVELDB_LIBS) $(E_LIBS) -lglog
+replicant_conn_str_SOURCES = tools/conn-str.cc
+replicant_conn_str_LDADD = libreplicant.la
 
-replicant_list_servers_SOURCES = tools/list-servers.cc
-replicant_list_servers_LDADD = libreplicant.la
+replicant_kill_server_SOURCES = tools/kill-server.cc
+replicant_kill_server_LDADD = libreplicant.la
+
+#replicant_list_servers_SOURCES = tools/list-servers.cc
+#replicant_list_servers_LDADD = libreplicant.la
+
+replicant_debug_call_SOURCES = tools/debug-call.cc
+replicant_debug_call_LDADD = libreplicant.la
+
+replicant_debug_condition_SOURCES = tools/debug-condition.cc
+replicant_debug_condition_LDADD = libreplicant.la
 
 ################################################################################
 ################################### Examples ###################################
 ################################################################################
 
-if ENABLE_EXAMPLES
-replicantexec_LTLIBRARIES += libreplicant-example-alarm.la
+replicantexec_LTLIBRARIES += libreplicant-example-tick.la
 replicantexec_LTLIBRARIES += libreplicant-example-condition.la
 replicantexec_LTLIBRARIES += libreplicant-example-counter.la
 replicantexec_LTLIBRARIES += libreplicant-example-echo.la
 replicantexec_LTLIBRARIES += libreplicant-example-log.la
 replicantexec_LTLIBRARIES += libreplicant-example-nop.la
-replicantexec_LTLIBRARIES += libreplicant-example-suspect.la
-TESTS += test/sh/example-state-machines
-EXTRA_DIST += test/sh/example-state-machines
-endif
 
-libreplicant_example_alarm_la_SOURCES = examples/alarm.c
-libreplicant_example_alarm_la_CPPFLAGS = -I$(abs_top_srcdir)/daemon/ $(AM_CPPFLAGS) $(CPPFLAGS)
+libreplicant_example_tick_la_SOURCES = examples/tick.c
+libreplicant_example_tick_la_CFLAGS = $(CFLAGS)
+libreplicant_example_tick_la_LIBADD = librsm.la
 
 libreplicant_example_condition_la_SOURCES = examples/condition.c
-libreplicant_example_condition_la_CPPFLAGS = -I$(abs_top_srcdir)/daemon/ $(AM_CPPFLAGS) $(CPPFLAGS)
+libreplicant_example_condition_la_CFLAGS = $(CFLAGS)
+libreplicant_example_condition_la_LIBADD = librsm.la
 
 libreplicant_example_counter_la_SOURCES = examples/counter.c
-libreplicant_example_counter_la_CPPFLAGS = -I$(abs_top_srcdir)/daemon/ $(AM_CPPFLAGS) $(CPPFLAGS)
+libreplicant_example_counter_la_CFLAGS = $(CFLAGS)
+libreplicant_example_counter_la_LIBADD = librsm.la
 
 libreplicant_example_echo_la_SOURCES = examples/echo.c
-libreplicant_example_echo_la_CPPFLAGS = -I$(abs_top_srcdir)/daemon/ $(AM_CPPFLAGS) $(CPPFLAGS)
+libreplicant_example_echo_la_CFLAGS = $(CFLAGS)
+libreplicant_example_echo_la_LIBADD = librsm.la
 
 libreplicant_example_log_la_SOURCES = examples/log.c
-libreplicant_example_log_la_CPPFLAGS = -I$(abs_top_srcdir)/daemon/ $(AM_CPPFLAGS) $(CPPFLAGS)
+libreplicant_example_log_la_CFLAGS = $(CFLAGS)
+libreplicant_example_log_la_LIBADD = librsm.la
 
 libreplicant_example_nop_la_SOURCES = examples/nop.c
-libreplicant_example_nop_la_CPPFLAGS = -I$(abs_top_srcdir)/daemon/ $(AM_CPPFLAGS) $(CPPFLAGS)
-
-libreplicant_example_suspect_la_SOURCES = examples/suspect.c
-libreplicant_example_suspect_la_CPPFLAGS = -I$(abs_top_srcdir)/daemon/ $(AM_CPPFLAGS) $(CPPFLAGS)
+libreplicant_example_nop_la_CFLAGS = $(CFLAGS)
+libreplicant_example_nop_la_LIBADD = librsm.la

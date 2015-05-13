@@ -25,14 +25,15 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
-#ifndef replicant_macros_h_
-#define replicant_macros_h_
+#ifndef replicant_common_macros_h_
+#define replicant_common_macros_h_
 
 #define _XSTR(x) #x
 #define XSTR(x) _XSTR(x)
 #define STRINGIFY(x) case (x): lhs << XSTR(x); break
+#define CSTRINGIFY(x) case (x): return XSTR(x);
 
 #define _CONCAT(x, y) x ## y
 #define CONCAT(x, y) _CONCAT(x, y)
 
-#endif // replicant_macros_h_
+#endif // replicant_common_macros_h_

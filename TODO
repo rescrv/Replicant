@@ -1,0 +1,8 @@
+ - take cluster offline and change all addresses and bring it back
+ - ability to change bind-to address
+ - If a node joins/quits fast enough it will try to rebootstrap and hang (only
+   when window > snapshot interval)
+ - cleanup replicant.cc to refer to only the valid commands
+ - a command is necessary to detect failed objects
+ - spins when client disconnects from entire cluster
+ - robust history is invalid in snapshot

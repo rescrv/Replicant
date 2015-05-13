@@ -30,44 +30,37 @@
 #include <ctype.h>
 
 /* Replicant */
-#include <replicant_state_machine.h>
+#include <rsm.h>
 
 void*
-log_create(struct replicant_state_machine_context* ctx)
+log_create(struct rsm_context* ctx)
 {
-    return malloc(sizeof(int));
+    return (void*) -1;
 }
 
 void*
-log_recreate(struct replicant_state_machine_context* ctx,
+log_recreate(struct rsm_context* ctx,
              const char* data, size_t data_sz)
 {
-    return malloc(sizeof(int));
+    return (void*) -1;
 }
 
-void
-log_destroy(struct replicant_state_machine_context* ctx,
-            void* f)
-{
-    free(f);
-}
-
-void
-log_snapshot(struct replicant_state_machine_context* ctx,
+int
+log_snapshot(struct rsm_context* ctx,
              void* obj,
-             const char** data, size_t* data_sz)
+             char** data, size_t* data_sz)
 {
-    *data = malloc(sizeof(int));
-    *data_sz = sizeof(int);
+    *data = NULL;
+    *data_sz = 0;
+    return 0;
 }
 
 void
-log_log(struct replicant_state_machine_context* ctx,
+log_log(struct rsm_context* ctx,
         void* obj,
         const char* data, size_t data_sz)
 {
-    FILE* log = replicant_state_machine_log_stream(ctx);
-    fprintf(log, "begin logging of slot\n");
+    rsm_log(ctx, "begin logging of function");
     int is_print = 1;
     int saw_null = 0;
     size_t i = 0;
@@ -86,20 +79,19 @@ log_log(struct replicant_state_machine_context* ctx,
 
     if (is_print && saw_null)
     {
-        fprintf(log, "log was asked to log \"%s\" and it is %lld bytes long\n", data, i);
+        rsm_log(ctx, "log was asked to log \"%s\" and it is %lld bytes long", data, i);
     }
     else
     {
-        fprintf(log, "will not log unprintable characters\n");
+        rsm_log(ctx, "will not log unprintable characters");
     }
 
-    fprintf(log, "end logging of slot\n");
+    rsm_log(ctx, "end logging of function");
 }
 
-struct replicant_state_machine rsm = {
+struct state_machine rsm = {
     log_create,
     log_recreate,
-    log_destroy,
     log_snapshot,
     {{"log", log_log},
      {NULL, NULL}}

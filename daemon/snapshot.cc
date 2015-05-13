@@ -1,4 +1,4 @@
-// Copyright (c) 2013, Robert Escriva
+// Copyright (c) 2015, Robert Escriva
 // All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
@@ -25,23 +25,99 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
+// e
+#include <e/endian.h>
+
 // Replicant
 #include "daemon/snapshot.h"
 
+#include <glog/logging.h>
 using replicant::snapshot;
 
-snapshot :: snapshot()
-    : object_created_at_slot(0)
-    , data(NULL)
-    , data_sz(0)
-    , conditions()
+snapshot :: snapshot(uint64_t up_to)
+    : m_ref(0)
+    , m_up_to(up_to)
+    , m_mtx()
+    , m_cond(&m_mtx)
+    , m_failed()
+    , m_objects()
+    , m_snapshot()
+    , m_packer(&m_snapshot)
 {
 }
 
 snapshot :: ~snapshot() throw ()
 {
-    if (data)
+}
+
+void
+snapshot :: wait()
+{
+    po6::threads::mutex::hold hold(&m_mtx);
+
+    while (!done_condition())
     {
-        free(const_cast<void *>(static_cast<const void*>(data)));
+        m_cond.wait();
     }
+}
+
+void
+snapshot :: replica_internals(const e::slice& replica)
+{
+    m_packer = m_packer << e::pack_memmove(replica.data(), replica.size());
+}
+
+void
+snapshot :: start_object(const std::string& name)
+{
+    po6::threads::mutex::hold hold(&m_mtx);
+    m_objects.insert(name);
+}
+
+void
+snapshot :: finish_object(const std::string& name, const std::string& snap)
+{
+    po6::threads::mutex::hold hold(&m_mtx);
+    std::set<std::string>::iterator it = m_objects.find(name);
+
+    if (it != m_objects.end())
+    {
+        m_objects.erase(it);
+        m_packer << e::slice(name) << e::slice(snap);
+    }
+
+    m_cond.broadcast();
+}
+
+void
+snapshot :: abort_snapshot()
+{
+    po6::threads::mutex::hold hold(&m_mtx);
+
+    if (!m_objects.empty())
+    {
+        m_failed = true;
+    }
+
+    m_cond.broadcast();
+}
+
+bool
+snapshot :: done()
+{
+    po6::threads::mutex::hold hold(&m_mtx);
+    return done_condition();
+}
+
+const std::string&
+snapshot :: contents()
+{
+    po6::threads::mutex::hold hold(&m_mtx);
+    return m_snapshot;
+}
+
+bool
+snapshot :: done_condition()
+{
+    return m_failed || m_objects.empty();
 }

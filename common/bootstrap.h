@@ -1,4 +1,4 @@
-// Copyright (c) 2012, Robert Escriva
+// Copyright (c) 2015, Robert Escriva
 // All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
@@ -28,49 +28,56 @@
 #ifndef replicant_common_bootstrap_h_
 #define replicant_common_bootstrap_h_
 
-// C++
-#include <iostream>
+// STL
+#include <vector>
 
 // po6
 #include <po6/net/hostname.h>
 
+// e
+#include <e/error.h>
+
 // Replicant
-#include "common/configuration.h"
+#include <replicant.h>
+#include "namespace.h"
 
-namespace replicant
-{
+BEGIN_REPLICANT_NAMESPACE
+class configuration;
 
-enum bootstrap_returncode
+class bootstrap
 {
-    BOOTSTRAP_SUCCESS,
-    BOOTSTRAP_TIMEOUT,
-    BOOTSTRAP_COMM_FAIL,
-    BOOTSTRAP_SEE_ERRNO,
-    BOOTSTRAP_CORRUPT_INFORM,
-    BOOTSTRAP_NOT_CLUSTER_MEMBER,
-    BOOTSTRAP_GARBAGE
+    public:
+        static bool parse_hosts(const char* conn_str,
+                                std::vector<po6::net::hostname>* hosts);
+        static replicant_returncode bootstrap_one(const po6::net::hostname& hn,
+                                    configuration* config, e::error* err);
+        static std::string conn_str(const po6::net::hostname* hns, size_t hns_sz);
+
+    public:
+        bootstrap();
+        bootstrap(const char* host, uint16_t port);
+        bootstrap(const char* conn_str);
+        bootstrap(const char* host, uint16_t port, const char* conn_str);
+        bootstrap(const std::vector<po6::net::hostname>& hosts);
+        bootstrap(const bootstrap& other);
+        ~bootstrap() throw ();
+
+    public:
+        bool valid() const { return m_valid; }
+        replicant_returncode do_it(configuration* config, e::error* err) const;
+        std::string conn_str() const;
+
+    public:
+        bootstrap& operator = (const bootstrap& rhs);
+
+    private:
+        std::vector<po6::net::hostname> m_hosts;
+        bool m_valid;
 };
 
-bootstrap_returncode
-bootstrap(const po6::net::hostname& hn, configuration* config);
-
-bootstrap_returncode
-bootstrap_identity(const po6::net::hostname& hn, chain_node* cn);
-
-bootstrap_returncode
-bootstrap(const po6::net::hostname* hns, size_t hns_sz,
-          configuration* config);
-
-bool
-bootstrap_parse_hosts(const char* connection_string,
-                      std::vector<po6::net::hostname>* hosts);
-
-std::string
-bootstrap_hosts_to_string(const po6::net::hostname* hns, size_t hns_sz);
-
 std::ostream&
-operator << (std::ostream& lhs, const bootstrap_returncode& rhs);
+operator << (std::ostream& lhs, const bootstrap& rhs);
 
-} // namespace replicant
+END_REPLICANT_NAMESPACE
 
 #endif // replicant_common_bootstrap_h_

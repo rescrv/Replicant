@@ -1,4 +1,4 @@
-// Copyright (c) 2012, Robert Escriva
+// Copyright (c) 2015, Robert Escriva
 // All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
@@ -25,119 +25,71 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
-#ifndef replicant_configuration_h_
-#define replicant_configuration_h_
+#ifndef replicant_common_configuration_h_
+#define replicant_common_configuration_h_
 
 // Replicant
-#include "common/chain_node.h"
+#include "namespace.h"
+#include "common/bootstrap.h"
+#include "common/configuration.h"
+#include "common/server.h"
 
-namespace replicant
-{
+BEGIN_REPLICANT_NAMESPACE
 
 class configuration
 {
     public:
         configuration();
-        configuration(uint64_t cluster,
-                      uint64_t prev_token,
-                      uint64_t this_token,
-                      uint64_t version,
-                      const chain_node& head);
+        configuration(cluster_id cluster,
+                      version_id version,
+                      uint64_t first_slot,
+                      server* servers,
+                      size_t servers_sz);
+        configuration(const configuration& c, const server& s, uint64_t first_slot);
+        configuration(const configuration&);
         ~configuration() throw ();
+
+    public:
+        bool validate() const;
 
     // metadata
     public:
-        uint64_t cluster() const { return m_cluster; }
-        uint64_t version() const { return m_version; }
-        uint64_t prev_token() const { return m_prev_token; }
-        uint64_t this_token() const { return m_this_token; }
-
-    // invariants
-    public:
-        bool validate() const;
-        bool quorum_of(const configuration& other) const;
-        uint64_t fault_tolerance() const;
-        uint64_t servers_needed_for(uint64_t f) const;
+        cluster_id cluster() const { return m_cluster; }
+        version_id version() const { return m_version; }
+        uint64_t first_slot() const { return m_first_slot; }
 
     // membership
     public:
-        bool has_token(uint64_t token) const;
-        bool is_member(const chain_node& node) const;
-        const chain_node* node_from_token(uint64_t token) const;
-
-    // chaining
-    public:
-        const chain_node* head() const;
-        const chain_node* command_tail() const;
-        const chain_node* config_tail() const;
-        const chain_node* prev(uint64_t token) const;
-        const chain_node* next(uint64_t token) const;
-        bool in_command_chain(uint64_t token) const;
-        bool in_config_chain(uint64_t token) const;
-        uint64_t command_size() const;
-        uint64_t config_size() const;
-        uint64_t index(uint64_t token) const;
-
-    // iterators
-    public:
-        const chain_node* members_begin() const;
-        const chain_node* members_end() const;
-        const uint64_t* chain_begin() const;
-        const uint64_t* chain_end() const;
-
-    // modify the configuration
-    public:
-        void bump_version();
-        void add_member(const chain_node& node);
-        void add_to_chain(uint64_t token);
-        void remove_from_chain(uint64_t token);
-        void grow_command_chain();
-        void change_address(uint64_t token, const po6::net::location& address);
+        bool has(server_id si) const;
+        bool has(const po6::net::location& bind_to) const;
+        unsigned index(server_id si) const;
+        const std::vector<server>& servers() const { return m_servers; }
+        std::vector<server_id> server_ids() const;
+        const server* get(server_id si) const;
+        bootstrap current_bootstrap() const;
 
     private:
-        friend bool operator == (const configuration& lhs, const configuration& rhs);
-        friend std::ostream& operator << (std::ostream& lhs, const configuration& rhs);
-        friend e::buffer::packer operator << (e::buffer::packer lhs, const configuration& rhs);
+        friend e::packer operator << (e::packer lhs, const configuration& rhs);
         friend e::unpacker operator >> (e::unpacker lhs, configuration& rhs);
         friend size_t pack_size(const configuration& rhs);
 
     private:
-        uint64_t m_cluster;
-        uint64_t m_prev_token;
-        uint64_t m_this_token;
-        uint64_t m_version;
-        std::vector<chain_node> m_members;
-        std::vector<uint64_t> m_chain;
-        uint64_t m_command_sz;
+        cluster_id m_cluster;
+        version_id m_version;
+        uint64_t m_first_slot;
+        std::vector<server> m_servers;
 };
-
-// < compares version only
-bool
-operator < (const configuration& lhs, const configuration& rhs);
-
-bool
-operator == (const configuration& lhs, const configuration& rhs);
-inline bool
-operator != (const configuration& lhs, const configuration& rhs) { return !(lhs == rhs); }
 
 std::ostream&
 operator << (std::ostream& lhs, const configuration& rhs);
 
-e::buffer::packer
-operator << (e::buffer::packer lhs, const configuration& rhs);
-
+e::packer
+operator << (e::packer lhs, const configuration& rhs);
 e::unpacker
 operator >> (e::unpacker lhs, configuration& rhs);
-
-char*
-pack_config(const configuration& config, char* ptr);
-
 size_t
 pack_size(const configuration& rhs);
 
-size_t
-pack_size(const std::vector<configuration>& rhs);
+END_REPLICANT_NAMESPACE
 
-} // namespace replicant
-
-#endif // replicant_configuration_h_
+#endif // replicant_common_configuration_h_

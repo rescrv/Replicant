@@ -1,4 +1,4 @@
-// Copyright (c) 2012, Robert Escriva
+// Copyright (c) 2012-2015, Robert Escriva
 // All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
@@ -31,6 +31,7 @@
 // STL
 #include <queue>
 #include <functional>
+#include <list>
 #include <memory>
 #include <set>
 #include <utility>
@@ -39,26 +40,28 @@
 // po6
 #include <po6/net/hostname.h>
 #include <po6/net/ipaddr.h>
+#include <po6/pathname.h>
 #include <po6/threads/thread.h>
 
 // BusyBee
 #include <busybee_mta.h>
 
 // Replicant
-#include "common/chain_node.h"
+#include "namespace.h"
+#include "common/bootstrap.h"
 #include "common/configuration.h"
-#include "common/mapper.h"
-#include "daemon/client_manager.h"
-#include "daemon/configuration_manager.h"
-#include "daemon/connection.h"
-#include "daemon/fact_store.h"
-#include "daemon/failure_manager.h"
-#include "daemon/heal_next.h"
-#include "daemon/object_manager.h"
+#include "daemon/acceptor.h"
+#include "daemon/ballot.h"
+#include "daemon/mapper.h"
+#include "daemon/pvalue.h"
+#include "daemon/replica.h"
 #include "daemon/settings.h"
+#include "daemon/slot_type.h"
+#include "daemon/unordered_command.h"
 
-namespace replicant
-{
+BEGIN_REPLICANT_NAMESPACE
+class scout;
+class leader;
 
 class daemon
 {
@@ -75,222 +78,212 @@ class daemon
                 bool set_bind_to,
                 po6::net::location bind_to,
                 bool set_existing,
-                const std::vector<po6::net::hostname>& existing,
+                const bootstrap& bs,
                 const char* init_obj,
                 const char* init_lib,
                 const char* init_str,
                 const char* init_rst);
+        const server_id id() const { return m_us.id; }
 
-    private:
-        class deferred_command;
-
-    // Configure the chain membership via (re)configuration
-    private:
-        void process_bootstrap(const replicant::connection& conn,
+    public:
+        void join_the_cluster(const bootstrap& bs);
+        void process_bootstrap(server_id si,
                                std::auto_ptr<e::buffer> msg,
                                e::unpacker up);
-        void process_inform(const replicant::connection& conn,
-                            std::auto_ptr<e::buffer> msg,
-                            e::unpacker up);
-        void process_server_register(const replicant::connection& conn,
-                                     std::auto_ptr<e::buffer> msg,
-                                     e::unpacker up);
-        void process_server_change_address(const replicant::connection& conn,
-                                           std::auto_ptr<e::buffer> msg,
-                                           e::unpacker up);
-        void process_server_identify(const replicant::connection& conn,
-                                     std::auto_ptr<e::buffer> msg,
-                                     e::unpacker up);
-        void process_server_identity(const replicant::connection& conn,
-                                     std::auto_ptr<e::buffer> msg,
-                                     e::unpacker up);
-        void process_config_propose(const replicant::connection& conn,
-                                    std::auto_ptr<e::buffer> msg,
-                                    e::unpacker up);
-        void process_config_accept(const replicant::connection& conn,
-                                   std::auto_ptr<e::buffer> msg,
-                                   e::unpacker up);
-        void process_config_reject(const replicant::connection& conn,
-                                   std::auto_ptr<e::buffer> msg,
-                                   e::unpacker up);
-        // send accept message for proposal
-        void accept_proposal(const chain_node& dest,
-                             uint64_t proposal_id,
-                             uint64_t proposal_time);
-        // send reject message for proposal
-        void reject_proposal(const chain_node& dest,
-                             uint64_t proposal_id,
-                             uint64_t proposal_time);
-        // create an INFORM message ready to pass to "send"
-        std::auto_ptr<e::buffer> create_inform_message();
-        // invoke all hooks, presumably because the configuration changed
-        void post_reconfiguration_hooks();
-        // propose a new configuration.  the caller must enforce all invariants
-        // about this configuration w.r.t. previously issued ones and this call
-        // will assert that
-        void propose_config(const configuration& config);
-        void background_bootstrap();
-        void periodic_change_address(uint64_t now);
-        void periodic_maintain_cluster(uint64_t now);
-
-    // Client-related functions
-    private:
-        void process_client_register(const replicant::connection& conn,
-                                     std::auto_ptr<e::buffer> msg,
-                                     e::unpacker up);
-        void process_client_disconnect(const replicant::connection& conn,
-                                       std::auto_ptr<e::buffer> msg,
-                                       e::unpacker up);
-        void process_client_timeout(const replicant::connection& conn,
+        void process_silent_bootstrap(server_id si,
+                                      std::auto_ptr<e::buffer> msg,
+                                      e::unpacker up);
+        void send_bootstrap(server_id si);
+        void process_state_transfer(server_id si,
                                     std::auto_ptr<e::buffer> msg,
                                     e::unpacker up);
 
-    // Normal-case chain-replication-related goodness.
-    private:
-        void process_command_submit(const replicant::connection& conn,
-                                    std::auto_ptr<e::buffer> msg,
-                                    e::unpacker up);
-        void process_command_issue(const replicant::connection& conn,
+        void send_paxos_phase1a(server_id to, const ballot& b);
+        void process_paxos_phase1a(server_id si,
                                    std::auto_ptr<e::buffer> msg,
                                    e::unpacker up);
-        void process_command_ack(const replicant::connection& conn,
+        void send_paxos_phase1b(server_id to);
+        void process_paxos_phase1b(server_id si,
+                                   std::auto_ptr<e::buffer> msg,
+                                   e::unpacker up);
+        void send_paxos_phase2a(server_id to, const pvalue& pval);
+        void process_paxos_phase2a(server_id si,
+                                   std::auto_ptr<e::buffer> msg,
+                                   e::unpacker up);
+        void send_paxos_phase2b(server_id to, const pvalue& pval);
+        void process_paxos_phase2b(server_id si,
+                                   std::auto_ptr<e::buffer> msg,
+                                   e::unpacker up);
+        void send_paxos_learn(server_id to, const pvalue& pval);
+        void process_paxos_learn(server_id si,
                                  std::auto_ptr<e::buffer> msg,
                                  e::unpacker up);
-        void issue_command(uint64_t slot, uint64_t object,
-                           uint64_t client, uint64_t nonce,
-                           const e::slice& data);
-        void defer_command(uint64_t object,
-                           uint64_t client,
-                           const e::slice& data);
-        void defer_command(uint64_t object,
-                           uint64_t client, uint64_t nonce,
-                           const e::slice& data);
-        void submit_command(uint64_t object,
-                            uint64_t client, uint64_t nonce,
-                            const e::slice& data);
-        void acknowledge_command(uint64_t slot);
-        void record_execution(uint64_t slot,
-                              uint64_t client,
-                              uint64_t nonce,
-                              replicant::response_returncode rc,
-                              const e::slice& data);
-        void periodic_describe_slots(uint64_t now);
-        void periodic_execute_deferred(uint64_t now);
+        void send_paxos_submit(uint64_t slot_start, uint64_t slot_limit, const e::slice& command);
+        void process_paxos_submit(server_id si,
+                                  std::auto_ptr<e::buffer> msg,
+                                  e::unpacker up);
+        void enqueue_paxos_command(slot_type t,
+                                   const std::string& command);
+        void enqueue_paxos_command(server_id on_behalf_of,
+                                   uint64_t request_nonce,
+                                   slot_type t,
+                                   const std::string& command);
+        void enqueue_robust_paxos_command(server_id on_behalf_of,
+                                          uint64_t request_nonce,
+                                          uint64_t command_nonce,
+                                          uint64_t min_slot,
+                                          slot_type t,
+                                          const std::string& command);
+        void flush_enqueued_commands_with_stale_leader();
+        void periodic_flush_enqueued_commands(uint64_t now);
+        void send_unordered_command(unordered_command* uc);
+        void observe_ballot(const ballot& b);
+        void periodic_scout(uint64_t now);
+        void periodic_abdicate(uint64_t now);
+        void periodic_warn_scout_stuck(uint64_t now);
+        bool post_config_change_hook(); // true if good; false if need to exit
 
-    // Error-case chain functions
-    private:
-        void process_heal_req(const replicant::connection& conn,
-                              std::auto_ptr<e::buffer> msg,
-                              e::unpacker up);
-        void process_heal_retry(const replicant::connection& conn,
-                                std::auto_ptr<e::buffer> msg,
-                                e::unpacker up);
-        void process_heal_resp(const replicant::connection& conn,
-                               std::auto_ptr<e::buffer> msg,
-                               e::unpacker up);
-        void process_heal_done(const replicant::connection& conn,
-                               std::auto_ptr<e::buffer> msg,
-                               e::unpacker up);
-        void process_stable(const replicant::connection& conn,
-                            std::auto_ptr<e::buffer> msg,
-                            e::unpacker up);
-        void transfer_more_state();
-        void periodic_heal_next(uint64_t now);
-        void reset_healing();
-        void maybe_send_stable();
+    public:
+        std::string construct_become_member_command(const server& s);
+        void process_server_become_member(server_id si,
+                                          std::auto_ptr<e::buffer> msg,
+                                          e::unpacker up);
 
-    // Notify/wait-style conditions
-    private:
-        void process_condition_wait(const replicant::connection& conn,
-                                    std::auto_ptr<e::buffer> msg,
-                                    e::unpacker up);
-        void send_notify(uint64_t client,
-                         uint64_t nonce,
-                         replicant::response_returncode rc,
-                         const e::slice& data);
+    public:
+        void process_unique_number(server_id si,
+                                   std::auto_ptr<e::buffer> msg,
+                                   e::unpacker up);
+        void periodic_generate_nonce_sequence(uint64_t now);
+        void callback_nonce_sequence(server_id si, uint64_t token, uint64_t counter);
+        bool generate_nonce(uint64_t* nonce);
+        void process_when_nonces_available(server_id si,
+                                           std::auto_ptr<e::buffer> msg);
 
-    // Snapshot backup/restore
-    private:
-        void handle_snapshot(std::auto_ptr<snapshot>);
+    public:
+        void process_object_failed(server_id si,
+                                   std::auto_ptr<e::buffer> msg,
+                                   e::unpacker up);
+        void periodic_clean_dead_objects(uint64_t now);
 
-    // Check for faults
-    private:
-        void process_ping(const replicant::connection& conn,
+    public:
+        void callback_condition(server_id si,
+                                uint64_t nonce,
+                                uint64_t state,
+                                const std::string& data);
+        void callback_enqueued(uint64_t command_nonce,
+                               server_id* si,
+                               uint64_t* request_nonce);
+        void callback_client(server_id si, uint64_t nonce,
+                             replicant_returncode status,
+                             const std::string& result);
+
+    public:
+        void process_poke(server_id si,
                           std::auto_ptr<e::buffer> msg,
                           e::unpacker up);
-        void process_pong(const replicant::connection& conn,
+        void process_cond_wait(server_id si,
+                               std::auto_ptr<e::buffer> msg,
+                               e::unpacker up);
+        void process_call(server_id si,
                           std::auto_ptr<e::buffer> msg,
                           e::unpacker up);
-        void periodic_exchange(uint64_t now);
-        void periodic_suspect_clients(uint64_t now);
-        void periodic_disconnect_clients(uint64_t now);
-        void update_failure_detectors();
-        void issue_suspect_callback(uint64_t obj_id, uint64_t cb_id, const e::slice& data);
+        void process_get_robust_params(server_id si,
+                                       std::auto_ptr<e::buffer> msg,
+                                       e::unpacker up);
+        void process_call_robust(server_id si,
+                                 std::auto_ptr<e::buffer> msg,
+                                 e::unpacker up);
+        void periodic_tick(uint64_t now);
 
-    // alarms
-    private:
-        void periodic_alarm(uint64_t now);
-        void issue_alarm(uint64_t obj_id, const char* func);
+    public:
+        void send_ping(server_id si);
+        void process_ping(server_id si,
+                          std::auto_ptr<e::buffer> msg,
+                          e::unpacker up);
+        void send_pong(server_id si);
+        void process_pong(server_id si,
+                          std::auto_ptr<e::buffer> msg,
+                          e::unpacker up);
+        void periodic_ping_acceptors(uint64_t now);
+        bool suspect_failed(server_id si);
+        void periodic_submit_dead_nodes(uint64_t now);
 
-    // Manage communication
-    private:
-        bool recv(replicant::connection* conn, std::auto_ptr<e::buffer>* msg);
-        bool send(const replicant::connection& conn, std::auto_ptr<e::buffer> msg);
-        bool send(const chain_node& node, std::auto_ptr<e::buffer> msg);
-        bool send_no_disruption(uint64_t token, std::auto_ptr<e::buffer> msg);
-        bool send_no_disruption(const chain_node& node, std::auto_ptr<e::buffer> msg);
+    public:
+        bool send(server_id si, std::auto_ptr<e::buffer> msg);
+        bool send_from_non_main_thread(server_id si, std::auto_ptr<e::buffer> msg);
+        bool send_when_acceptor_persistent(server_id si, std::auto_ptr<e::buffer> msg);
+        void flush_acceptor_messages();
+        void handle_disruption(server_id si);
 
-    // Handle communication disruptions
-    private:
-        void handle_disruption(uint64_t token);
-        void periodic_handle_disruption(uint64_t now);
-        void handle_disruption_reset_healing(uint64_t token);
-        void handle_disruption_reset_reconfiguration(uint64_t token);
+    public:
+        void debug_dump();
 
-    // Periodically run certain functions
     private:
         typedef void (daemon::*periodic_fptr)(uint64_t now);
-        typedef std::pair<uint64_t, periodic_fptr> periodic;
-        void trip_periodic(uint64_t when, periodic_fptr fp);
+        struct periodic;
+        void register_periodic(unsigned interval_ms, periodic_fptr fp);
         void run_periodic();
-        void periodic_nop(uint64_t now);
-
-    // Utilities
-    private:
-        bool generate_token(uint64_t* token);
 
     private:
         settings m_s;
         e::garbage_collector m_gc;
         e::garbage_collector::thread_state m_gc_ts;
-        po6::threads::mutex m_quiescent_lock;
-        replicant::mapper m_busybee_mapper;
+        mapper m_busybee_mapper;
         std::auto_ptr<busybee_mta> m_busybee;
-        chain_node m_us;
-        bool m_have_bootstrapped;
-        uint64_t m_maintain_count;
-        std::vector<po6::net::hostname> m_bootstrap;
-        po6::threads::thread m_bootstrap_thread;
-        po6::threads::mutex m_bootstrap_mtx;
-        po6::threads::cond m_bootstrap_cond;
-        configuration_manager m_config_manager;
-        replicant::object_manager m_object_manager;
-        failure_manager m_failure_manager;
-        client_manager m_client_manager;
-        po6::threads::mutex m_periodic_mtx;
+        uint32_t m_busybee_init;
+        server m_us;
+        po6::threads::mutex m_config_mtx;
+        configuration m_config;
+        bootstrap m_bootstrap;
         std::vector<periodic> m_periodic;
-        po6::threads::mutex m_send_mtx;
-        po6::threads::mutex m_deferred_mtx;
-        const std::auto_ptr<std::queue<deferred_command> > m_deferred;
-        std::map<uint64_t, uint64_t> m_temporary_servers;
-        uint64_t m_heal_token;
-        heal_next m_heal_next;
-        uint64_t m_stable_version;
-        std::set<uint64_t> m_disrupted_backoff;
-        bool m_disrupted_retry_scheduled;
-        replicant::fact_store m_fs;
+
+        // generate unique numbers, using a counter in the replica
+        uint64_t m_unique_token;
+        uint64_t m_unique_base;
+        uint64_t m_unique_offset;
+
+        // failure detection
+        std::vector<uint64_t> m_last_seen;
+        std::vector<uint64_t> m_suspect_counts;
+
+        // unordered commands; received from clients, and awaiting consensus
+        po6::threads::mutex m_unordered_mtx;
+        std::list<unordered_command*> m_unordered_cmds;
+        uint64_t m_first_unordered;
+
+        // messages enqueued to wait for persistence
+        struct deferred_msg
+        {
+            deferred_msg(uint64_t w, server_id t, e::buffer* m)
+                : when(w), si(t), msg(m) {}
+            deferred_msg(const deferred_msg& other)
+                : when(other.when), si(other.si), msg(other.msg) {}
+            ~deferred_msg() throw () {}
+
+            deferred_msg& operator = (const deferred_msg&);
+
+            uint64_t when;
+            server_id si;
+            e::buffer* msg;
+        };
+        std::list<deferred_msg> m_deferred_msgs;
+
+        // messages waiting for nonces
+        std::list<deferred_msg> m_msgs_waiting_for_nonces;
+
+        // paxos state
+        acceptor m_acceptor;
+        ballot m_highest_ballot;
+        bool m_first_scout;
+        std::auto_ptr<scout> m_scout;
+        uint64_t m_scouts_since_last_leader;
+        uint64_t m_scout_wait_cycles;
+        std::auto_ptr<leader> m_leader;
+        std::auto_ptr<replica> m_replica;
+        uint64_t m_last_replica_snapshot;
+        uint64_t m_last_gc_slot;
 };
 
-} // namespace replicant
+END_REPLICANT_NAMESPACE
 
 #endif // replicant_daemon_h_

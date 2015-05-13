@@ -1,4 +1,4 @@
-// Copyright (c) 2013, Robert Escriva
+// Copyright (c) 2015, Robert Escriva
 // All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
@@ -29,32 +29,65 @@
 #define replicant_daemon_snapshot_h_
 
 // C
-#include <cstdlib>
 #include <stdint.h>
 
 // STL
-#include <vector>
+#include <set>
 
-namespace replicant
-{
+// po6
+#include <po6/threads/cond.h>
+#include <po6/threads/mutex.h>
+
+// e
+#include <e/intrusive_ptr.h>
+#include <e/slice.h>
+
+// Replicant
+#include "namespace.h"
+#include "common/packing.h"
+
+BEGIN_REPLICANT_NAMESPACE
 
 class snapshot
 {
     public:
-        snapshot();
+        snapshot(uint64_t up_to);
         ~snapshot() throw ();
 
     public:
-        uint64_t object_created_at_slot;
-        const char* data;
-        size_t data_sz;
-        std::vector<std::pair<uint64_t, uint64_t> > conditions;
+        uint64_t slot() const { return m_up_to; }
+        void wait();
+        void replica_internals(const e::slice& replica);
+        void start_object(const std::string& name);
+        void finish_object(const std::string& name, const std::string& snap);
+        void abort_snapshot();
+        bool done();
+        const std::string& contents();
+
+    private:
+        bool done_condition();
+
+    // refcount
+    private:
+        friend class e::intrusive_ptr<snapshot>;
+        void inc() { __sync_add_and_fetch(&m_ref, 1); }
+        void dec() { if (__sync_sub_and_fetch(&m_ref, 1) == 0) delete this; }
+        size_t m_ref;
+
+    private:
+        const uint64_t m_up_to;
+        po6::threads::mutex m_mtx;
+        po6::threads::cond m_cond;
+        bool m_failed;
+        std::set<std::string> m_objects;
+        std::string m_snapshot;
+        e::packer m_packer;
 
     private:
         snapshot(const snapshot&);
         snapshot& operator = (const snapshot&);
 };
 
-} // namespace replicant
+END_REPLICANT_NAMESPACE
 
 #endif // replicant_daemon_snapshot_h_

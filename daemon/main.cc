@@ -200,17 +200,19 @@ main(int argc, const char* argv[])
         return EXIT_FAILURE;
     }
 
-    std::vector<po6::net::hostname> hostnames;
+    replicant::bootstrap bs;
 
-    if (connect2 && !replicant::bootstrap_parse_hosts(connect_string, &hostnames))
+    if (connect1 && connect2)
     {
-        std::cerr << "cannot interpret the connection string to bootstrap the cluster" << std::endl;
-        return EXIT_FAILURE;
+        bs = replicant::bootstrap(connect_host, connect_port, connect_string);
     }
-
-    if (connect1)
+    else if (connect1)
     {
-        hostnames.push_back(po6::net::hostname(connect_host, connect_port));
+        bs = replicant::bootstrap(connect_host, connect_port);
+    }
+    else if (connect2)
+    {
+        bs = replicant::bootstrap(connect_string);
     }
 
     google::InitGoogleLogging(argv[0]);
@@ -229,7 +231,7 @@ main(int argc, const char* argv[])
                      po6::pathname(log ? log : data),
                      po6::pathname(pidfile), has_pidfile,
                      listen, bind_to,
-                     connect1 || connect2, hostnames,
+                     connect1 || connect2, bs,
                      init_obj, init_lib, init_str, init_rst);
     }
     catch (std::exception& e)

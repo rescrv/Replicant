@@ -25,37 +25,27 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
-#ifndef replicant_packing_h_
-#define replicant_packing_h_
-
-// po6
-#include <po6/net/ipaddr.h>
-#include <po6/net/location.h>
+#ifndef replicant_common_packing_h_
+#define replicant_common_packing_h_
 
 // e
-#include <e/buffer.h>
+#include <e/serialization.h>
 
-namespace replicant
-{
+// Replicant
+#include <replicant.h>
+#include "namespace.h"
 
-e::buffer::packer
-operator << (e::buffer::packer lhs, const po6::net::ipaddr& rhs);
-
-e::unpacker
-operator >> (e::unpacker lhs, po6::net::ipaddr& rhs);
-
-size_t
-pack_size(const po6::net::ipaddr& rhs);
-
-e::buffer::packer
-operator << (e::buffer::packer lhs, const po6::net::location& rhs);
-
-e::unpacker
-operator >> (e::unpacker lhs, po6::net::location& rhs);
+BEGIN_REPLICANT_NAMESPACE
+using ::pack_size;
+using e::pack_size;
 
 size_t
-pack_size(const po6::net::location& rhs);
+pack_size(const replicant_returncode& rhs);
+e::packer
+operator << (e::packer lhs, const replicant_returncode& rhs);
+e::unpacker
+operator >> (e::unpacker lhs, replicant_returncode& rhs);
 
-} // namespace replicant
+END_REPLICANT_NAMESPACE
 
-#endif // replicant_packing_h_
+#endif // replicant_common_packing_h_

@@ -27,3 +27,15 @@
 
 // Replicant
 #include "daemon/settings.h"
+
+#define NANOS 1ULL
+#define MICROS (1000ULL * NANOS)
+#define MILLIS (1000ULL * MICROS)
+#define SECONDS (1000ULL * MILLIS)
+
+using replicant::settings;
+
+settings :: settings()
+    : SUSPICION_TIMEOUT(50 * MILLIS)
+{
+}
