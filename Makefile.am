@@ -129,6 +129,7 @@ replicant_daemon_SOURCES += daemon/unordered_command.cc
 replicant_daemon_LDADD =
 replicant_daemon_LDADD += $(BUSYBEE_LIBS)
 replicant_daemon_LDADD += $(E_LIBS)
+replicant_daemon_LDADD += $(LRT_LIBS)
 replicant_daemon_LDADD += -lglog -lpthread
 
 ################################################################################
