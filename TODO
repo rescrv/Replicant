@@ -1,4 +1,0 @@
- - take cluster offline and change all addresses and bring it back
- - ability to change bind-to address
- - spins when client disconnects from entire cluster
- - robust history is invalid in snapshot

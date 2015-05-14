@@ -146,13 +146,13 @@ replicant_client_cond_wait(struct replicant_client* client,
                            char** data, size_t* data_sz);
 
 int64_t
-replicant_client_context_manager(struct replicant_client* client,
-                                 const char* object,
-                                 const char* enter_func,
-                                 const char* enter_input, size_t enter_input_sz,
-                                 const char* exit_func,
-                                 const char* exit_input, size_t exit_input_sz,
-                                 enum replicant_returncode* status);
+replicant_client_defended_call(struct replicant_client* client,
+                               const char* object,
+                               const char* enter_func,
+                               const char* enter_input, size_t enter_input_sz,
+                               const char* exit_func,
+                               const char* exit_input, size_t exit_input_sz,
+                               enum replicant_returncode* status);
 
 int
 replicant_client_conn_str(struct replicant_client* client,

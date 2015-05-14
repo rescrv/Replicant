@@ -36,6 +36,7 @@
 using replicant::settings;
 
 settings :: settings()
-    : SUSPICION_TIMEOUT(50 * MILLIS)
+    : SUSPECT_TIMEOUT(50 * MILLIS)
+    , SUSPECT_STRIKES(5)
 {
 }

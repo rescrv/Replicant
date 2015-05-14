@@ -33,6 +33,7 @@ using replicant::mapper;
 mapper :: mapper(po6::threads::mutex* mtx, configuration* c)
     : m_mtx(mtx)
     , m_c(c)
+    , m_aux()
 {
 }
 
@@ -43,6 +44,17 @@ mapper :: ~mapper() throw ()
 bool
 mapper :: lookup(uint64_t si, po6::net::location* bound_to)
 {
+    po6::threads::mutex::hold hold(m_mtx);
+
+    for (size_t i = 0; i < m_aux.size(); ++i)
+    {
+        if (m_aux[i].id.get() == si)
+        {
+            *bound_to = m_aux[i].bind_to;
+            return true;
+        }
+    }
+
     for (size_t i = 0; i < m_c->servers().size(); ++i)
     {
         if (m_c->servers()[i].id.get() == si)
@@ -53,4 +65,37 @@ mapper :: lookup(uint64_t si, po6::net::location* bound_to)
     }
 
     return false;
+}
+
+void
+mapper :: add_aux(const server& s)
+{
+    po6::threads::mutex::hold hold(m_mtx);
+    const std::vector<server>& servers(m_c->servers());
+
+    for (size_t i = 0; i < servers.size(); ++i)
+    {
+        if (servers[i].id == s.id && servers[i].bind_to == s.bind_to)
+        {
+            return;
+        }
+    }
+
+    for (size_t i = 0; i < m_aux.size(); ++i)
+    {
+        if (m_aux[i].id == s.id)
+        {
+            m_aux[i] = s;
+            return;
+        }
+    }
+
+    m_aux.push_back(s);
+}
+
+void
+mapper :: clear_aux()
+{
+    po6::threads::mutex::hold hold(m_mtx);
+    m_aux.clear();
 }

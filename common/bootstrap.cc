@@ -212,9 +212,15 @@ bootstrap :: bootstrap(const char* host, uint16_t port, const char* cs)
     m_hosts.push_back(po6::net::hostname(host, port));
 }
 
-bootstrap :: bootstrap(const std::vector<po6::net::hostname>& hosts)
-    : m_hosts(hosts)
+bootstrap :: bootstrap(const std::vector<po6::net::hostname>& h)
+    : m_hosts(h)
     , m_valid(true)
+{
+}
+
+bootstrap :: bootstrap(const bootstrap& other)
+    : m_hosts(other.m_hosts)
+    , m_valid(other.m_valid)
 {
 }
 

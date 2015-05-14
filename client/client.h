@@ -88,6 +88,12 @@ class client
                           uint64_t state,
                           replicant_returncode* status,
                           char** data, size_t* data_sz);
+        int64_t defended_call(const char* object,
+                              const char* enter_func,
+                              const char* enter_input, size_t enter_input_sz,
+                              const char* exit_func,
+                              const char* exit_input, size_t exit_input_sz,
+                              replicant_returncode* status);
         int conn_str(replicant_returncode* status, char** servers);
         int64_t kill_server(uint64_t token, replicant_returncode* status);
         // looping/polling
@@ -107,8 +113,10 @@ class client
         void bump_config_cond_state(uint64_t x) { m_config_cond_state = std::max(m_config_cond_state, x); }
 
     private:
+        void reset_busybee();
         int64_t inner_loop(replicant_returncode* status);
         bool maintain_connection(replicant_returncode* status);
+        void possibly_clear_flagfd();
         void handle_disruption(server_id si);
         bool handle_bootstrap(server_id si, e::unpacker up, replicant_returncode* status);
         int64_t send(pending* p);
@@ -129,6 +137,7 @@ class client
         uint64_t m_bootstrap_count;
         int64_t m_next_client_id;
         uint64_t m_next_nonce;
+        bool m_backoff;
         pending_map_t m_pending;
         pending_robust_map_t m_pending_robust;
         pending_list_t m_pending_retry;

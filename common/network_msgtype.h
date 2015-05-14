@@ -45,6 +45,9 @@ enum network_msgtype
     REPLNET_PING                    = 29,
     REPLNET_PONG                    = 30,
     REPLNET_STATE_TRANSFER          = 31,
+    REPLNET_SUGGEST_REJOIN          = 26,
+    REPLNET_WHO_ARE_YOU             = 25,
+    REPLNET_IDENTITY                = 24,
 
     REPLNET_PAXOS_PHASE1A           = 32,
     REPLNET_PAXOS_PHASE1B           = 33,

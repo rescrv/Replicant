@@ -280,6 +280,21 @@ replicant_client_cond_wait(struct replicant_client* _cl,
     );
 }
 
+REPLICANT_API int64_t
+replicant_client_defended_call(struct replicant_client* _cl,
+                               const char* object,
+                               const char* enter_func,
+                               const char* enter_input, size_t enter_input_sz,
+                               const char* exit_func,
+                               const char* exit_input, size_t exit_input_sz,
+                               enum replicant_returncode* status)
+{
+    C_WRAP_EXCEPT(
+    return cl->defended_call(object, enter_func, enter_input, enter_input_sz,
+                             exit_func, exit_input, exit_input_sz, status);
+    );
+}
+
 REPLICANT_API int
 replicant_client_conn_str(struct replicant_client* _cl,
                           enum replicant_returncode* status,

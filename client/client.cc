@@ -57,6 +57,10 @@ using replicant::client;
     m_last_error.set_loc(__FILE__, __LINE__); \
     m_last_error.set_msg()
 
+#define PERROR(CODE) \
+    p->set_status(REPLICANT_ ## CODE); \
+    p->error(__FILE__, __LINE__)
+
 client :: client(const char* coordinator, uint16_t port)
     : m_bootstrap(coordinator, port)
     , m_busybee_mapper(&m_config)
@@ -67,6 +71,7 @@ client :: client(const char* coordinator, uint16_t port)
     , m_bootstrap_count(1)
     , m_next_client_id(1)
     , m_next_nonce(1)
+    , m_backoff()
     , m_pending()
     , m_pending_robust()
     , m_pending_retry()
@@ -75,7 +80,12 @@ client :: client(const char* coordinator, uint16_t port)
     , m_last_error()
     , m_flagfd()
 {
-    m_busybee.reset(new busybee_st(&m_busybee_mapper, 0));
+    if (!m_flagfd.valid())
+    {
+        throw std::bad_alloc();
+    }
+
+    reset_busybee();
 }
 
 client :: client(const char* cs)
@@ -88,6 +98,7 @@ client :: client(const char* cs)
     , m_bootstrap_count(1)
     , m_next_client_id(1)
     , m_next_nonce(1)
+    , m_backoff()
     , m_pending()
     , m_pending_robust()
     , m_pending_retry()
@@ -96,7 +107,12 @@ client :: client(const char* cs)
     , m_last_error()
     , m_flagfd()
 {
-    m_busybee.reset(new busybee_st(&m_busybee_mapper, 0));
+    if (!m_flagfd.valid())
+    {
+        throw std::bad_alloc();
+    }
+
+    reset_busybee();
 }
 
 client :: ~client() throw ()
@@ -277,6 +293,22 @@ client :: cond_wait(const char* object,
     return send(p.get());
 }
 
+int64_t
+client :: defended_call(const char* object,
+                        const char* enter_func,
+                        const char* enter_input, size_t enter_input_sz,
+                        const char* exit_func,
+                        const char* exit_input, size_t exit_input_sz,
+                        replicant_returncode* status)
+{
+    if (!maintain_connection(status))
+    {
+        return -1;
+    }
+
+    return -1;
+}
+
 int
 client :: conn_str(enum replicant_returncode* status, char** servers)
 {
@@ -340,6 +372,7 @@ client :: loop(int timeout, replicant_returncode* status)
         return -1;
     }
 
+    possibly_clear_flagfd();
     ERROR(NONE_PENDING) << "no outstanding operations to process";
     return -1;
 }
@@ -429,6 +462,7 @@ client :: wait(int64_t id, int timeout, replicant_returncode* status)
         return -1;
     }
 
+    possibly_clear_flagfd();
     ERROR(NONE_PENDING) << "no outstanding operation with id=" << id;
     return -1;
 }
@@ -502,6 +536,8 @@ client :: kill(int64_t id)
             ++it;
         }
     }
+
+    possibly_clear_flagfd();
 }
 
 int
@@ -530,9 +566,23 @@ client :: set_error_message(const char* msg)
     m_last_error.set_msg() << msg;
 }
 
+void
+client :: reset_busybee()
+{
+    m_busybee.reset(new busybee_st(&m_busybee_mapper, 0));
+    m_busybee->set_external_fd(m_flagfd.poll_fd());
+}
+
 int64_t
 client :: inner_loop(replicant_returncode* status)
 {
+    if (m_backoff)
+    {
+        ERROR(COMM_FAILED) << "lost communication with the cluster; backoff before trying again";
+        m_backoff = false;
+        return -1;
+    }
+
     if (!maintain_connection(status))
     {
         return -1;
@@ -554,7 +604,14 @@ client :: inner_loop(replicant_returncode* status)
 
     uint64_t id;
     std::auto_ptr<e::buffer> msg;
+    const bool isset = m_flagfd.isset();
+    m_flagfd.clear();
     busybee_returncode rc = m_busybee->recv(&id, &msg);
+
+    if (isset)
+    {
+        m_flagfd.set();
+    }
 
     switch (rc)
     {
@@ -607,6 +664,9 @@ client :: inner_loop(replicant_returncode* status)
         case REPLNET_PING:
         case REPLNET_PONG:
         case REPLNET_STATE_TRANSFER:
+        case REPLNET_SUGGEST_REJOIN:
+        case REPLNET_WHO_ARE_YOU:
+        case REPLNET_IDENTITY:
         case REPLNET_PAXOS_PHASE1A:
         case REPLNET_PAXOS_PHASE1B:
         case REPLNET_PAXOS_PHASE2A:
@@ -745,6 +805,19 @@ client :: maintain_connection(replicant_returncode* status)
 }
 
 void
+client :: possibly_clear_flagfd()
+{
+    if (m_pending.empty() &&
+        m_pending_robust.empty() &&
+        m_pending_retry.empty() &&
+        m_pending_robust_retry.empty() &&
+        m_complete.empty())
+    {
+        m_flagfd.clear();
+    }
+}
+
+void
 client ::handle_disruption(server_id si)
 {
     for (pending_map_t::iterator it = m_pending.begin();
@@ -752,7 +825,17 @@ client ::handle_disruption(server_id si)
     {
         if (it->first.first == si)
         {
-            m_pending_retry.push_back(it->second);
+            if (it->second->resend_on_failure())
+            {
+                m_pending_retry.push_back(it->second);
+            }
+            else
+            {
+                pending* p = it->second.get();
+                PERROR(COMM_FAILED) << "communication failed while sending operation";
+                m_complete.push_back(p);
+            }
+
             m_pending.erase(it);
             it = m_pending.begin();
         }
@@ -776,6 +859,8 @@ client ::handle_disruption(server_id si)
             ++it;
         }
     }
+
+    possibly_clear_flagfd();
 }
 
 bool
@@ -818,7 +903,7 @@ client :: handle_bootstrap(server_id si, e::unpacker up, replicant_returncode* s
             m_complete.push_back(p);
         }
 
-        m_busybee.reset(new busybee_st(&m_busybee_mapper, 0));
+        reset_busybee();
         changed = true;
     }
     else if (m_config.version() < new_config.version())
@@ -863,10 +948,13 @@ client :: send(pending* p)
 
         if (!sent && !p->resend_on_failure())
         {
+            PERROR(COMM_FAILED) << "communication failed while sending operation";
+            m_last_error = p->error();
             return -1;
         }
         else if (sent)
         {
+            m_flagfd.set();
             m_pending.insert(std::make_pair(std::make_pair(si, nonce), p));
             return p->client_visible_id();
         }
@@ -874,11 +962,15 @@ client :: send(pending* p)
 
     if (p->resend_on_failure())
     {
+        m_flagfd.set();
+        m_backoff = true;
         m_pending_retry.push_back(p);
         return p->client_visible_id();
     }
     else
     {
+        PERROR(COMM_FAILED) << "communication failed while sending operation";
+        m_last_error = p->error();
         return -1;
     }
 }
@@ -889,6 +981,7 @@ client :: send_robust(pending_call_robust* p)
     assert(p->resend_on_failure());
     server_selector ss(m_config.server_ids(), m_random_token);
     server_id si;
+    m_flagfd.set();
 
     while ((si = ss.next()) != server_id())
     {
@@ -907,6 +1000,7 @@ client :: send_robust(pending_call_robust* p)
         }
     }
 
+    m_backoff = true;
     m_pending_robust_retry.push_back(p);
     return p->client_visible_id();
 }

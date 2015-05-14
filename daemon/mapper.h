@@ -48,10 +48,13 @@ class mapper : public busybee_mapper
 
     public:
         virtual bool lookup(uint64_t si, po6::net::location* bound_to);
+        void add_aux(const server& s);
+        void clear_aux();
 
     private:
         po6::threads::mutex* m_mtx;
         configuration* m_c;
+        std::vector<server> m_aux;
 
     private:
         mapper(const mapper&);

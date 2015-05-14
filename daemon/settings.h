@@ -42,7 +42,8 @@ class settings
         settings();
 
     public:
-        uint64_t SUSPICION_TIMEOUT;
+        uint64_t SUSPECT_TIMEOUT;
+        uint64_t SUSPECT_STRIKES;
 };
 
 END_REPLICANT_NAMESPACE

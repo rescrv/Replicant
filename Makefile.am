@@ -49,6 +49,7 @@ lib_LTLIBRARIES =
 noinst_LTLIBRARIES =
 
 bin_PROGRAMS =
+noinst_PROGRAMS =
 
 replicantexec_PROGRAMS =
 replicantexec_LTLIBRARIES =
@@ -210,6 +211,7 @@ replicantexec_PROGRAMS += replicant-conn-str
 replicantexec_PROGRAMS += replicant-kill-server
 replicantexec_PROGRAMS += replicant-debug-call
 replicantexec_PROGRAMS += replicant-debug-condition
+noinst_PROGRAMS += replicant-benchmark
 
 noinst_HEADERS += tools/common.h
 
@@ -259,6 +261,9 @@ replicant_debug_call_LDADD = libreplicant.la
 
 replicant_debug_condition_SOURCES = tools/debug-condition.cc
 replicant_debug_condition_LDADD = libreplicant.la
+
+replicant_benchmark_SOURCES = replicant-benchmark.cc
+replicant_benchmark_LDADD = libreplicant.la -lygor
 
 ################################################################################
 ################################### Examples ###################################

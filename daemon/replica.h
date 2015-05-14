@@ -47,6 +47,7 @@
 // Replicant
 #include "namespace.h"
 #include "common/configuration.h"
+#include "common/constants.h"
 #include "daemon/condition.h"
 #include "daemon/object.h"
 #include "daemon/pvalue.h"
@@ -85,6 +86,7 @@ class replica
                         std::string* output);
         void clean_dead_objects();
         uint64_t last_tick() { return m_cond_tick.peek_state(); }
+        uint64_t strike_number(server_id si) const;
 
     // snapshots
     public:
@@ -116,6 +118,8 @@ class replica
         void execute(const pvalue& p);
         void execute_server_become_member(const pvalue& p, e::unpacker up);
         void execute_server_set_gc_thresh(e::unpacker up);
+        void execute_server_change_address(const pvalue& p, e::unpacker up);
+        void execute_server_record_strike(e::unpacker up);
         void execute_increment_counter(e::unpacker up);
         void execute_object_failed(const pvalue& p, e::unpacker up);
         void execute_kill_object(const pvalue& p,
@@ -194,6 +198,7 @@ class replica
         std::vector<uint64_t> m_slots;
         condition m_cond_config;
         condition m_cond_tick;
+        condition m_cond_strikes[REPLICANT_MAX_REPLICAS];
         uint64_t m_counter;
         std::deque<uint64_t> m_command_nonces;
         google::dense_hash_set<uint64_t> m_command_nonces_lookup;

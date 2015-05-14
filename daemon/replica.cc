@@ -40,7 +40,6 @@
 
 // Replicant
 #include "common/atomic_io.h"
-#include "common/constants.h"
 #include "common/packing.h"
 #include "daemon/daemon.h"
 #include "daemon/replica.h"
@@ -250,9 +249,24 @@ replica :: cond_wait(server_id si, uint64_t nonce,
         {
             m_cond_tick.wait(m_daemon, si, nonce, state);
         }
+        else if (strncmp(cond.c_str(), "strike", 6) == 0)
+        {
+            char* end = NULL;
+            uint64_t x = strtoull(cond.c_str() + 6, &end, 10);
+
+            if (!end || *end != '\0' || x >= REPLICANT_MAX_REPLICAS)
+            {
+                LOG(WARNING) << "client requesting non-existent condition \"replicant." << e::strescape(cond) << "\"";
+                m_daemon->callback_client(si, nonce, REPLICANT_COND_NOT_FOUND, "");
+            }
+            else
+            {
+                m_cond_strikes[x].wait(m_daemon, si, nonce, state);
+            }
+        }
         else
         {
-            LOG(WARNING) << "client requesting non-existent condition \"replicant." << e::strescape(obj) << "\"";
+            LOG(WARNING) << "client requesting non-existent condition \"replicant." << e::strescape(cond) << "\"";
             m_daemon->callback_client(si, nonce, REPLICANT_COND_NOT_FOUND, "");
         }
     }
@@ -328,6 +342,19 @@ replica :: clean_dead_objects()
     }
 }
 
+uint64_t
+replica :: strike_number(server_id si) const
+{
+    size_t idx = m_configs.front().index(si);
+
+    if (idx >= REPLICANT_MAX_REPLICAS)
+    {
+        return 0;
+    }
+
+    return m_cond_strikes[idx].peek_state();
+}
+
 void
 replica :: take_blocking_snapshot(uint64_t* snapshot_slot,
                                   e::slice* snapshot,
@@ -368,18 +395,31 @@ replica :: initiate_snapshot()
         std::vector<uint64_t> command_nonces(m_command_nonces.begin(), m_command_nonces.end());
         po6::threads::mutex::hold hold2(&m_robust_mtx);
         std::vector<history> robust_history(m_robust_history.begin(), m_robust_history.end());
-        const size_t sz = sizeof(uint64_t)
-                        + sizeof(uint64_t)
-                        + pack_size(m_configs.front())
-                        + pack_size(m_cond_config)
-                        + pack_size(m_cond_tick)
-                        + sizeof(uint32_t) + sizeof(uint64_t) * m_slots.size()
-                        + sizeof(uint32_t) + sizeof(uint64_t) * command_nonces.size()
-                        + pack_size(robust_history);
+        size_t sz = sizeof(uint64_t)
+                  + sizeof(uint64_t)
+                  + pack_size(m_configs.front())
+                  + pack_size(m_cond_config)
+                  + pack_size(m_cond_tick)
+                  + sizeof(uint32_t) + sizeof(uint64_t) * m_slots.size()
+                  + sizeof(uint32_t) + sizeof(uint64_t) * command_nonces.size()
+                  + pack_size(robust_history);
+
+        for (size_t i = 0; i < REPLICANT_MAX_REPLICAS; ++i)
+        {
+            sz += pack_size(m_cond_strikes[i]);
+        }
+
         std::auto_ptr<e::buffer> tmp(e::buffer::create(sz));
-        tmp->pack_at(0)
+        e::packer pa = tmp->pack_at(0)
             << m_slot << m_counter << m_configs.front() << m_slots
-            << m_cond_config << m_cond_tick << command_nonces << robust_history;
+            << m_cond_config << m_cond_tick;
+
+        for (size_t i = 0; i < REPLICANT_MAX_REPLICAS; ++i)
+        {
+            pa = pa << m_cond_strikes[i];
+        }
+
+        pa = pa << command_nonces << robust_history;
         snap->replica_internals(tmp->as_slice());
 
         for (object_map_t::iterator it = m_objects.begin();
@@ -502,8 +542,14 @@ replica :: from_snapshot(daemon* d, const e::slice& snap)
     rep->m_counter = counter;
     std::vector<uint64_t> command_nonces;
     std::vector<history> robust_history;
-    up = up >> rep->m_slots >> rep->m_cond_config >> rep->m_cond_tick
-            >> command_nonces >> robust_history;
+    up = up >> rep->m_slots >> rep->m_cond_config >> rep->m_cond_tick;
+
+    for (size_t i = 0; i < REPLICANT_MAX_REPLICAS; ++i)
+    {
+        up = up >> rep->m_cond_strikes[i];
+    }
+
+    up = up >> command_nonces >> robust_history;
 
     if (up.error() || c.servers().size() != rep->m_slots.size())
     {
@@ -644,6 +690,12 @@ replica :: execute(const pvalue& p)
         case SLOT_SERVER_SET_GC_THRESH:
             execute_server_set_gc_thresh(up);
             break;
+        case SLOT_SERVER_CHANGE_ADDRESS:
+            execute_server_change_address(p, up);
+            break;
+        case SLOT_SERVER_RECORD_STRIKE:
+            execute_server_record_strike(up);
+            break;
         case SLOT_INCREMENT_COUNTER:
             execute_increment_counter(up);
             break;
@@ -690,6 +742,14 @@ replica :: execute_server_become_member(const pvalue& p, e::unpacker up)
 
     const configuration& c(m_configs.back());
 
+    if (c.servers().size() >= REPLICANT_MAX_REPLICAS)
+    {
+        LOG(ERROR) << "cannot add " << s << " to " << c.cluster()
+                   << " because there are already " << REPLICANT_MAX_REPLICAS
+                   << " servers in the cluster";
+        return;
+    }
+
     if (!c.has(s.id) && !c.has(s.bind_to))
     {
         LOG(INFO) << "adding " << s << " to " << c.cluster();
@@ -719,6 +779,64 @@ replica :: execute_server_set_gc_thresh(e::unpacker up)
             m_slots[i] = std::max(m_slots[i], threshold);
         }
     }
+}
+
+void
+replica :: execute_server_change_address(const pvalue& p, e::unpacker up)
+{
+    server s;
+    up = up >> s;
+
+    if (up.error())
+    {
+        LOG(ERROR) << "invalid command to change server address";
+        LOG(ERROR) << "check that the most recently launched "
+                   << "server(s) are running the latest Replicant";
+        return;
+    }
+
+    const configuration& c(m_configs.back());
+    std::vector<server> servers(c.servers());
+    bool changed = false;
+
+    for (size_t i = 0; i < servers.size(); ++i)
+    {
+        if (servers[i].id == s.id)
+        {
+            LOG(INFO) << "changing " << s.id << " from "
+                      << servers[i].bind_to << " to "
+                      << s.bind_to << " in the configuration";
+            servers[i].bind_to = s.bind_to;
+            changed = true;
+        }
+    }
+
+    if (changed)
+    {
+        m_configs.push_back(configuration(c.cluster(),
+                                          version_id(c.version().get() + 1),
+                                          p.s + REPLICANT_SLOTS_WINDOW,
+                                          &servers[0],
+                                          servers.size()));
+    }
+}
+
+void
+replica :: execute_server_record_strike(e::unpacker up)
+{
+    server_id si;
+    uint64_t strike_num;
+    up = up >> si >> strike_num;
+    size_t idx = m_configs.front().index(si);
+
+    if (idx >= REPLICANT_MAX_REPLICAS ||
+        m_cond_strikes[idx].peek_state() != strike_num)
+    {
+        return;
+    }
+
+    LOG(WARNING) << "recording availability strike against " << si;
+    m_cond_strikes[idx].broadcast(m_daemon);
 }
 
 void

@@ -32,7 +32,8 @@
 #endif
 
 // C
-#include <cmath>
+#include <math.h>
+#include <string.h>
 
 // POSIX
 #include <dlfcn.h>
@@ -66,6 +67,7 @@
 #include <busybee_single.h>
 
 // Replicant
+#include "common/atomic_io.h"
 #include "common/bootstrap.h"
 #include "common/constants.h"
 #include "common/ids.h"
@@ -137,6 +139,8 @@ daemon :: daemon()
     , m_us()
     , m_config_mtx()
     , m_config()
+    , m_bootstrap_thread(po6::threads::make_thread_wrapper(&daemon::bootstrap_thread, this))
+    , m_saved_bootstrap()
     , m_bootstrap()
     , m_periodic()
     , m_unique_token(0)
@@ -169,6 +173,7 @@ daemon :: daemon()
     register_periodic(100, &daemon::periodic_flush_enqueued_commands);
     register_periodic(1000, &daemon::periodic_clean_dead_objects);
     register_periodic(1000, &daemon::periodic_tick);
+    register_periodic(10 * 1000, &daemon::periodic_check_address);
     m_gc.register_thread(&m_gc_ts);
 }
 
@@ -439,13 +444,14 @@ daemon :: run(bool daemonize,
         }
     }
 
+    m_saved_bootstrap = saved_bootstrap;
+
     if (!m_acceptor.save(m_us, saved_bootstrap))
     {
         return EXIT_FAILURE;
     }
 
     assert(m_replica.get());
-    //assert(m_replica->last_snapshot_num() > 0);
     m_config_mtx.lock();
     m_config = m_replica->config();
     m_config_mtx.unlock();
@@ -473,96 +479,71 @@ daemon :: run(bool daemonize,
     {
         assert(init_obj);
         assert(init_lib);
-        std::vector<char> lib(sizeof(uint64_t) + sizeof(uint32_t));
+        std::string lib;
 
-        // Encode the object name
-        assert(strlen(init_obj) <= sizeof(uint64_t));
-        memset(&lib[0], 0, sizeof(lib.size()));
-        memmove(&lib[0], init_obj, strlen(init_obj));
-        uint64_t obj = 0;
-        e::unpack64be(&lib[0], &obj);
-
-        // Read the library
-        char buf[4096];
-        po6::io::fd fd(open(init_lib, O_RDONLY));
-
-        if (fd.get() < 0)
-        {
-            PLOG(ERROR) << "could not open library";
-            return EXIT_FAILURE;
-        }
-
-        ssize_t amt = 0;
-
-        while ((amt = fd.xread(buf, 4096)) > 0)
-        {
-            size_t tmp = lib.size();
-            lib.resize(tmp + amt);
-            memmove(&lib[tmp], buf, amt);
-        }
-
-        if (amt < 0)
+        if (!atomic_read(AT_FDCWD, init_lib, &lib))
         {
             PLOG(ERROR) << "could not read library";
             return EXIT_FAILURE;
         }
 
-        // XXX
-#if 0
-        // if this is a restore
         if (init_rst)
         {
-            size_t offset = lib.size();
-            lib.resize(offset + sizeof(uint32_t));
-            fd = open(init_rst, O_RDONLY);
+            std::string rst;
 
-            if (fd.get() < 0)
-            {
-                PLOG(ERROR) << "could not open restore file";
-                return EXIT_FAILURE;
-            }
-
-            while ((amt = fd.xread(buf, 4096)) > 0)
-            {
-                size_t tmp = lib.size();
-                lib.resize(tmp + amt);
-                memmove(&lib[tmp], buf, amt);
-            }
-
-            if (amt < 0)
+            if (!atomic_read(AT_FDCWD, init_rst, &rst))
             {
                 PLOG(ERROR) << "could not read restore file";
                 return EXIT_FAILURE;
             }
 
-            uint32_t lib_sz = offset - sizeof(uint64_t) - sizeof(uint32_t);
-            uint32_t rst_sz = lib.size() - offset - sizeof(uint32_t);
-            e::pack32be(lib_sz, &lib[sizeof(uint64_t)]);
-            e::pack32be(rst_sz, &lib[offset]);
-            e::slice cmd_slice(&lib[0], lib.size());
-            issue_command(1, OBJECT_OBJ_RESTORE, 0, 1, cmd_slice);
-            LOG(INFO) << "restoring " << init_obj << " from \"" << e::strescape(init_rst) << "\"";
+            std::string input;
+            e::packer pai(&input);
+            pai = pai << e::slice(init_obj, strlen(init_obj))
+                      << e::slice(rst);
+
+            std::string cmd;
+            e::packer pac(&cmd);
+            pac = pac << SLOT_CALL
+                      << uint8_t(0)
+                      << uint64_t(0)
+                      << e::slice("replicant")
+                      << e::slice("restore_object")
+                      << e::slice(input);
+            m_acceptor.accept(pvalue(m_acceptor.current_ballot(), 1, cmd));
         }
         // else this is an initialization
         else
         {
-            e::pack32be(lib.size() - sizeof(uint64_t) - sizeof(uint32_t),
-                        &lib[sizeof(uint64_t)]);
-            e::slice cmd_slice(&lib[0], lib.size());
-            issue_command(1, OBJECT_OBJ_NEW, 0, 1, cmd_slice);
-            LOG(INFO) << "initializing " << init_obj << " with \"" << e::strescape(init_lib) << "\"";
+            std::string input1(init_obj, strlen(init_obj) + 1);
+            input1 += lib;
+            std::string cmd1;
+            e::packer pa1(&cmd1);
+            pa1 = pa1 << SLOT_CALL 
+                      << uint8_t(0)
+                      << uint64_t(0)
+                      << e::slice("replicant")
+                      << e::slice("new_object")
+                      << e::slice(input1);
+            m_acceptor.accept(pvalue(m_acceptor.current_ballot(), 1, cmd1));
 
             if (init_str)
             {
-                std::vector<char> init_buf(5 + strlen(init_str) + 1);
-                memmove(&init_buf[0], "init\x00", 5);
-                memmove(&init_buf[5], init_str, strlen(init_str) + 1);
-                e::slice init_slice(&init_buf[0], init_buf.size());
-                issue_command(2, obj, 0, 2, init_slice);
+                std::string input2(init_str, strlen(init_str) + 1);
+                std::string cmd2;
+                e::packer pa2(&cmd2);
+                pa2 = pa2 << SLOT_CALL
+                          << uint8_t(0)
+                          << uint64_t(0)
+                          << e::slice(init_obj, strlen(init_obj))
+                          << e::slice("init", 4)
+                          << e::slice(input2);
+                m_acceptor.accept(pvalue(m_acceptor.current_ballot(), 2, cmd2));
             }
         }
-#endif
     }
+
+    m_bootstrap_thread.start();
 
     while (__sync_fetch_and_add(&s_interrupts, 0) == 0)
     {
@@ -641,6 +622,12 @@ daemon :: run(bool daemonize,
             case REPLNET_STATE_TRANSFER:
                 process_state_transfer(si, msg, up);
                 break;
+            case REPLNET_SUGGEST_REJOIN:
+                process_suggest_rejoin(si, msg, up);
+                break;
+            case REPLNET_WHO_ARE_YOU:
+                process_who_are_you(si, msg, up);
+                break;
             case REPLNET_PAXOS_PHASE1A:
                 process_paxos_phase1a(si, msg, up);
                 break;
@@ -689,11 +676,10 @@ daemon :: run(bool daemonize,
             case REPLNET_PONG:
                 process_pong(si, msg, up);
                 break;
+            case REPLNET_IDENTITY:
             case REPLNET_CLIENT_RESPONSE:
-                LOG(WARNING) << "dropping \"CLIENT_RESPONSE\" received by server";
-                break;
             case REPLNET_GARBAGE:
-                LOG(WARNING) << "dropping \"GARBAGE\" received by server";
+                LOG(WARNING) << "dropping \"" << mt << "\" received by server";
                 break;
             default:
                 LOG(WARNING) << "unknown message type; here's some hex:  " << msg->hex();
@@ -701,6 +687,7 @@ daemon :: run(bool daemonize,
         }
     }
 
+    m_bootstrap_thread.join();
     LOG(INFO) << "replicant is gracefully shutting down";
 
     uint64_t snapshot_slot;
@@ -940,6 +927,36 @@ daemon :: process_state_transfer(server_id si,
 }
 
 void
+daemon :: process_suggest_rejoin(server_id,
+                                 std::auto_ptr<e::buffer>,
+                                 e::unpacker)
+{
+    std::auto_ptr<replica> old_replica = m_replica;
+    join_the_cluster(m_saved_bootstrap);
+
+    if (!m_replica.get() ||
+        m_replica->config().cluster() != old_replica->config().cluster())
+    {
+        old_replica = m_replica;
+    }
+
+    post_config_change_hook();
+}
+
+void
+daemon :: process_who_are_you(server_id si,
+                              std::auto_ptr<e::buffer>,
+                              e::unpacker)
+{
+    size_t sz = BUSYBEE_HEADER_SIZE
+              + pack_size(REPLNET_IDENTITY)
+              + pack_size(m_us);
+    std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
+    msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_IDENTITY << m_us;
+    send(si, msg);
+}
+
+void
 daemon :: send_paxos_phase1a(server_id to, const ballot& b)
 {
     size_t sz = BUSYBEE_HEADER_SIZE
@@ -1056,14 +1073,18 @@ daemon :: process_paxos_phase2a(server_id si,
 
     if (p.s < m_acceptor.lowest_acceptable_slot())
     {
-        LOG(INFO) << "TRACE XXX " << si << " " << p.s << " " << m_acceptor.lowest_acceptable_slot();
+        size_t sz = BUSYBEE_HEADER_SIZE
+                  + pack_size(REPLNET_SUGGEST_REJOIN);
+        std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
+        msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_SUGGEST_REJOIN;
+        send(si, msg);
         return;
     }
 
-    if (si == p.b.leader && p.b == m_acceptor.current_ballot() && p.s >= m_config.first_slot())
+    if (si == p.b.leader && p.b == m_acceptor.current_ballot())
     {
         m_acceptor.accept(p);
-        LOG_IF(INFO, s_debug_mode) << "p2a: " << p;
+        LOG_IF(INFO, s_debug_mode && p.s >= m_config.first_slot()) << "p2a: " << p;
     }
 
     send_paxos_phase2b(p.b.leader, p);
@@ -1497,6 +1518,10 @@ daemon :: periodic_abdicate(uint64_t)
                      << " to make progress";
         m_leader.reset();
     }
+    else
+    {
+        m_leader->send_all_proposals(this);
+    }
 }
 
 void
@@ -1566,7 +1591,94 @@ daemon :: post_config_change_hook()
     }
 
     periodic_generate_nonce_sequence(now);
+    m_busybee_mapper.clear_aux();
     return true;
+}
+
+void
+daemon :: bootstrap_thread()
+{
+    sigset_t ss;
+
+    if (sigfillset(&ss) < 0)
+    {
+        PLOG(ERROR) << "sigfillset";
+        LOG(ERROR) << "could not successfully block signals; this could result in undefined behavior";
+        return;
+    }
+
+    sigdelset(&ss, SIGPROF);
+
+    if (pthread_sigmask(SIG_BLOCK, &ss, NULL) < 0)
+    {
+        PLOG(ERROR) << "could not block signals";
+        LOG(ERROR) << "could not successfully block signals; this could result in undefined behavior";
+        return;
+    }
+
+    bootstrap bs = m_saved_bootstrap;
+    const std::vector<po6::net::hostname>& hosts(bs.hosts());
+    timespec ts;
+    ts.tv_sec = 0;
+    ts.tv_nsec = 50 * 1000ULL * 1000ULL;
+    uint64_t count = 0;
+
+    while (__sync_fetch_and_add(&s_interrupts, 0) == 0)
+    {
+        nanosleep(&ts, NULL);
+        ++count;
+
+        if (count % 20 != 0)
+        {
+            continue;
+        }
+
+        configuration config;
+
+        {
+            po6::threads::mutex::hold hold(&m_config_mtx);
+            config = m_config;
+        }
+
+        for (size_t i = 0; i < hosts.size(); ++i)
+        {
+            try
+            {
+                const size_t sz = BUSYBEE_HEADER_SIZE
+                                + pack_size(REPLNET_WHO_ARE_YOU);
+                std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
+                msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_WHO_ARE_YOU;
+                busybee_single bbs(hosts[i]);
+
+                if (bbs.send(msg) != BUSYBEE_SUCCESS)
+                {
+                    continue;
+                }
+
+                bbs.set_timeout(250);
+
+                if (bbs.recv(&msg) != BUSYBEE_SUCCESS)
+                {
+                    continue;
+                }
+
+                network_msgtype mt = REPLNET_NOP;
+                server s;
+                e::unpacker up = msg->unpack_from(BUSYBEE_HEADER_SIZE);
+                up >> mt >> s;
+
+                if (up.error() || mt != REPLNET_IDENTITY)
+                {
+                    continue;
+                }
+
+                m_busybee_mapper.add_aux(s);
+            }
+            catch (po6::error& e)
+            {
+            }
+        }
+    }
 }
 
 std::string
@@ -1607,6 +1719,26 @@ daemon :: process_server_become_member(server_id si,
     }
 
     send_bootstrap(si);
+}
+
+void
+daemon :: periodic_check_address(uint64_t)
+{
+    const server* s = m_config.get(m_us.id);
+
+    if (s->bind_to == m_us.bind_to)
+    {
+        return;
+    }
+
+    LOG(WARNING) << "configuration says " << m_us.id << " is bound to "
+                 << s->bind_to << ", but it is bound to " << m_us.bind_to
+                 << "; initiating a config change to correct the configuration "
+                 << "to match reality";
+    std::string cmd;
+    e::packer pa(&cmd);
+    pa = pa << m_us;
+    enqueue_paxos_command(SLOT_SERVER_CHANGE_ADDRESS, cmd);
 }
 
 void
@@ -1866,7 +1998,7 @@ daemon :: process_get_robust_params(server_id si,
 
 void
 daemon :: process_call_robust(server_id si,
-                              std::auto_ptr<e::buffer> msg,
+                              std::auto_ptr<e::buffer>,
                               e::unpacker up)
 {
     uint64_t client_nonce;
@@ -1992,7 +2124,7 @@ daemon :: suspect_failed(server_id si)
         {
             const uint64_t diff = now - m_last_seen[i];
             const uint64_t susp = diff - self_suspicion;
-            return susp > m_s.SUSPICION_TIMEOUT;
+            return susp > m_s.SUSPECT_TIMEOUT;
         }
     }
 
@@ -2015,9 +2147,19 @@ daemon :: periodic_submit_dead_nodes(uint64_t)
         const uint64_t diff = now - m_last_seen[i];
         const uint64_t susp = diff - self_suspicion;
 
-        if (servers[i].id != m_us.id && susp > m_s.SUSPICION_TIMEOUT)
+        if (servers[i].id != m_us.id && susp > m_s.SUSPECT_TIMEOUT)
         {
             ++m_suspect_counts[i];
+
+            if (m_suspect_counts[i] >= m_s.SUSPECT_STRIKES)
+            {
+                uint64_t strike_num = m_replica->strike_number(servers[i].id);
+                std::string cmd;
+                e::packer pa(&cmd);
+                pa = pa << servers[i].id << strike_num;
+                enqueue_paxos_command(SLOT_SERVER_RECORD_STRIKE, cmd);
+                m_suspect_counts[i] = 0;
+            }
         }
         else
         {
@@ -2061,6 +2203,11 @@ daemon :: send_from_non_main_thread(server_id si, std::auto_ptr<e::buffer> msg)
     if (e::atomic::load_32_acquire(&m_busybee_init) == 0)
     {
         return false;
+    }
+
+    if (si == m_us.id)
+    {
+        return m_busybee->deliver(si.get(), msg);
     }
 
     busybee_returncode rc = m_busybee->send(si.get(), msg);

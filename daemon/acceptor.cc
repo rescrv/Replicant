@@ -30,6 +30,7 @@
 #include <dirent.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <signal.h>
 #include <unistd.h>
 
 // STL
@@ -273,6 +274,24 @@ acceptor :: garbage_collector :: kill()
 void
 acceptor :: garbage_collector :: run()
 {
+    sigset_t ss;
+
+    if (sigfillset(&ss) < 0)
+    {
+        PLOG(ERROR) << "sigfillset";
+        LOG(ERROR) << "could not successfully block signals; this could result in undefined behavior";
+        return;
+    }
+
+    sigdelset(&ss, SIGPROF);
+
+    if (pthread_sigmask(SIG_BLOCK, &ss, NULL) < 0)
+    {
+        PLOG(ERROR) << "could not block signals";
+        LOG(ERROR) << "could not successfully block signals; this could result in undefined behavior";
+        return;
+    }
+
     m_mtx.lock();
     uint64_t gced = 0;
 

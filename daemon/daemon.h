@@ -97,7 +97,12 @@ class daemon
         void process_state_transfer(server_id si,
                                     std::auto_ptr<e::buffer> msg,
                                     e::unpacker up);
-
+        void process_suggest_rejoin(server_id si,
+                                    std::auto_ptr<e::buffer> msg,
+                                    e::unpacker up);
+        void process_who_are_you(server_id si,
+                                 std::auto_ptr<e::buffer> msg,
+                                 e::unpacker up);
         void send_paxos_phase1a(server_id to, const ballot& b);
         void process_paxos_phase1a(server_id si,
                                    std::auto_ptr<e::buffer> msg,
@@ -142,12 +147,14 @@ class daemon
         void periodic_abdicate(uint64_t now);
         void periodic_warn_scout_stuck(uint64_t now);
         bool post_config_change_hook(); // true if good; false if need to exit
+        void bootstrap_thread();
 
     public:
         std::string construct_become_member_command(const server& s);
         void process_server_become_member(server_id si,
                                           std::auto_ptr<e::buffer> msg,
                                           e::unpacker up);
+        void periodic_check_address(uint64_t now);
 
     public:
         void process_unique_number(server_id si,
@@ -234,6 +241,8 @@ class daemon
         server m_us;
         po6::threads::mutex m_config_mtx;
         configuration m_config;
+        po6::threads::thread m_bootstrap_thread;
+        bootstrap m_saved_bootstrap;
         bootstrap m_bootstrap;
         std::vector<periodic> m_periodic;
 

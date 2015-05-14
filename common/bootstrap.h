@@ -66,6 +66,7 @@ class bootstrap
         bool valid() const { return m_valid; }
         replicant_returncode do_it(configuration* config, e::error* err) const;
         std::string conn_str() const;
+        const std::vector<po6::net::hostname>& hosts() const { return m_hosts; }
 
     public:
         bootstrap& operator = (const bootstrap& rhs);

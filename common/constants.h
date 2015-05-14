@@ -28,6 +28,8 @@
 #ifndef replicant_common_constants_h_
 #define replicant_common_constants_h_
 
+#define REPLICANT_MAX_REPLICAS 9
+
 #define REPLICANT_SLOTS_WINDOW 16
 
 #define REPLICANT_NONCE_INCREMENT 65536

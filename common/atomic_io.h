@@ -36,6 +36,8 @@
 
 BEGIN_REPLICANT_NAMESPACE
 
+// This is called "atomic_read" because it's the read equivalent to
+// atomic_write, but it's only atomic wrt calls to atomic_write.
 bool
 atomic_read(int dir, const char* path, std::string* contents);
 
