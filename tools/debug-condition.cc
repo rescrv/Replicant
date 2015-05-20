@@ -40,6 +40,7 @@ main(int argc, const char* argv[])
     const char* obj = "replicant";
     const char* cond = "configuration";
     long start_state = 0;
+    bool follow = false;
     connect_opts conn;
     e::argparser ap;
     ap.autohelp();
@@ -53,6 +54,9 @@ main(int argc, const char* argv[])
     ap.arg().name('i', "initial-state")
             .description("initial state of the condition")
             .metavar("S").as_long(&start_state);
+    ap.arg().long_name("follow")
+            .description("use cond_follow instead of repeated cond_wait")
+            .set_true(&follow);
     ap.add("Connect to a cluster:", conn.parser());
 
     if (!ap.parse(argc, argv))
@@ -78,21 +82,44 @@ main(int argc, const char* argv[])
     {
         replicant_client* r = replicant_client_create(conn.host(), conn.port());
 
-        for (uint64_t x = start_state; ; ++x)
+        if (follow)
         {
+            uint64_t state = 0;
             char* data = NULL;
             size_t data_sz = 0;
             replicant_returncode re = REPLICANT_GARBAGE;
-            int64_t rid = replicant_client_cond_wait(r, obj, cond, x, &re, &data, &data_sz);
+            int64_t rid = replicant_client_cond_follow(r, obj, cond, &re, &state, &data, &data_sz);
 
-            if (!cli_finish(r, rid, &re))
+            while (true)
             {
-                return EXIT_FAILURE;
-            }
+                if (!cli_finish(r, rid, &re))
+                {
+                    return EXIT_FAILURE;
+                }
 
-            std::cout << "condition >= " << x
-                      << " \"" << e::strescape(std::string(data, data_sz)) << "\""
-                      << std::endl;
+                std::cout << "condition >= " << state
+                          << " \"" << e::strescape(std::string(data, data_sz)) << "\""
+                          << std::endl;
+            }
+        }
+        else
+        {
+            for (uint64_t x = start_state; ; ++x)
+            {
+                char* data = NULL;
+                size_t data_sz = 0;
+                replicant_returncode re = REPLICANT_GARBAGE;
+                int64_t rid = replicant_client_cond_wait(r, obj, cond, x, &re, &data, &data_sz);
+
+                if (!cli_finish(r, rid, &re))
+                {
+                    return EXIT_FAILURE;
+                }
+
+                std::cout << "condition >= " << x
+                          << " \"" << e::strescape(std::string(data, data_sz)) << "\""
+                          << std::endl;
+            }
         }
 
         return EXIT_SUCCESS;

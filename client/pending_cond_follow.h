@@ -25,20 +25,23 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
-#ifndef replicant_client_pending_poke_h_
-#define replicant_client_pending_poke_h_
+#ifndef replicant_client_pending_cond_follow_h_
+#define replicant_client_pending_cond_follow_h_
 
 // Replicant
 #include "client/pending.h"
 
 BEGIN_REPLICANT_NAMESPACE
 
-class pending_poke : public pending
+class pending_cond_follow : public pending
 {
     public:
-        pending_poke(int64_t client_visible_id,
-                     replicant_returncode* status);
-        virtual ~pending_poke() throw ();
+        pending_cond_follow(int64_t client_visible_id,
+                            const char* object, const char* cond,
+                            replicant_returncode* status,
+                            uint64_t* state,
+                            char** data, size_t* data_sz);
+        virtual ~pending_cond_follow() throw ();
 
     public:
         virtual std::auto_ptr<e::buffer> request(uint64_t nonce);
@@ -48,10 +51,17 @@ class pending_poke : public pending
                                      e::unpacker up);
 
     private:
-        pending_poke(const pending_poke&);
-        pending_poke& operator = (const pending_poke&);
+        const std::string m_object;
+        const std::string m_cond;
+        uint64_t* const m_state;
+        char** const m_data;
+        size_t* const m_data_sz;
+
+    private:
+        pending_cond_follow(const pending_cond_follow&);
+        pending_cond_follow& operator = (const pending_cond_follow&);
 };
 
 END_REPLICANT_NAMESPACE
 
-#endif // replicant_client_pending_poke_h_
+#endif // replicant_client_pending_cond_follow_h_

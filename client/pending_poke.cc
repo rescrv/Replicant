@@ -61,7 +61,7 @@ pending_poke :: resend_on_failure()
 }
 
 void
-pending_poke :: handle_response(std::auto_ptr<e::buffer>, e::unpacker)
+pending_poke :: handle_response(client*, std::auto_ptr<e::buffer>, e::unpacker)
 {
     this->success();
 }

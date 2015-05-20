@@ -37,6 +37,9 @@
 #include <utility>
 #include <vector>
 
+// Google SparseHash
+#include <google/dense_hash_map>
+
 // po6
 #include <po6/net/hostname.h>
 #include <po6/net/ipaddr.h>
@@ -141,6 +144,7 @@ class daemon
                                           const std::string& command);
         void flush_enqueued_commands_with_stale_leader();
         void periodic_flush_enqueued_commands(uint64_t now);
+        void convert_unassigned_to_unordered();
         void send_unordered_command(unordered_command* uc);
         void observe_ballot(const ballot& b);
         void periodic_scout(uint64_t now);
@@ -257,8 +261,10 @@ class daemon
 
         // unordered commands; received from clients, and awaiting consensus
         po6::threads::mutex m_unordered_mtx;
-        std::list<unordered_command*> m_unordered_cmds;
-        uint64_t m_first_unordered;
+        typedef google::dense_hash_map<uint64_t, unordered_command*> unordered_map_t;
+        unordered_map_t m_unordered__cmds;
+        typedef std::list<unordered_command*> unordered_list_t;
+        unordered_list_t m_unassigned_cmds;
 
         // messages enqueued to wait for persistence
         struct deferred_msg

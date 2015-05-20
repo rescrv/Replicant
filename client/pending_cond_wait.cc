@@ -81,7 +81,7 @@ pending_cond_wait :: resend_on_failure()
 }
 
 void
-pending_cond_wait :: handle_response(std::auto_ptr<e::buffer>, e::unpacker up)
+pending_cond_wait :: handle_response(client*, std::auto_ptr<e::buffer>, e::unpacker up)
 {
     uint64_t state;
     e::slice data;

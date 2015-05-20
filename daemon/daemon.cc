@@ -149,8 +149,8 @@ daemon :: daemon()
     , m_last_seen()
     , m_suspect_counts()
     , m_unordered_mtx()
-    , m_unordered_cmds()
-    , m_first_unordered(0)
+    , m_unordered__cmds()
+    , m_unassigned_cmds()
     , m_deferred_msgs()
     , m_msgs_waiting_for_nonces()
     , m_acceptor()
@@ -164,6 +164,9 @@ daemon :: daemon()
     , m_last_replica_snapshot(0)
     , m_last_gc_slot(0)
 {
+    po6::threads::mutex::hold hold(&m_unordered_mtx);
+    m_unordered__cmds.set_empty_key(INT64_MAX);
+    m_unordered__cmds.set_deleted_key(INT64_MAX - 1);
     register_periodic(25, &daemon::periodic_scout);
     register_periodic(25, &daemon::periodic_abdicate);
     register_periodic(10 * 1000, &daemon::periodic_warn_scout_stuck);
@@ -181,10 +184,10 @@ daemon :: ~daemon() throw ()
 {
     po6::threads::mutex::hold hold(&m_unordered_mtx);
 
-    while (!m_unordered_cmds.empty())
+    for (unordered_map_t::iterator it = m_unordered__cmds.begin();
+            it != m_unordered__cmds.end(); ++it)
     {
-        delete m_unordered_cmds.front();
-        m_unordered_cmds.pop_front();
+        delete it->second;
     }
 
     while (!m_deferred_msgs.empty())
@@ -1179,11 +1182,10 @@ daemon :: process_paxos_learn(server_id si,
         if (m_leader.get())
         {
             m_leader->set_window(this, start, limit);
-            uint64_t fill = m_replica->fill_up_to();
 
-            if (start < fill)
+            if (m_replica->fill_window())
             {
-                m_leader->nop_fill(this, fill);
+                m_leader->fill_window(this);
             }
         }
 
@@ -1282,27 +1284,24 @@ daemon :: enqueue_paxos_command(server_id on_behalf_of,
                                 slot_type t,
                                 const std::string& command)
 {
-    std::auto_ptr<unordered_command> auc;
-    auc.reset(new unordered_command(on_behalf_of, request_nonce, t, command));
-    unordered_command* uc = auc.get();
-    std::list<unordered_command*> ucl;
-    ucl.push_back(uc);
-    m_unordered_mtx.lock();
-    m_unordered_cmds.splice(m_unordered_cmds.end(), ucl);
-    m_unordered_mtx.unlock();
-    auc.release();
+    unordered_command* uc = new unordered_command(on_behalf_of, request_nonce, t, command);
     uint64_t command_nonce;
 
-    if (!generate_nonce(&command_nonce))
+    if ((m_unordered__cmds.size() >= REPLICANT_COMMANDS_TO_LEADER && t == SLOT_CALL) ||
+        !generate_nonce(&command_nonce))
     {
+        po6::threads::mutex::hold hold(&m_unordered_mtx);
+        m_unassigned_cmds.push_back(uc);
         return;
     }
 
     uc->set_command_nonce(command_nonce);
-    uint64_t start;
-    uint64_t limit;
-    m_replica->window(&start, &limit);
-    uc->set_lowest_possible_slot(start);
+
+    {
+        po6::threads::mutex::hold hold(&m_unordered_mtx);
+        m_unordered__cmds[command_nonce] = uc;
+    }
+
     send_unordered_command(uc);
 }
 
@@ -1314,16 +1313,14 @@ daemon :: enqueue_robust_paxos_command(server_id on_behalf_of,
                                        slot_type t,
                                        const std::string& command)
 {
-    std::auto_ptr<unordered_command> auc;
-    auc.reset(new unordered_command(on_behalf_of, request_nonce, t, command));
-    unordered_command* uc = auc.get();
-    std::list<unordered_command*> ucl;
-    ucl.push_back(uc);
-    m_unordered_mtx.lock();
-    m_unordered_cmds.splice(m_unordered_cmds.end(), ucl);
-    m_unordered_mtx.unlock();
-    auc.release();
+    unordered_command* uc = new unordered_command(on_behalf_of, request_nonce, t, command);
     uc->set_command_nonce(command_nonce);
+
+    {
+        po6::threads::mutex::hold hold(&m_unordered_mtx);
+        m_unordered__cmds[command_nonce] = uc;
+    }
+
     uc->set_lowest_possible_slot(min_slot);
     uc->set_robust();
     send_unordered_command(uc);
@@ -1334,10 +1331,10 @@ daemon :: flush_enqueued_commands_with_stale_leader()
 {
     po6::threads::mutex::hold hold(&m_unordered_mtx);
 
-    for (std::list<unordered_command*>::iterator it = m_unordered_cmds.begin();
-            it != m_unordered_cmds.end(); ++it)
+    for (unordered_map_t::iterator it = m_unordered__cmds.begin();
+            it != m_unordered__cmds.end(); ++it)
     {
-        unordered_command* uc = *it;
+        unordered_command* uc = it->second;
 
         if (uc->last_used_ballot() < m_acceptor.current_ballot())
         {
@@ -1349,40 +1346,40 @@ daemon :: flush_enqueued_commands_with_stale_leader()
 void
 daemon :: periodic_flush_enqueued_commands(uint64_t)
 {
+    convert_unassigned_to_unordered();
     po6::threads::mutex::hold hold(&m_unordered_mtx);
 
-    if (!m_unordered_cmds.empty() && m_first_unordered != m_unordered_cmds.front()->command_nonce())
+    if (!m_unordered__cmds.empty())
     {
-        m_first_unordered = m_unordered_cmds.front()->command_nonce();
-        return;
+        send_unordered_command(m_unordered__cmds.begin()->second);
     }
+}
 
-    uint64_t counter = 0;
+void
+daemon :: convert_unassigned_to_unordered()
+{
+    po6::threads::mutex::hold hold(&m_unordered_mtx);
 
-    for (std::list<unordered_command*>::iterator it = m_unordered_cmds.begin();
-            counter < REPLICANT_SLOTS_WINDOW && it != m_unordered_cmds.end(); ++it)
+    while (!m_unassigned_cmds.empty() && m_unordered__cmds.size() < REPLICANT_COMMANDS_TO_LEADER)
     {
-        unordered_command* uc = *it;
+        uint64_t command_nonce;
+
+        if (!generate_nonce(&command_nonce))
+        {
+            break;
+        }
+
+        unordered_command* uc = m_unassigned_cmds.front();
+        m_unassigned_cmds.pop_front();
+        uc->set_command_nonce(command_nonce);
+        m_unordered__cmds[command_nonce] = uc;
         send_unordered_command(uc);
-        ++counter;
     }
 }
 
 void
 daemon :: send_unordered_command(unordered_command* uc)
 {
-    if (uc->command_nonce() == 0)
-    {
-        uint64_t command_nonce;
-
-        if (!generate_nonce(&command_nonce))
-        {
-            return;
-        }
-
-        uc->set_command_nonce(command_nonce);
-    }
-
     assert(uc->command_nonce() != 0);
 
     if (!uc->robust())
@@ -1809,6 +1806,8 @@ daemon :: callback_nonce_sequence(server_id si, uint64_t token, uint64_t counter
             m_msgs_waiting_for_nonces.pop_front();
             m_busybee->deliver(si.get(), msg);
         }
+
+        convert_unassigned_to_unordered();
     }
 }
 
@@ -1881,22 +1880,21 @@ daemon :: callback_enqueued(uint64_t command_nonce,
 {
     *si = server_id();
     *request_nonce = 0;
+    convert_unassigned_to_unordered();
     po6::threads::mutex::hold hold(&m_unordered_mtx);
+    unordered_map_t::iterator it = m_unordered__cmds.find(command_nonce);
 
-    for (std::list<unordered_command*>::iterator it = m_unordered_cmds.begin();
-            it != m_unordered_cmds.end(); ++it)
+    if (it == m_unordered__cmds.end())
     {
-        unordered_command* uc = *it;
-
-        if (uc->command_nonce() == command_nonce)
-        {
-            m_unordered_cmds.erase(it);
-            *si = uc->on_behalf_of();
-            *request_nonce = uc->request_nonce();
-            delete uc;
-            return;
-        }
+        return;
     }
+
+    unordered_command* uc = it->second;
+    assert(uc->command_nonce() == command_nonce);
+    m_unordered__cmds.erase(it);
+    *si = uc->on_behalf_of();
+    *request_nonce = uc->request_nonce();
+    delete uc;
 }
 
 void
@@ -2302,7 +2300,8 @@ daemon :: debug_dump()
     LOG(INFO) << "============================ Debug Dump Begins Here ============================";
     LOG(INFO) << "we are " << m_us;
     LOG(INFO) << "our configuration is " << m_config;
-    LOG(INFO) << "we have " << m_unordered_cmds.size() << " unordered commands";
+    LOG(INFO) << "we have " << m_unordered__cmds.size() << " unordered commands";
+    LOG(INFO) << "we have " << m_unassigned_cmds.size() << " unassigned commands";
     LOG(INFO) << "--------------------------------------------------------------------------------";
     LOG(INFO) << "Acceptor: currently adopted " << m_acceptor.current_ballot() << " and accepted pvalues:";
     const std::vector<pvalue>& pvals(m_acceptor.pvals());

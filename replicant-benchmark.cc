@@ -30,7 +30,12 @@
 // Google SparseHash
 #include <google/dense_hash_map>
 
+// po6
+#include <po6/threads/mutex.h>
+#include <po6/threads/thread.h>
+
 // e
+#include <e/atomic.h>
 #include <e/time.h>
 
 // Ygor
@@ -40,30 +45,182 @@
 #include <replicant.h>
 #include "tools/common.h"
 
-#define MILLIS (1000ULL * 1000ULL)
+#define MICROS 1000ULL
+#define MILLIS (1000ULL * MICROS)
+#define SECONDS (1000ULL * MILLIS)
+
+struct benchmark
+{
+    benchmark();
+    ~benchmark() throw ();
+
+    void producer();
+    void consumer();
+
+    const char* output;
+    const char* object;
+    const char* function;
+    long target;
+    long length;
+
+    ygor_data_logger* dl;
+    uint32_t done;
+
+    po6::threads::mutex mtx;
+    replicant_client* client;
+    google::dense_hash_map<int64_t, uint64_t> times;
+    replicant_returncode rr;
+
+    private:
+        benchmark(const benchmark&);
+        benchmark& operator = (const benchmark&);
+};
+
+benchmark :: benchmark()
+    : output("benchmark.dat.bz2")
+    , object("echo")
+    , function("echo")
+    , target(100)
+    , length(60)
+    , dl(NULL)
+    , done(0)
+    , mtx()
+    , client(NULL)
+    , times()
+    , rr()
+{
+    times.set_empty_key(INT64_MAX);
+    times.set_deleted_key(INT64_MAX - 1);
+}
+
+benchmark :: ~benchmark() throw ()
+{
+}
+
+void
+benchmark :: producer()
+{
+    const uint64_t start = e::time();
+    const uint64_t end = start + length * SECONDS;
+    uint64_t now = start;
+    uint64_t issued = 0;
+
+    while (now < end)
+    {
+        double elapsed = double(now - start) / SECONDS;
+        uint64_t expected = elapsed * target;
+
+        for (uint64_t i = issued; i < expected; ++i)
+        {
+            po6::threads::mutex::hold hold(&mtx);
+            now = e::time();
+            int64_t id = replicant_client_call(client, object, function, "", 0, 0, &rr, NULL, 0);
+
+            if (id < 0)
+            {
+                std::cerr << "call failed: "
+                          << replicant_client_error_message(client) << " @ "
+                          << replicant_client_error_location(client) << std::endl;
+                abort();
+            }
+
+            times.insert(std::make_pair(id, now));
+        }
+
+        issued = expected;
+
+        timespec ts;
+        ts.tv_sec = 0;
+        ts.tv_nsec = 1 * MILLIS;
+        nanosleep(&ts, NULL);
+
+        now = e::time();
+    }
+
+    e::atomic::store_32_release(&done, 1);
+}
+
+void
+benchmark :: consumer()
+{
+    while (true)
+    {
+        replicant_client_block(client, 250);
+        po6::threads::mutex::hold hold(&mtx);
+        replicant_returncode lr;
+        int64_t id = replicant_client_loop(client, 0, &lr);
+
+        if (id < 0 && lr == REPLICANT_NONE_PENDING && e::atomic::load_32_acquire(&done) != 0)
+        {
+            break;
+        }
+        else if (id < 0 && (lr == REPLICANT_TIMEOUT || lr == REPLICANT_NONE_PENDING))
+        {
+            continue;
+        }
+        else if (id < 0)
+        {
+            std::cerr << "loop failed: "
+                      << replicant_client_error_message(client) << " @ "
+                      << replicant_client_error_location(client) << std::endl;
+            abort();
+        }
+
+        if (rr != REPLICANT_SUCCESS)
+        {
+            std::cerr << "call failed: "
+                      << replicant_client_error_message(client) << " @ "
+                      << replicant_client_error_location(client) << std::endl;
+            abort();
+        }
+
+        const uint64_t end = e::time();
+        google::dense_hash_map<int64_t, uint64_t>::iterator it = times.find(id);
+
+        if (it == times.end())
+        {
+            std::cerr << "bad map handling code" << std::endl;
+            abort();
+        }
+
+        const uint64_t start = it->second;
+        times.erase(it);
+
+        ygor_data_record dr;
+        dr.series = 1;
+        dr.when = start;
+        dr.data = end - start;
+
+        if (ygor_data_logger_record(dl, &dr) < 0)
+        {
+            std::cerr << "could not record data point: " << strerror(errno) << std::endl;
+            abort();
+        }
+    }
+}
 
 int
 main(int argc, const char* argv[])
 {
-    const char* output = "benchmark.dat.bz2";
-    long interval = 100;
-    long outstanding = 10;
-    long count = 1000;
+    benchmark b;
     connect_opts conn;
     e::argparser ap;
     ap.autohelp();
-    ap.arg().long_name("output")
+    ap.arg().name('o', "output")
             .description("where to save the recorded benchmark stats (default: benchmark.dat.bz2)")
-            .as_string(&output);
-    ap.arg().long_name("interval")
-            .description("issue a new operation every <interval> ms (default: 100)")
-            .as_long(&interval);
-    ap.arg().long_name("outstanding")
-            .description("abort if more than <outstanding> operations are incomplete (default: 10)")
-            .as_long(&outstanding);
-    ap.arg().long_name("count")
-            .description("number of operations to issue (default: 1000)")
-            .as_long(&count);
+            .as_string(&b.output);
+    ap.arg().long_name("object")
+            .description("object to call (default: echo)")
+            .as_string(&b.object);
+    ap.arg().long_name("function")
+            .description("function to call (default: echo)")
+            .as_string(&b.function);
+    ap.arg().name('t', "throughput")
+            .description("target throughput (default: 100 ops/s)")
+            .as_long(&b.target);
+    ap.arg().name('r', "runtime")
+            .description("total test runtime length in seconds (default: 60)")
+            .as_long(&b.length);
     ap.add("Connect to a cluster:", conn.parser());
 
     if (!ap.parse(argc, argv))
@@ -85,111 +242,28 @@ main(int argc, const char* argv[])
         return EXIT_FAILURE;
     }
 
-    try
+    ygor_data_logger* dl = ygor_data_logger_create(b.output, 1000000, 1000);
+
+    if (!dl)
     {
-        ygor_data_logger* dl = ygor_data_logger_create(output, 1000000, 1000);
-
-        if (!dl)
-        {
-            std::cerr << "could not open output: " << strerror(errno) << std::endl;
-            return EXIT_FAILURE;
-        }
-
-        google::dense_hash_map<int64_t, uint64_t> times;
-        times.set_empty_key(INT64_MAX);
-        times.set_deleted_key(INT64_MAX - 1);
-        replicant_returncode rr;
-        replicant_client* r = replicant_client_create(conn.host(), conn.port());
-        uint64_t done = 0;
-        uint64_t next = e::time();
-
-        while (done < uint64_t(count))
-        {
-            const uint64_t now = e::time();
-
-            if (now >= next)
-            {
-                int64_t id = replicant_client_call(r, "echo", "echo", "", 0, 0, &rr, NULL, 0);
-
-                if (id < 0)
-                {
-                    std::cerr << "call failed: "
-                              << replicant_client_error_message(r) << " @ "
-                              << replicant_client_error_location(r) << std::endl;
-                    return EXIT_FAILURE;
-                }
-
-                times.insert(std::make_pair(id, now));
-                next = now + interval * MILLIS;
-            }
-
-            if (times.size() > uint64_t(outstanding))
-            {
-                std::cerr << "too many operations outstanding: " << times.size() << " > " << outstanding << std::endl;
-                return EXIT_FAILURE;
-            }
-
-            uint64_t millis = (next - now) / MILLIS;
-            replicant_returncode lr;
-            int64_t id = replicant_client_loop(r, millis, &lr);
-            const uint64_t end = e::time();
-
-            if (id < 0 && (lr == REPLICANT_TIMEOUT || lr == REPLICANT_NONE_PENDING))
-            {
-                continue;
-            }
-            else if (id < 0)
-            {
-                std::cerr << "loop failed: "
-                          << replicant_client_error_message(r) << " @ "
-                          << replicant_client_error_location(r) << std::endl;
-                return EXIT_FAILURE;
-            }
-
-            if (rr != REPLICANT_SUCCESS)
-            {
-                std::cerr << "call failed: "
-                          << replicant_client_error_message(r) << " @ "
-                          << replicant_client_error_location(r) << std::endl;
-                return EXIT_FAILURE;
-            }
-
-            google::dense_hash_map<int64_t, uint64_t>::iterator it = times.find(id);
-
-            if (it == times.end())
-            {
-                std::cerr << "bad map handling code" << std::endl;
-                return EXIT_FAILURE;
-            }
-
-            const uint64_t start = it->second;
-            times.erase(it);
-
-            ygor_data_record dr;
-            dr.series = 1;
-            dr.when = start;
-            dr.data = end - start;
-
-            if (ygor_data_logger_record(dl, &dr) < 0)
-            {
-                std::cerr << "could not record data point: " << strerror(errno) << std::endl;
-                return false;
-            }
-
-            ++done;
-        }
-
-        if (ygor_data_logger_flush_and_destroy(dl) < 0)
-        {
-            std::cerr << "could not close output: " << strerror(errno) << std::endl;
-            return EXIT_FAILURE;
-        }
-
-        return EXIT_SUCCESS;
-    }
-    catch (std::exception& e)
-    {
-        std::cerr << "error: " << e.what() << std::endl;
+        std::cerr << "could not open output: " << strerror(errno) << std::endl;
         return EXIT_FAILURE;
     }
+
+    b.client = replicant_client_create(conn.host(), conn.port());
+    b.dl = dl;
+    po6::threads::thread prod(po6::threads::make_thread_wrapper(&benchmark::producer, &b));
+    po6::threads::thread cons(po6::threads::make_thread_wrapper(&benchmark::consumer, &b));
+    prod.start();
+    cons.start();
+    prod.join();
+    cons.join();
+
+    if (ygor_data_logger_flush_and_destroy(dl) < 0)
+    {
+        std::cerr << "could not close output: " << strerror(errno) << std::endl;
+        return EXIT_FAILURE;
+    }
+
+    return EXIT_SUCCESS;
 }

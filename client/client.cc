@@ -28,6 +28,9 @@
 // C
 #include <assert.h>
 
+// POSIX
+#include <poll.h>
+
 // e
 #include <e/endian.h>
 #include <e/pow2.h>
@@ -37,6 +40,7 @@
 #include <busybee_st.h>
 
 // Replicant
+#include "common/atomic_io.h"
 #include "common/generate_token.h"
 #include "common/network_msgtype.h"
 #include "common/packing.h"
@@ -45,6 +49,7 @@
 #include "client/pending_call.h"
 #include "client/pending_call_robust.h"
 #include "client/pending_cond_wait.h"
+#include "client/pending_cond_follow.h"
 #include "client/pending_generate_unique_number.h"
 #include "client/pending_poke.h"
 #include "client/pending_wait_new_config.h"
@@ -152,32 +157,17 @@ client :: new_object(const char* object,
                      replicant_returncode* status)
 {
     std::string lib;
-    lib += std::string(object, strlen(object) + 1);
 
-    char buf[4096];
-    po6::io::fd fd(open(path, O_RDONLY));
-
-    if (fd.get() < 0)
+    if (!atomic_read(AT_FDCWD, path, &lib))
     {
         ERROR(SEE_ERRNO) << "could not open library: " << e::error::strerror(errno);
         return -1;
     }
 
-    ssize_t amt = 0;
-
-    while ((amt = fd.xread(buf, 4096)) > 0)
-    {
-        lib.append(buf, amt);
-    }
-
-    if (amt < 0)
-    {
-        ERROR(SEE_ERRNO) << "could not open library: " << e::error::strerror(errno);
-        return -1;
-    }
-
+    std::string cmd(object, strlen(object) + 1);
+    cmd += lib;
     return call("replicant", "new_object",
-                lib.data(), lib.size(),
+                cmd.data(), cmd.size(),
                 REPLICANT_CALL_ROBUST,
                 status, NULL, 0);
 }
@@ -294,6 +284,23 @@ client :: cond_wait(const char* object,
 }
 
 int64_t
+client :: cond_follow(const char* object,
+                      const char* cond,
+                      enum replicant_returncode* status,
+                      uint64_t* state,
+                      char** data, size_t* data_sz)
+{
+    if (!maintain_connection(status))
+    {
+        return -1;
+    }
+
+    const int64_t id = m_next_client_id++;
+    e::intrusive_ptr<pending> p = new pending_cond_follow(id, object, cond, status, state, data, data_sz);
+    return send(p.get());
+}
+
+int64_t
 client :: defended_call(const char* object,
                         const char* enter_func,
                         const char* enter_input, size_t enter_input_sz,
@@ -350,6 +357,54 @@ client :: loop(int timeout, replicant_returncode* status)
     {
         m_busybee->set_timeout(timeout);
         int64_t ret = inner_loop(status);
+
+        if (ret < 0 && *status == REPLICANT_TIMEOUT)
+        {
+            bool all_internal = true;
+
+            for (pending_map_t::iterator it = m_pending.begin();
+                    all_internal && it != m_pending.end(); ++it)
+            {
+                if (it->second->client_visible_id() >= 0)
+                {
+                    all_internal = false;
+                }
+            }
+
+            for (pending_robust_map_t::iterator it = m_pending_robust.begin();
+                    all_internal && it != m_pending_robust.end(); ++it)
+            {
+                if (it->second->client_visible_id() >= 0)
+                {
+                    all_internal = false;
+                }
+            }
+
+            for (pending_list_t::iterator it = m_pending_retry.begin();
+                    all_internal && it != m_pending_retry.end(); ++it)
+            {
+                if ((*it)->client_visible_id() >= 0)
+                {
+                    all_internal = false;
+                }
+            }
+
+            for (pending_robust_list_t::iterator it = m_pending_robust_retry.begin();
+                    all_internal && it != m_pending_robust_retry.end(); ++it)
+            {
+                if ((*it)->client_visible_id() >= 0)
+                {
+                    all_internal = false;
+                }
+            }
+
+            if (all_internal)
+            {
+                possibly_clear_flagfd();
+                ERROR(NONE_PENDING) << "no outstanding operations to process";
+                return -1;
+            }
+        }
 
         if (ret < 0)
         {
@@ -546,6 +601,16 @@ client :: poll_fd()
     return m_busybee->poll_fd();
 }
 
+int
+client :: block(int timeout)
+{
+    pollfd pfd;
+    pfd.fd = poll_fd();
+    pfd.events = POLLIN|POLLHUP;
+    pfd.revents = 0;
+    return ::poll(&pfd, 1, timeout) >= 0 ? 0 : -1;
+}
+
 const char*
 client :: error_message()
 {
@@ -734,7 +799,7 @@ client :: inner_loop(replicant_returncode* status)
         return 0;
     }
 
-    it->second->handle_response(msg, up);
+    it->second->handle_response(this, msg, up);
 
     if (it->second->client_visible_id() >= 0)
     {
@@ -807,9 +872,7 @@ client :: maintain_connection(replicant_returncode* status)
 void
 client :: possibly_clear_flagfd()
 {
-    if (m_pending.empty() &&
-        m_pending_robust.empty() &&
-        m_pending_retry.empty() &&
+    if (m_pending_retry.empty() &&
         m_pending_robust_retry.empty() &&
         m_complete.empty())
     {
@@ -838,6 +901,7 @@ client ::handle_disruption(server_id si)
 
             m_pending.erase(it);
             it = m_pending.begin();
+            m_flagfd.set();
         }
         else
         {
@@ -853,6 +917,7 @@ client ::handle_disruption(server_id si)
             m_pending_robust_retry.push_back(it->second);
             m_pending_robust.erase(it);
             it = m_pending_robust.begin();
+            m_flagfd.set();
         }
         else
         {
@@ -954,7 +1019,6 @@ client :: send(pending* p)
         }
         else if (sent)
         {
-            m_flagfd.set();
             m_pending.insert(std::make_pair(std::make_pair(si, nonce), p));
             return p->client_visible_id();
         }
@@ -981,7 +1045,6 @@ client :: send_robust(pending_call_robust* p)
     assert(p->resend_on_failure());
     server_selector ss(m_config.server_ids(), m_random_token);
     server_id si;
-    m_flagfd.set();
 
     while ((si = ss.next()) != server_id())
     {
@@ -1000,6 +1063,7 @@ client :: send_robust(pending_call_robust* p)
         }
     }
 
+    m_flagfd.set();
     m_backoff = true;
     m_pending_robust_retry.push_back(p);
     return p->client_visible_id();

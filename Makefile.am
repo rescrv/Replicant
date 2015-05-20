@@ -172,6 +172,7 @@ noinst_HEADERS += client/pending_wait_new_config.h
 noinst_HEADERS += client/server_selector.h
 
 libreplicant_la_SOURCES =
+libreplicant_la_SOURCES += common/atomic_io.cc
 libreplicant_la_SOURCES += common/bootstrap.cc
 libreplicant_la_SOURCES += common/configuration.cc
 libreplicant_la_SOURCES += common/generate_token.cc
@@ -186,6 +187,7 @@ libreplicant_la_SOURCES += client/pending_call.cc
 libreplicant_la_SOURCES += client/pending_call_robust.cc
 libreplicant_la_SOURCES += client/pending.cc
 libreplicant_la_SOURCES += client/pending_cond_wait.cc
+libreplicant_la_SOURCES += client/pending_cond_follow.cc
 libreplicant_la_SOURCES += client/pending_generate_unique_number.cc
 libreplicant_la_SOURCES += client/pending_poke.cc
 libreplicant_la_SOURCES += client/pending_wait_new_config.cc
@@ -264,7 +266,7 @@ replicant_debug_condition_SOURCES = tools/debug-condition.cc
 replicant_debug_condition_LDADD = libreplicant.la
 
 replicant_benchmark_SOURCES = replicant-benchmark.cc
-replicant_benchmark_LDADD = libreplicant.la -lygor
+replicant_benchmark_LDADD = libreplicant.la -lygor -lpthread
 
 ################################################################################
 ################################### Examples ###################################

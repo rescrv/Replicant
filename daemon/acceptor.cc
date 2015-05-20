@@ -684,6 +684,7 @@ acceptor :: garbage_collect(uint64_t below)
         }
 
         m_gc->gc(lognum, below);
+        pvals();
     }
     else
     {

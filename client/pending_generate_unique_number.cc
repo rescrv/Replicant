@@ -64,7 +64,8 @@ pending_generate_unique_number :: resend_on_failure()
 }
 
 void
-pending_generate_unique_number :: handle_response(std::auto_ptr<e::buffer>,
+pending_generate_unique_number :: handle_response(client*,
+                                                  std::auto_ptr<e::buffer>,
                                                   e::unpacker up)
 {
     up = up >> *m_number;

@@ -44,7 +44,8 @@ class pending_wait_new_config : public pending
     public:
         virtual std::auto_ptr<e::buffer> request(uint64_t nonce);
         virtual bool resend_on_failure();
-        virtual void handle_response(std::auto_ptr<e::buffer> msg,
+        virtual void handle_response(client* cl,
+                                     std::auto_ptr<e::buffer> msg,
                                      e::unpacker up);
 
     private:

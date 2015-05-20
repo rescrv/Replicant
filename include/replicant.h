@@ -146,6 +146,14 @@ replicant_client_cond_wait(struct replicant_client* client,
                            char** data, size_t* data_sz);
 
 int64_t
+replicant_client_cond_follow(struct replicant_client* client,
+                             const char* object,
+                             const char* cond,
+                             enum replicant_returncode* status,
+                             uint64_t* state,
+                             char** data, size_t* data_sz);
+
+int64_t
 replicant_client_defended_call(struct replicant_client* client,
                                const char* object,
                                const char* enter_func,

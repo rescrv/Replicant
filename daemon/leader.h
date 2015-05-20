@@ -54,17 +54,19 @@ class leader
         size_t quorum_size() const { return m_quorum; }
         void send_all_proposals(daemon* d);
         bool accept(server_id si, const pvalue& p);
-        void nop_fill(daemon* d, uint64_t limit);
         void propose(daemon* d,
                      uint64_t slot_start,
                      uint64_t slot_limit,
                      const std::string& c);
         void set_window(daemon* d, uint64_t start, uint64_t limit);
+        void fill_window(daemon* d);
         uint64_t window_start() const { return m_start; }
         uint64_t window_limit() const { return m_limit; }
         void garbage_collect(uint64_t below);
 
     private:
+        void adjust_next();
+        void insert_nop(daemon* d, uint64_t slot);
         void send_proposal(daemon* d, commander* c);
 
     private:
@@ -75,6 +77,7 @@ class leader
         commander_map_t m_commanders;
         uint64_t m_start;
         uint64_t m_limit;
+        uint64_t m_next;
 
     private:
         leader(const leader&);

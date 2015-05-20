@@ -281,6 +281,19 @@ replicant_client_cond_wait(struct replicant_client* _cl,
 }
 
 REPLICANT_API int64_t
+replicant_client_cond_follow(struct replicant_client* _cl,
+                             const char* object,
+                             const char* cond,
+                             enum replicant_returncode* status,
+                             uint64_t* state,
+                             char** data, size_t* data_sz)
+{
+    C_WRAP_EXCEPT(
+    return cl->cond_follow(object, cond, status, state, data, data_sz);
+    );
+}
+
+REPLICANT_API int64_t
 replicant_client_defended_call(struct replicant_client* _cl,
                                const char* object,
                                const char* enter_func,
@@ -340,6 +353,15 @@ replicant_client_poll_fd(replicant_client* _cl)
     FAKE_STATUS;
     C_WRAP_EXCEPT(
     return cl->poll_fd();
+    );
+}
+
+REPLICANT_API int
+replicant_client_block(replicant_client* _cl, int timeout)
+{
+    FAKE_STATUS;
+    C_WRAP_EXCEPT(
+    return cl->block(timeout);
     );
 }
 

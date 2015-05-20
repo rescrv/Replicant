@@ -42,6 +42,7 @@ leader :: leader(const scout& s)
     , m_commanders()
     , m_start(s.window_start())
     , m_limit(s.window_limit())
+    , m_next(m_start)
 {
     for (size_t i = 0; i < s.pvals().size(); ++i)
     {
@@ -99,6 +100,8 @@ leader :: leader(const scout& s)
             ++next;
         }
     }
+
+    adjust_next();
 }
 
 leader :: ~leader() throw ()
@@ -108,10 +111,15 @@ leader :: ~leader() throw ()
 void
 leader :: send_all_proposals(daemon* d)
 {
-    for (commander_map_t::iterator it = m_commanders.begin();
+    for (commander_map_t::iterator it = m_commanders.lower_bound(m_start);
             it != m_commanders.end(); ++it)
     {
         send_proposal(d, &it->second);
+
+        if (it->second.pval().s >= m_limit)
+        {
+            return;
+        }
     }
 }
 
@@ -140,26 +148,18 @@ leader :: accept(server_id si, const pvalue& p)
 }
 
 void
-leader :: nop_fill(daemon* d, uint64_t limit)
-{
-    for (size_t slot = m_start; slot < limit; ++slot)
-    {
-        commander_map_t::iterator it = m_commanders.find(slot);
-
-        if (it == m_commanders.end())
-        {
-            pvalue pval(current_ballot(), slot, std::string());
-            std::pair<commander_map_t::iterator, bool> ins;
-            ins = m_commanders.insert(std::make_pair(slot, pval));
-            assert(ins.second);
-            send_proposal(d, &ins.first->second);
-        }
-    }
-}
-
-void
 leader :: propose(daemon* d, uint64_t slot_start, uint64_t slot_limit, const std::string& c)
 {
+    if (slot_start <= m_next && m_next < slot_limit)
+    {
+        assert(m_commanders.find(m_next) == m_commanders.end());
+        pvalue pval(current_ballot(), m_next, c);
+        commander_map_t::iterator it = m_commanders.insert(std::make_pair(m_next, commander(pval))).first;
+        send_proposal(d, &it->second);
+        adjust_next();
+        return;
+    }
+
     const uint64_t search_start = std::max(slot_start, m_start);
     uint64_t slot = 0;
 
@@ -178,10 +178,22 @@ leader :: propose(daemon* d, uint64_t slot_start, uint64_t slot_limit, const std
         return;
     }
 
+    assert(m_next < slot_start || m_next >= slot_limit || m_next == slot);
     assert(m_commanders.find(slot) == m_commanders.end());
     pvalue pval(current_ballot(), slot, c);
     commander_map_t::iterator it = m_commanders.insert(std::make_pair(slot, commander(pval))).first;
     send_proposal(d, &it->second);
+    adjust_next();
+
+    for (uint64_t i = m_start; i < slot_start; ++i)
+    {
+        commander_map_t::iterator nit = m_commanders.find(i);
+
+        if (nit == m_commanders.end())
+        {
+            insert_nop(d, i);
+        }
+    }
 }
 
 void
@@ -189,7 +201,6 @@ leader :: set_window(daemon* d, uint64_t start, uint64_t limit)
 {
     assert(start >= m_start);
     assert(limit >= m_limit);
-    const uint64_t max_slot = m_commanders.empty() ? m_start : m_commanders.rbegin()->first;
     const uint64_t old_limit = m_limit;
     m_start = start;
     m_limit = limit;
@@ -206,7 +217,23 @@ leader :: set_window(daemon* d, uint64_t start, uint64_t limit)
         send_proposal(d, &it->second);
     }
 
-    nop_fill(d, max_slot);
+    adjust_next();
+}
+
+void
+leader :: fill_window(daemon* d)
+{
+    for (uint64_t i = m_start; i < m_limit; ++i)
+    {
+        commander_map_t::iterator it = m_commanders.find(i);
+
+        if (it == m_commanders.end())
+        {
+            insert_nop(d, i);
+        }
+    }
+
+    adjust_next();
 }
 
 void
@@ -216,6 +243,31 @@ leader :: garbage_collect(uint64_t below)
     {
         m_commanders.erase(m_commanders.begin());
     }
+}
+
+void
+leader :: adjust_next()
+{
+    if (m_next < m_start)
+    {
+        m_next = m_start;
+    }
+
+    while (m_commanders.find(m_next) != m_commanders.end())
+    {
+        ++m_next;
+    }
+}
+
+void
+leader :: insert_nop(daemon* d, uint64_t slot)
+{
+    pvalue pval(current_ballot(), slot, std::string());
+    std::pair<commander_map_t::iterator, bool> ins;
+    ins = m_commanders.insert(std::make_pair(slot, pval));
+    assert(ins.second);
+    send_proposal(d, &ins.first->second);
+    adjust_next();
 }
 
 void

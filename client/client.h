@@ -88,6 +88,11 @@ class client
                           uint64_t state,
                           replicant_returncode* status,
                           char** data, size_t* data_sz);
+        int64_t cond_follow(const char* object,
+                            const char* cond,
+                            enum replicant_returncode* status,
+                            uint64_t* state,
+                            char** data, size_t* data_sz);
         int64_t defended_call(const char* object,
                               const char* enter_func,
                               const char* enter_input, size_t enter_input_sz,
@@ -112,7 +117,7 @@ class client
     public:
         void bump_config_cond_state(uint64_t x) { m_config_cond_state = std::max(m_config_cond_state, x); }
 
-    private:
+    public:
         void reset_busybee();
         int64_t inner_loop(replicant_returncode* status);
         bool maintain_connection(replicant_returncode* status);

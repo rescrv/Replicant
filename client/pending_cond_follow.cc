@@ -26,33 +26,47 @@
 // POSSIBILITY OF SUCH DAMAGE.
 
 // BusyBee
-#include <busybee_constants.h>
+#include "busybee_constants.h"
 
 // Replicant
 #include "common/network_msgtype.h"
 #include "common/packing.h"
 #include "client/client.h"
-#include "client/pending_wait_new_config.h"
+#include "client/pending_cond_follow.h"
 
-using replicant::pending_wait_new_config;
+using replicant::pending_cond_follow;
 
-pending_wait_new_config :: pending_wait_new_config(client* cl, version_id current)
-    : pending(-1, &m_status)
-    , m_client(cl)
-    , m_current(current)
-    , m_status()
+pending_cond_follow :: pending_cond_follow(int64_t id,
+                                           const char* object, const char* cond,
+                                           replicant_returncode* st,
+                                           uint64_t* state,
+                                           char** data, size_t* data_sz)
+    : pending(id, st)
+    , m_object(object)
+    , m_cond(cond)
+    , m_state(state)
+    , m_data(data)
+    , m_data_sz(data_sz)
 {
+    *m_state = 0;
+
+    if (m_data)
+    {
+        *m_data = NULL;
+        *m_data_sz = 0;
+    }
 }
 
-pending_wait_new_config :: ~pending_wait_new_config() throw ()
+pending_cond_follow :: ~pending_cond_follow() throw ()
 {
 }
 
 std::auto_ptr<e::buffer>
-pending_wait_new_config :: request(uint64_t nonce)
+pending_cond_follow :: request(uint64_t nonce)
 {
-    e::slice obj("replicant");
-    e::slice cond("configuration");
+    e::slice obj(m_object);
+    e::slice cond(m_cond);
+    uint64_t state = *m_state + 1;
     const size_t sz = BUSYBEE_HEADER_SIZE
                     + pack_size(REPLNET_COND_WAIT)
                     + 2 * sizeof(uint64_t)
@@ -60,20 +74,40 @@ pending_wait_new_config :: request(uint64_t nonce)
                     + pack_size(cond);
     std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
     msg->pack_at(BUSYBEE_HEADER_SIZE)
-        << REPLNET_COND_WAIT << nonce << obj << cond << (m_current.get() + 1);
+        << REPLNET_COND_WAIT << nonce << obj << cond << state;
     return msg;
 }
 
 bool
-pending_wait_new_config :: resend_on_failure()
+pending_cond_follow :: resend_on_failure()
 {
     return true;
 }
 
 void
-pending_wait_new_config :: handle_response(client*,
-                                           std::auto_ptr<e::buffer>,
-                                           e::unpacker)
+pending_cond_follow :: handle_response(client* cl, std::auto_ptr<e::buffer>, e::unpacker up)
 {
-    m_client->bump_config_cond_state(m_current.get() + 1);
+    uint64_t state;
+    e::slice data;
+    replicant_returncode st;
+    up = up >> st >> state >> data;
+
+    if (up.error())
+    {
+        PENDING_ERROR(SERVER_ERROR) << "received bad cond_follow response";
+    }
+    else
+    {
+        this->set_status(st);
+        *m_state = state;
+
+        if (m_data)
+        {
+            *m_data = static_cast<char*>(malloc(data.size()));
+            *m_data_sz = data.size();
+            memmove(*m_data, data.data(), data.size());
+        }
+    }
+
+    cl->send(this);
 }

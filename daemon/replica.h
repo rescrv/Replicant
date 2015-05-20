@@ -74,7 +74,7 @@ class replica
         bool any_config_has(const po6::net::location& bind_to) const;
         bool discontinuous() const { return !m_pvalues.empty() && m_slot < m_pvalues.front().s; }
         void window(uint64_t* start, uint64_t* limit) const;
-        uint64_t fill_up_to() const { return m_configs.back().first_slot() + 1; }
+        bool fill_window() const { return m_configs.size() > 1; }
         uint64_t gc_up_to() const;
         void cond_wait(server_id si, uint64_t nonce,
                        const e::slice& obj,

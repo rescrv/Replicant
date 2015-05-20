@@ -100,7 +100,7 @@ pending_call_robust :: resend_on_failure()
 }
 
 void
-pending_call_robust :: handle_response(std::auto_ptr<e::buffer>, e::unpacker up)
+pending_call_robust :: handle_response(client*, std::auto_ptr<e::buffer>, e::unpacker up)
 {
     replicant_returncode st;
     e::slice output;

@@ -41,6 +41,7 @@
 #include "namespace.h"
 
 BEGIN_REPLICANT_NAMESPACE
+class client;
 
 class pending
 {
@@ -59,7 +60,8 @@ class pending
     public:
         virtual std::auto_ptr<e::buffer> request(uint64_t nonce) = 0;
         virtual bool resend_on_failure() = 0;
-        virtual void handle_response(std::auto_ptr<e::buffer> msg,
+        virtual void handle_response(client* cl,
+                                     std::auto_ptr<e::buffer> msg,
                                      e::unpacker up) = 0;
 
     public:
