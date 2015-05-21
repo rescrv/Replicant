@@ -35,6 +35,7 @@
 #include <glog/logging.h>
 
 // e
+#include <e/compat.h>
 #include <e/guard.h>
 #include <e/strescape.h>
 
@@ -99,6 +100,55 @@ replicant :: pack_size(const replica::history& rhs)
     return 2 * sizeof(uint64_t) + pack_size(rhs.status) + pack_size(o);
 }
 
+struct replica::defender
+{
+    defender()
+        : nonce()
+        , cmd()
+        , last_seen(0)
+    {
+    }
+    defender(uint64_t command_nonce, const std::string& c, uint64_t seen)
+        : nonce(command_nonce)
+        , cmd(c)
+        , last_seen(seen)
+    {
+    }
+    defender(const defender& other)
+        : nonce(other.nonce)
+        , cmd(other.cmd)
+        , last_seen(other.last_seen)
+    {
+    }
+    ~defender() throw () {}
+
+    uint64_t nonce;
+    std::string cmd;
+    uint64_t last_seen;
+};
+
+e::packer
+replicant :: operator << (e::packer lhs, const replica::defender& rhs)
+{
+    return lhs << rhs.nonce << e::slice(rhs.cmd) << rhs.last_seen;
+}
+
+e::unpacker
+replicant :: operator >> (e::unpacker lhs, replica::defender& rhs)
+{
+    e::slice o;
+    lhs = lhs >> rhs.nonce >> o >> rhs.last_seen;
+    rhs.cmd.assign(o.cdata(), o.size());
+    return lhs;
+}
+
+size_t
+replicant :: pack_size(const replica::defender& rhs)
+{
+    e::slice o(rhs.cmd);
+    return 2 * sizeof(uint64_t) + pack_size(o);
+}
+
 replica :: replica(daemon* d, const configuration& c)
     : m_daemon(d)
     , m_slot(0)
@@ -106,7 +156,8 @@ replica :: replica(daemon* d, const configuration& c)
     , m_configs()
     , m_slots(c.servers().size(), c.first_slot())
     , m_cond_config(c.version().get())
-    , m_cond_tick(c.version().get())
+    , m_cond_tick()
+    , m_defended()
     , m_counter(0)
     , m_command_nonces()
     , m_command_nonces_lookup()
@@ -194,7 +245,9 @@ replica :: learn(const pvalue& p)
         {
             m_configs.pop_front();
             const configuration& c(m_configs.front());
-            m_cond_config.broadcast(m_daemon);
+            std::string packed;
+            e::packer(&packed) << c;
+            m_cond_config.broadcast(m_daemon, packed.data(), packed.size());
             assert(m_cond_config.peek_state() == c.version().get());
             m_slots = std::vector<uint64_t>(c.servers().size(), 0);
             initiate_snapshot();
@@ -356,6 +409,30 @@ replica :: strike_number(server_id si) const
 }
 
 void
+replica :: set_defense_threshold(uint64_t tick)
+{
+    for (std::map<uint64_t, defender>::iterator it = m_defended.begin();
+            it != m_defended.end(); ++it)
+    {
+        defender* d = &it->second;
+
+        if (d->last_seen < tick)
+        {
+            std::string input;
+            e::packer pa(&input);
+            pa = pa << it->first << d->last_seen << tick;
+
+            e::slice obj("replicant");
+            e::slice func("takedown");
+            std::string cmd;
+            pa = e::packer(&cmd);
+            pa = pa << obj << func << input;
+            m_daemon->enqueue_paxos_command(SLOT_CALL, cmd);
+        }
+    }
+}
+
+void
 replica :: take_blocking_snapshot(uint64_t* snapshot_slot,
                                   e::slice* snapshot,
                                   std::auto_ptr<e::buffer>* snapshot_backing)
@@ -395,14 +472,23 @@ replica :: initiate_snapshot()
         std::vector<uint64_t> command_nonces(m_command_nonces.begin(), m_command_nonces.end());
         po6::threads::mutex::hold hold2(&m_robust_mtx);
         std::vector<history> robust_history(m_robust_history.begin(), m_robust_history.end());
+        std::vector<defender> defended;
+
+        for (std::map<uint64_t, defender>::iterator it = m_defended.begin();
+                it != m_defended.end(); ++it)
+        {
+            defended.push_back(it->second);
+        }
+
         size_t sz = sizeof(uint64_t)
                   + sizeof(uint64_t)
                   + pack_size(m_configs.front())
                   + pack_size(m_cond_config)
                   + pack_size(m_cond_tick)
                   + sizeof(uint32_t) + sizeof(uint64_t) * m_slots.size()
-                  + sizeof(uint32_t) + sizeof(uint64_t) * command_nonces.size()
-                  + pack_size(robust_history);
+                  + sizeof(uint64_t) + sizeof(uint64_t) * command_nonces.size()
+                  + pack_size(robust_history)
+                  + pack_size(defended);
 
         for (size_t i = 0; i < REPLICANT_MAX_REPLICAS; ++i)
         {
@@ -419,7 +505,7 @@ replica :: initiate_snapshot()
             pa = pa << m_cond_strikes[i];
         }
 
-        pa = pa << command_nonces << robust_history;
+        pa = pa << command_nonces << robust_history << defended;
         snap->replica_internals(tmp->as_slice());
 
         for (object_map_t::iterator it = m_objects.begin();
@@ -542,6 +628,7 @@ replica :: from_snapshot(daemon* d, const e::slice& snap)
     rep->m_counter = counter;
     std::vector<uint64_t> command_nonces;
     std::vector<history> robust_history;
+    std::vector<defender> defended;
     up = up >> rep->m_slots >> rep->m_cond_config >> rep->m_cond_tick;
 
     for (size_t i = 0; i < REPLICANT_MAX_REPLICAS; ++i)
@@ -549,7 +636,7 @@ replica :: from_snapshot(daemon* d, const e::slice& snap)
         up = up >> rep->m_cond_strikes[i];
     }
 
-    up = up >> command_nonces >> robust_history;
+    up = up >> command_nonces >> robust_history >> defended;
 
     if (up.error() || c.servers().size() != rep->m_slots.size())
     {
@@ -588,6 +675,11 @@ replica :: from_snapshot(daemon* d, const e::slice& snap)
     for (size_t i = 0; i < robust_history.size(); ++i)
     {
         rep->m_robust_history_lookup.insert(robust_history[i].nonce);
+    }
+
+    for (size_t i = 0; i < defended.size(); ++i)
+    {
+        rep->m_defended[defended[i].nonce] = defended[i];
     }
 
     for (size_t i = 0; i < objects.size(); ++i)
@@ -1128,6 +1220,8 @@ replica :: execute_call(const pvalue& p,
         return;
     }
 
+    // replicant object calls must be called and completed immediately before
+    // executing subsequent calls
     if (obj == e::slice("replicant"))
     {
         if (func == e::slice("new_object"))
@@ -1157,6 +1251,18 @@ replica :: execute_call(const pvalue& p,
         else if (func == e::slice("kill_server"))
         {
             execute_kill_server(p, flags, command_nonce, si, request_nonce, input);
+        }
+        else if (func == e::slice("defended"))
+        {
+            execute_defended(p, flags, command_nonce, si, request_nonce, input);
+        }
+        else if (func == e::slice("defend"))
+        {
+            execute_defend(p, flags, command_nonce, si, request_nonce, input);
+        }
+        else if (func == e::slice("takedown"))
+        {
+            execute_takedown(p, flags, command_nonce, si, request_nonce, input);
         }
         else
         {
@@ -1395,6 +1501,89 @@ replica :: execute_kill_server(const pvalue& p,
     }
 
     executed(p, flags, command_nonce, si, request_nonce, REPLICANT_SUCCESS, "");
+}
+
+void
+replica :: execute_defended(const pvalue& p,
+                            unsigned flags,
+                            uint64_t command_nonce,
+                            server_id si,
+                            uint64_t request_nonce,
+                            const e::slice& input)
+{
+    e::slice object;
+    e::slice enter_func;
+    e::slice enter_input;
+    e::slice exit_func;
+    e::slice exit_input;
+    e::unpacker up(input);
+    up = up >> object >> enter_func >> enter_input >> exit_func >> exit_input;
+
+    // issue the enter call
+    std::string enter_cmd;
+    e::packer pa(&enter_cmd);
+    pa = pa << object << enter_func << enter_input;
+    execute_call(p, flags|1, command_nonce, si, request_nonce, e::unpacker(enter_cmd));
+
+    // delay the exit call
+    std::string exit_cmd;
+    pa = e::packer(&exit_cmd);
+    pa = pa << object << exit_func << exit_input;
+    m_defended[command_nonce] = defender(command_nonce, exit_cmd, m_cond_tick.peek_state());
+}
+
+void
+replica :: execute_defend(const pvalue& p,
+                          unsigned flags,
+                          uint64_t command_nonce,
+                          server_id si,
+                          uint64_t request_nonce,
+                          const e::slice& input)
+{
+    uint64_t takedown_nonce;
+    e::unpacker up(input);
+    up = up >> takedown_nonce;
+    std::map<uint64_t, defender>::iterator it = m_defended.find(takedown_nonce);
+
+    if (it == m_defended.end())
+    {
+        return;
+    }
+
+    defender* d = &it->second;
+    d->last_seen = m_cond_tick.peek_state();
+    executed(p, flags, command_nonce, si, request_nonce, REPLICANT_SUCCESS, "");
+}
+
+void
+replica :: execute_takedown(const pvalue& p,
+                            unsigned flags,
+                            uint64_t command_nonce,
+                            server_id si,
+                            uint64_t request_nonce,
+                            const e::slice& input)
+{
+    uint64_t takedown_nonce;
+    uint64_t last_seen;
+    uint64_t tick;
+    e::unpacker up(input);
+    up = up >> takedown_nonce >> last_seen >> tick;
+    std::map<uint64_t, defender>::iterator it = m_defended.find(takedown_nonce);
+
+    if (it == m_defended.end())
+    {
+        return;
+    }
+
+    defender* d = &it->second;
+
+    if (d->last_seen > last_seen)
+    {
+        return;
+    }
+
+    execute_call(p, flags, command_nonce, si, request_nonce, e::unpacker(d->cmd));
+    m_defended.erase(it);
 }
 
 void

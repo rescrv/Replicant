@@ -25,51 +25,36 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
-#ifndef replicant_client_pending_cond_follow_h_
-#define replicant_client_pending_cond_follow_h_
+#ifndef replicant_client_pending_robust_h_
+#define replicant_client_pending_robust_h_
 
 // Replicant
 #include "client/pending.h"
 
 BEGIN_REPLICANT_NAMESPACE
 
-class pending_cond_follow : public pending
+class pending_robust : public pending
 {
     public:
-        pending_cond_follow(int64_t client_visible_id,
-                            const char* object, const char* cond,
-                            replicant_returncode* status,
-                            uint64_t* state,
-                            char** data, size_t* data_sz);
-        pending_cond_follow(int64_t client_visible_id,
-                            const char* object, const char* cond,
-                            replicant_returncode* status,
-                            uint64_t* state,
-                            char** data, size_t* data_sz,
-                            void (client::*callback)());
-        virtual ~pending_cond_follow() throw ();
+        pending_robust(int64_t client_visible_id,
+                       replicant_returncode* status);
+        virtual ~pending_robust() throw ();
 
     public:
-        virtual std::auto_ptr<e::buffer> request(uint64_t nonce);
-        virtual bool resend_on_failure();
-        virtual void handle_response(client* cl,
-                                     std::auto_ptr<e::buffer> msg,
-                                     e::unpacker up);
+        void set_params(uint64_t command_nonce, uint64_t min_slot);
+        uint64_t command_nonce() const;
+        uint64_t min_slot() const;
 
     private:
-        const std::string m_object;
-        const std::string m_cond;
-        uint64_t* const m_state;
-        char** const m_data;
-        size_t* const m_data_sz;
-        bool m_has_callback;
-        void (client::*m_callback)();
+        friend class e::intrusive_ptr<pending_robust>;
+        uint64_t m_command_nonce;
+        uint64_t m_min_slot;
 
     private:
-        pending_cond_follow(const pending_cond_follow&);
-        pending_cond_follow& operator = (const pending_cond_follow&);
+        pending_robust(const pending_robust&);
+        pending_robust& operator = (const pending_robust&);
 };
 
 END_REPLICANT_NAMESPACE
 
-#endif // replicant_client_pending_cond_follow_h_
+#endif // replicant_client_pending_robust_h_

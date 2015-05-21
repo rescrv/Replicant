@@ -2020,10 +2020,16 @@ daemon :: process_call_robust(server_id si,
 void
 daemon :: periodic_tick(uint64_t)
 {
+    const uint64_t tick = m_replica->last_tick();
     std::string cmd;
     e::packer pa(&cmd);
     pa = pa << m_replica->last_tick();
     enqueue_paxos_command(SLOT_TICK, cmd);
+
+    if (tick >= m_s.DEFEND_TIMEOUT)
+    {
+        m_replica->set_defense_threshold(tick - m_s.DEFEND_TIMEOUT);
+    }
 }
 
 void

@@ -31,45 +31,45 @@
 // Replicant
 #include "common/network_msgtype.h"
 #include "common/packing.h"
-#include "client/pending_call_robust.h"
+#include "client/client.h"
+#include "client/pending_defended_call.h"
 
-using replicant::pending_call_robust;
+using replicant::pending_defended_call;
 
-pending_call_robust :: pending_call_robust(int64_t id,
-                                           const char* object,
-                                           const char* func,
-                                           const char* input, size_t input_sz,
-                                           replicant_returncode* st,
-                                           char** output, size_t* output_sz)
+pending_defended_call :: pending_defended_call(int64_t id,
+                                               const char* object,
+                                               const char* enter_func,
+                                               const char* enter_input, size_t enter_input_sz,
+                                               const char* exit_func,
+                                               const char* exit_input, size_t exit_input_sz,
+                                               replicant_returncode* st)
     : pending_robust(id, st)
     , m_object(object)
-    , m_func(func)
-    , m_input(input, input_sz)
-    , m_output(output)
-    , m_output_sz(output_sz)
+    , m_enter_func(enter_func)
+    , m_enter_input(enter_input, enter_input_sz)
+    , m_exit_func(exit_func)
+    , m_exit_input(exit_input, exit_input_sz)
 {
-    if (m_output)
-    {
-        *m_output = NULL;
-    }
-
-    if (m_output_sz)
-    {
-        *m_output_sz = 0;
-    }
 }
 
-pending_call_robust :: ~pending_call_robust() throw ()
+pending_defended_call :: ~pending_defended_call() throw ()
 {
 }
 
 std::auto_ptr<e::buffer>
-pending_call_robust :: request(uint64_t nonce)
+pending_defended_call :: request(uint64_t nonce)
 {
+    std::string input;
+    e::packer pa(&input);
+    pa = pa << e::slice(m_object)
+            << e::slice(m_enter_func)
+            << e::slice(m_enter_input)
+            << e::slice(m_exit_func)
+            << e::slice(m_exit_input);
+
     assert(command_nonce() > 0);
-    e::slice obj(m_object);
-    e::slice func(m_func);
-    e::slice input(m_input);
+    e::slice obj("replicant");
+    e::slice func("defended");
     const size_t sz = BUSYBEE_HEADER_SIZE
                     + pack_size(REPLNET_CALL_ROBUST)
                     + sizeof(uint64_t)
@@ -77,21 +77,21 @@ pending_call_robust :: request(uint64_t nonce)
                     + sizeof(uint64_t)
                     + pack_size(obj)
                     + pack_size(func)
-                    + pack_size(input);
+                    + pack_size(e::slice(input));
     std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
     msg->pack_at(BUSYBEE_HEADER_SIZE)
-        << REPLNET_CALL_ROBUST << nonce << command_nonce() << min_slot() << obj << func << input;
+        << REPLNET_CALL_ROBUST << nonce << command_nonce() << min_slot() << obj << func << e::slice(input);
     return msg;
 }
 
 bool
-pending_call_robust :: resend_on_failure()
+pending_defended_call :: resend_on_failure()
 {
     return true;
 }
 
 void
-pending_call_robust :: handle_response(client*, std::auto_ptr<e::buffer>, e::unpacker up)
+pending_defended_call :: handle_response(client* cl, std::auto_ptr<e::buffer>, e::unpacker up)
 {
     replicant_returncode st;
     e::slice output;
@@ -104,24 +104,7 @@ pending_call_robust :: handle_response(client*, std::auto_ptr<e::buffer>, e::unp
     else if (st == REPLICANT_SUCCESS)
     {
         this->success();
-
-        if (output.size() && m_output)
-        {
-            *m_output = static_cast<char*>(malloc(output.size()));
-
-            if (!*m_output)
-            {
-                this->set_status(REPLICANT_SEE_ERRNO);
-                return;
-            }
-
-            if (m_output_sz)
-            {
-                *m_output_sz = output.size();
-            }
-
-            memmove(*m_output, output.data(), output.size());
-        }
+        cl->add_defense(command_nonce());
     }
     else
     {

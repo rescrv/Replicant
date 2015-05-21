@@ -168,7 +168,6 @@ noinst_HEADERS += client/pending_cond_wait.h
 noinst_HEADERS += client/pending_generate_unique_number.h
 noinst_HEADERS += client/pending.h
 noinst_HEADERS += client/pending_poke.h
-noinst_HEADERS += client/pending_wait_new_config.h
 noinst_HEADERS += client/server_selector.h
 
 libreplicant_la_SOURCES =
@@ -186,11 +185,12 @@ libreplicant_la_SOURCES += client/mapper.cc
 libreplicant_la_SOURCES += client/pending_call.cc
 libreplicant_la_SOURCES += client/pending_call_robust.cc
 libreplicant_la_SOURCES += client/pending.cc
-libreplicant_la_SOURCES += client/pending_cond_wait.cc
 libreplicant_la_SOURCES += client/pending_cond_follow.cc
+libreplicant_la_SOURCES += client/pending_cond_wait.cc
+libreplicant_la_SOURCES += client/pending_defended_call.cc
 libreplicant_la_SOURCES += client/pending_generate_unique_number.cc
 libreplicant_la_SOURCES += client/pending_poke.cc
-libreplicant_la_SOURCES += client/pending_wait_new_config.cc
+libreplicant_la_SOURCES += client/pending_robust.cc
 libreplicant_la_SOURCES += client/server_selector.cc
 libreplicant_la_CXXFLAGS = $(AM_CXXFLAGS) $(CXXFLAGS)
 libreplicant_la_LIBADD = $(BUSYBEE_LIBS) $(E_LIBS)
@@ -214,6 +214,7 @@ replicantexec_PROGRAMS += replicant-conn-str
 replicantexec_PROGRAMS += replicant-kill-server
 replicantexec_PROGRAMS += replicant-debug-call
 replicantexec_PROGRAMS += replicant-debug-condition
+replicantexec_PROGRAMS += replicant-debug-defended-call
 EXTRA_PROGRAMS += replicant-benchmark
 
 noinst_HEADERS += tools/common.h
@@ -264,6 +265,9 @@ replicant_debug_call_LDADD = libreplicant.la
 
 replicant_debug_condition_SOURCES = tools/debug-condition.cc
 replicant_debug_condition_LDADD = libreplicant.la
+
+replicant_debug_defended_call_SOURCES = tools/debug-defended-call.cc
+replicant_debug_defended_call_LDADD = libreplicant.la
 
 replicant_benchmark_SOURCES = replicant-benchmark.cc
 replicant_benchmark_LDADD = libreplicant.la -lygor -lpthread

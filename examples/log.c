@@ -70,6 +70,7 @@ log_log(struct rsm_context* ctx,
         if (data[i] == '\0')
         {
             saw_null = 1;
+            break;
         }
         else if (!isprint(data[i]))
         {
@@ -77,7 +78,11 @@ log_log(struct rsm_context* ctx,
         }
     }
 
-    if (is_print && saw_null)
+    if (is_print && !saw_null)
+    {
+        rsm_log(ctx, "log was asked to log \"%.*s\" and it is %lld bytes long", data_sz, data, i);
+    }
+    else if (is_print && saw_null)
     {
         rsm_log(ctx, "log was asked to log \"%s\" and it is %lld bytes long", data, i);
     }

@@ -44,6 +44,7 @@ class settings
     public:
         uint64_t SUSPECT_TIMEOUT;
         uint64_t SUSPECT_STRIKES;
+        uint64_t DEFEND_TIMEOUT;
 };
 
 END_REPLICANT_NAMESPACE

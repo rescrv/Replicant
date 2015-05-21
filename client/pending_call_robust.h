@@ -29,11 +29,11 @@
 #define replicant_client_pending_call_robust_h_
 
 // Replicant
-#include "client/pending.h"
+#include "client/pending_robust.h"
 
 BEGIN_REPLICANT_NAMESPACE
 
-class pending_call_robust : public pending
+class pending_call_robust : public pending_robust
 {
     public:
         pending_call_robust(int64_t id,
@@ -45,7 +45,6 @@ class pending_call_robust : public pending
         virtual ~pending_call_robust() throw ();
 
     public:
-        void set_params(uint64_t command_nonce, uint64_t min_slot);
         virtual std::auto_ptr<e::buffer> request(uint64_t nonce);
         virtual bool resend_on_failure();
         virtual void handle_response(client* cl,
@@ -53,14 +52,11 @@ class pending_call_robust : public pending
                                      e::unpacker up);
 
     private:
-        friend class e::intrusive_ptr<pending_call_robust>;
         const std::string m_object;
         const std::string m_func;
         const std::string m_input;
         char** m_output;
         size_t* m_output_sz;
-        uint64_t m_command_nonce;
-        uint64_t m_min_slot;
 
     private:
         pending_call_robust(const pending_call_robust&);

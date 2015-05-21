@@ -25,21 +25,25 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
-#ifndef replicant_client_pending_wait_new_config_h_
-#define replicant_client_pending_wait_new_config_h_
+#ifndef replicant_client_pending_defended_call_h_
+#define replicant_client_pending_defended_call_h_
 
 // Replicant
-#include "common/ids.h"
-#include "client/pending.h"
+#include "client/pending_call_robust.h"
 
 BEGIN_REPLICANT_NAMESPACE
-class client;
 
-class pending_wait_new_config : public pending
+class pending_defended_call : public pending_robust
 {
     public:
-        pending_wait_new_config(client* cl, version_id current);
-        virtual ~pending_wait_new_config() throw ();
+        pending_defended_call(int64_t id,
+                              const char* object,
+                              const char* enter_func,
+                              const char* enter_input, size_t enter_input_sz,
+                              const char* exit_func,
+                              const char* exit_input, size_t exit_input_sz,
+                              replicant_returncode* status);
+        virtual ~pending_defended_call() throw ();
 
     public:
         virtual std::auto_ptr<e::buffer> request(uint64_t nonce);
@@ -49,15 +53,17 @@ class pending_wait_new_config : public pending
                                      e::unpacker up);
 
     private:
-        client* const m_client;
-        const version_id m_current;
-        replicant_returncode m_status;
+        const std::string m_object;
+        const std::string m_enter_func;
+        const std::string m_enter_input;
+        const std::string m_exit_func;
+        const std::string m_exit_input;
 
     private:
-        pending_wait_new_config(const pending_wait_new_config&);
-        pending_wait_new_config& operator = (const pending_wait_new_config&);
+        pending_defended_call(const pending_defended_call&);
+        pending_defended_call& operator = (const pending_defended_call&);
 };
 
 END_REPLICANT_NAMESPACE
 
-#endif // replicant_client_pending_wait_new_config_h_
+#endif // replicant_client_pending_defended_call_h_

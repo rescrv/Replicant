@@ -25,55 +25,37 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
-// BusyBee
-#include <busybee_constants.h>
-
 // Replicant
-#include "common/network_msgtype.h"
-#include "common/packing.h"
-#include "client/client.h"
-#include "client/pending_wait_new_config.h"
+#include "client/pending_robust.h"
 
-using replicant::pending_wait_new_config;
+using replicant::pending_robust;
 
-pending_wait_new_config :: pending_wait_new_config(client* cl, version_id current)
-    : pending(-1, &m_status)
-    , m_client(cl)
-    , m_current(current)
-    , m_status()
+pending_robust :: pending_robust(int64_t id, replicant_returncode* st)
+    : pending(id, st)
+    , m_command_nonce(0)
+    , m_min_slot(0)
 {
 }
 
-pending_wait_new_config :: ~pending_wait_new_config() throw ()
+pending_robust :: ~pending_robust() throw ()
 {
-}
-
-std::auto_ptr<e::buffer>
-pending_wait_new_config :: request(uint64_t nonce)
-{
-    e::slice obj("replicant");
-    e::slice cond("configuration");
-    const size_t sz = BUSYBEE_HEADER_SIZE
-                    + pack_size(REPLNET_COND_WAIT)
-                    + 2 * sizeof(uint64_t)
-                    + pack_size(obj)
-                    + pack_size(cond);
-    std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
-    msg->pack_at(BUSYBEE_HEADER_SIZE)
-        << REPLNET_COND_WAIT << nonce << obj << cond << (m_current.get() + 1);
-    return msg;
-}
-
-bool
-pending_wait_new_config :: resend_on_failure()
-{
-    return true;
 }
 
 void
-pending_wait_new_config :: handle_response(client*,
-                                           std::auto_ptr<e::buffer>,
-                                           e::unpacker)
+pending_robust :: set_params(uint64_t cn, uint64_t ms)
 {
-    m_client->bump_config_cond_state(m_current.get() + 1);
+    m_command_nonce = cn;
+    m_min_slot = ms;
+}
+
+uint64_t
+pending_robust :: command_nonce() const
+{
+    return m_command_nonce;
+}
+
+uint64_t
+pending_robust :: min_slot() const
+{
+    return m_min_slot;
 }

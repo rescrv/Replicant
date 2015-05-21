@@ -47,6 +47,32 @@ pending_cond_follow :: pending_cond_follow(int64_t id,
     , m_state(state)
     , m_data(data)
     , m_data_sz(data_sz)
+    , m_has_callback(false)
+    , m_callback()
+{
+    *m_state = 0;
+
+    if (m_data)
+    {
+        *m_data = NULL;
+        *m_data_sz = 0;
+    }
+}
+
+pending_cond_follow :: pending_cond_follow(int64_t id,
+                                           const char* object, const char* cond,
+                                           replicant_returncode* st,
+                                           uint64_t* state,
+                                           char** data, size_t* data_sz,
+                                           void (client::*callback)())
+    : pending(id, st)
+    , m_object(object)
+    , m_cond(cond)
+    , m_state(state)
+    , m_data(data)
+    , m_data_sz(data_sz)
+    , m_has_callback(true)
+    , m_callback(callback)
 {
     *m_state = 0;
 
@@ -99,13 +125,40 @@ pending_cond_follow :: handle_response(client* cl, std::auto_ptr<e::buffer>, e::
     else
     {
         this->set_status(st);
-        *m_state = state;
 
-        if (m_data)
+        if (st == REPLICANT_SUCCESS)
         {
-            *m_data = static_cast<char*>(malloc(data.size()));
-            *m_data_sz = data.size();
-            memmove(*m_data, data.data(), data.size());
+            *m_state = state;
+
+            if (m_data && data.size() == 0)
+            {
+                *m_data = NULL;
+                *m_data_sz = 0;
+            }
+            else if (m_data)
+            {
+                if (*m_data)
+                {
+                    *m_data = static_cast<char*>(realloc(*m_data, data.size()));
+                }
+                else
+                {
+                    *m_data = static_cast<char*>(malloc(data.size()));
+                }
+
+                if (!*m_data)
+                {
+                    throw std::bad_alloc();
+                }
+
+                *m_data_sz = data.size();
+                memmove(*m_data, data.data(), data.size());
+            }
+
+            if (m_has_callback)
+            {
+                (cl->*m_callback)();
+            }
         }
     }
 

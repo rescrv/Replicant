@@ -35,6 +35,7 @@
 #include <list>
 #include <map>
 #include <memory>
+#include <set>
 
 // e
 #include <e/error.h>
@@ -50,7 +51,7 @@
 
 BEGIN_REPLICANT_NAMESPACE
 class pending;
-class pending_call_robust;
+class pending_robust;
 
 class client
 {
@@ -115,41 +116,60 @@ class client
         void set_error_message(const char* msg);
 
     public:
-        void bump_config_cond_state(uint64_t x) { m_config_cond_state = std::max(m_config_cond_state, x); }
-
-    public:
         void reset_busybee();
         int64_t inner_loop(replicant_returncode* status);
         bool maintain_connection(replicant_returncode* status);
         void possibly_clear_flagfd();
         void handle_disruption(server_id si);
-        bool handle_bootstrap(server_id si, e::unpacker up, replicant_returncode* status);
         int64_t send(pending* p);
-        int64_t send_robust(pending_call_robust* p);
+        int64_t send_robust(pending_robust* p);
         bool send(server_id si, std::auto_ptr<e::buffer> msg, replicant_returncode* status);
+        void callback_config();
+        void callback_tick();
+        void add_defense(uint64_t nonce) { m_defended.insert(nonce); }
 
     private:
         typedef std::map<std::pair<server_id, uint64_t>, e::intrusive_ptr<pending> > pending_map_t;
-        typedef std::map<std::pair<server_id, uint64_t>, e::intrusive_ptr<pending_call_robust> > pending_robust_map_t;
+        typedef std::map<std::pair<server_id, uint64_t>, e::intrusive_ptr<pending_robust> > pending_robust_map_t;
         typedef std::list<e::intrusive_ptr<pending> > pending_list_t;
-        typedef std::list<e::intrusive_ptr<pending_call_robust> > pending_robust_list_t;
+        typedef std::list<e::intrusive_ptr<pending_robust> > pending_robust_list_t;
+        // communication
         bootstrap m_bootstrap;
         mapper m_busybee_mapper;
         std::auto_ptr<class busybee_st> m_busybee;
+        // server selection
         uint64_t m_random_token;
-        uint64_t m_config_cond_state;
+        // configuration
+        uint64_t m_config_state;
+        char* m_config_data;
+        size_t m_config_data_sz;
+        replicant_returncode m_config_status;
         configuration m_config;
-        uint64_t m_bootstrap_count;
+        // ticks
+        uint64_t m_ticks;
+        replicant_returncode m_tick_status;
+        // defended nonces
+        std::set<uint64_t> m_defended;
+        // operations
         int64_t m_next_client_id;
         uint64_t m_next_nonce;
-        bool m_backoff;
         pending_map_t m_pending;
         pending_robust_map_t m_pending_robust;
         pending_list_t m_pending_retry;
         pending_robust_list_t m_pending_robust_retry;
         pending_list_t m_complete;
+        // persistent background operations
+        pending_list_t m_persistent;
+
+        // errror
         e::error m_last_error;
+
+        // push events and problems up to higher layers
         e::flagfd m_flagfd;
+        bool m_backoff;
+
+        // used for internal calls, so they have a status ptr
+        replicant_returncode m_dummy_status;
 
     private:
         client(const client&);

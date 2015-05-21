@@ -45,14 +45,14 @@
 #include "common/network_msgtype.h"
 #include "common/packing.h"
 #include "client/client.h"
-#include "client/pending.h"
 #include "client/pending_call.h"
 #include "client/pending_call_robust.h"
-#include "client/pending_cond_wait.h"
 #include "client/pending_cond_follow.h"
+#include "client/pending_cond_wait.h"
+#include "client/pending_defended_call.h"
 #include "client/pending_generate_unique_number.h"
+#include "client/pending.h"
 #include "client/pending_poke.h"
-#include "client/pending_wait_new_config.h"
 #include "client/server_selector.h"
 
 using replicant::client;
@@ -71,25 +71,41 @@ client :: client(const char* coordinator, uint16_t port)
     , m_busybee_mapper(&m_config)
     , m_busybee()
     , m_random_token(0)
-    , m_config_cond_state(0)
+    , m_config_state(0)
+    , m_config_data(NULL)
+    , m_config_data_sz(0)
+    , m_config_status()
     , m_config()
-    , m_bootstrap_count(1)
+    , m_ticks(0)
+    , m_tick_status()
+    , m_defended()
     , m_next_client_id(1)
     , m_next_nonce(1)
-    , m_backoff()
     , m_pending()
     , m_pending_robust()
     , m_pending_retry()
     , m_pending_robust_retry()
     , m_complete()
+    , m_persistent()
     , m_last_error()
     , m_flagfd()
+    , m_backoff()
+    , m_dummy_status()
 {
     if (!m_flagfd.valid())
     {
         throw std::bad_alloc();
     }
 
+    e::intrusive_ptr<pending> p;
+    p = new pending_cond_follow(-1, "replicant", "tick", &m_tick_status, &m_ticks, NULL, NULL, &client::callback_tick);
+    m_persistent.push_back(p);
+    p = new pending_cond_follow(-1, "replicant", "configuration",
+                                &m_config_status,
+                                &m_config_state,
+                                &m_config_data, &m_config_data_sz,
+                                &client::callback_config);
+    m_persistent.push_back(p);
     reset_busybee();
 }
 
@@ -98,25 +114,41 @@ client :: client(const char* cs)
     , m_busybee_mapper(&m_config)
     , m_busybee()
     , m_random_token(0)
-    , m_config_cond_state(0)
+    , m_config_state(0)
+    , m_config_data(NULL)
+    , m_config_data_sz(0)
+    , m_config_status()
     , m_config()
-    , m_bootstrap_count(1)
+    , m_ticks(0)
+    , m_tick_status()
+    , m_defended()
     , m_next_client_id(1)
     , m_next_nonce(1)
-    , m_backoff()
     , m_pending()
     , m_pending_robust()
     , m_pending_retry()
     , m_pending_robust_retry()
     , m_complete()
+    , m_persistent()
     , m_last_error()
     , m_flagfd()
+    , m_backoff()
+    , m_dummy_status()
 {
     if (!m_flagfd.valid())
     {
         throw std::bad_alloc();
     }
 
+    e::intrusive_ptr<pending> p;
+    p = new pending_cond_follow(-1, "replicant", "tick", &m_tick_status, &m_ticks, NULL, NULL, &client::callback_tick);
+    m_persistent.push_back(p);
+    p = new pending_cond_follow(-1, "replicant", "configuration",
+                                &m_config_status,
+                                &m_config_state,
+                                &m_config_data, &m_config_data_sz,
+                                &client::callback_config);
+    m_persistent.push_back(p);
     reset_busybee();
 }
 
@@ -250,10 +282,10 @@ client :: call(const char* object,
 
     if (robust)
     {
-        e::intrusive_ptr<pending_call_robust> p = new pending_call_robust(id, object, func,
-                                                                          input, input_sz,
-                                                                          status,
-                                                                          output, output_sz);
+        e::intrusive_ptr<pending_robust> p = new pending_call_robust(id, object, func,
+                                                                     input, input_sz,
+                                                                     status,
+                                                                     output, output_sz);
         return send_robust(p.get());
     }
     else
@@ -313,7 +345,11 @@ client :: defended_call(const char* object,
         return -1;
     }
 
-    return -1;
+    const int64_t id = m_next_client_id++;
+    e::intrusive_ptr<pending_robust> p;
+    p = new pending_defended_call(id, object, enter_func, enter_input, enter_input_sz,
+                                  exit_func, exit_input, exit_input_sz, status);
+    return send_robust(p.get());
 }
 
 int
@@ -487,7 +523,7 @@ client :: wait(int64_t id, int timeout, replicant_returncode* status)
         for (pending_robust_list_t::iterator it = m_pending_robust_retry.begin();
                 it != m_pending_robust_retry.end(); ++it)
         {
-            e::intrusive_ptr<pending_call_robust> p = *it;
+            e::intrusive_ptr<pending_robust> p = *it;
 
             if (p->client_visible_id() == id)
             {
@@ -525,6 +561,11 @@ client :: wait(int64_t id, int timeout, replicant_returncode* status)
 void
 client :: kill(int64_t id)
 {
+    if (id < 0)
+    {
+        return;
+    }
+
     for (pending_map_t::iterator it = m_pending.begin();
             it != m_pending.end(); )
     {
@@ -636,6 +677,12 @@ client :: reset_busybee()
 {
     m_busybee.reset(new busybee_st(&m_busybee_mapper, 0));
     m_busybee->set_external_fd(m_flagfd.poll_fd());
+
+    for (pending_list_t::iterator it = m_persistent.begin();
+            it != m_persistent.end(); ++it)
+    {
+        m_pending_retry.push_back(*it);
+    }
 }
 
 int64_t
@@ -662,7 +709,7 @@ client :: inner_loop(replicant_returncode* status)
 
     while (!m_pending_robust_retry.empty())
     {
-        e::intrusive_ptr<pending_call_robust> p = m_pending_robust_retry.front();
+        e::intrusive_ptr<pending_robust> p = m_pending_robust_retry.front();
         m_pending_robust_retry.pop_front();
         send_robust(p.get());
     }
@@ -714,46 +761,11 @@ client :: inner_loop(replicant_returncode* status)
         return -1;
     }
 
-    switch (mt)
+    if (mt != REPLNET_CLIENT_RESPONSE)
     {
-        case REPLNET_BOOTSTRAP:
-        case REPLNET_SILENT_BOOTSTRAP:
-            if (!handle_bootstrap(si, up, status))
-            {
-                return -1;
-            }
-            return 0;
-        case REPLNET_CLIENT_RESPONSE:
-            break;
-        case REPLNET_NOP:
-        case REPLNET_PING:
-        case REPLNET_PONG:
-        case REPLNET_STATE_TRANSFER:
-        case REPLNET_SUGGEST_REJOIN:
-        case REPLNET_WHO_ARE_YOU:
-        case REPLNET_IDENTITY:
-        case REPLNET_PAXOS_PHASE1A:
-        case REPLNET_PAXOS_PHASE1B:
-        case REPLNET_PAXOS_PHASE2A:
-        case REPLNET_PAXOS_PHASE2B:
-        case REPLNET_PAXOS_LEARN:
-        case REPLNET_PAXOS_SUBMIT:
-        case REPLNET_SERVER_BECOME_MEMBER:
-        case REPLNET_UNIQUE_NUMBER:
-        case REPLNET_OBJECT_FAILED:
-        case REPLNET_POKE:
-        case REPLNET_COND_WAIT:
-        case REPLNET_CALL:
-        case REPLNET_GET_ROBUST_PARAMS:
-        case REPLNET_CALL_ROBUST:
-        case REPLNET_GARBAGE:
-            ERROR(SERVER_ERROR) << "received a " << mt << " from " << si
-                                << " which is not handled by clients";
-            return -1;
-        default:
-            ERROR(SERVER_ERROR) << "communication error: " << si
-                                << " sent an invalid message";
-            return -1;
+        ERROR(SERVER_ERROR) << "received a " << mt << " from " << si
+                            << " which is not handled by clients";
+        return -1;
     }
 
     uint64_t nonce;
@@ -821,7 +833,7 @@ client :: maintain_connection(replicant_returncode* status)
         }
     }
 
-    if (m_config_cond_state == 0)
+    if (m_config.version() == version_id())
     {
         configuration c;
         e::error e;
@@ -835,38 +847,9 @@ client :: maintain_connection(replicant_returncode* status)
         }
 
         m_config = c;
-        m_config_cond_state = m_config.version().get();
-        e::intrusive_ptr<pending> p = new pending_wait_new_config(this, c.version());
-        send(p.get());
-        return true;
     }
-    else if (m_config_cond_state > m_config.version().get())
-    {
-        if (m_bootstrap_count <= 1 || e::is_pow2(m_bootstrap_count))
-        {
-            server_selector ss(m_config.server_ids(), m_random_token);
-            server_id si;
 
-            while ((si = ss.next()) != server_id())
-            {
-                const size_t sz = BUSYBEE_HEADER_SIZE + pack_size(REPLNET_SILENT_BOOTSTRAP);
-                std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
-                msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_SILENT_BOOTSTRAP;
-
-                if (send(si, msg, status))
-                {
-                    ++m_bootstrap_count;
-                    break;
-                }
-            }
-        }
-
-        return true;
-    }
-    else
-    {
-        return true;
-    }
+    return true;
 }
 
 void
@@ -928,77 +911,6 @@ client ::handle_disruption(server_id si)
     possibly_clear_flagfd();
 }
 
-bool
-client :: handle_bootstrap(server_id si, e::unpacker up, replicant_returncode* status)
-{
-    m_bootstrap_count = 1;
-    configuration new_config;
-    up = up >> new_config;
-
-    if (up.error() || !new_config.validate())
-    {
-        ERROR(SERVER_ERROR) << "error bootstrapping off " << si
-                            << ": invalid configuration";
-        return false;
-    }
-
-    bool changed = false;
-
-    if (m_config.cluster() != new_config.cluster())
-    {
-        while (!m_pending.empty())
-        {
-            e::intrusive_ptr<pending> p = m_pending.begin()->second;
-            m_pending.erase(m_pending.begin());
-            p->set_status(REPLICANT_CLUSTER_JUMP);
-            p->error(__FILE__, __LINE__)
-                << "client jumped from " << m_config.cluster()
-                << " to " << new_config.cluster();
-            m_complete.push_back(p);
-        }
-
-        while (!m_pending_robust.empty())
-        {
-            e::intrusive_ptr<pending> p = m_pending_robust.begin()->second.get();
-            m_pending_robust.erase(m_pending_robust.begin());
-            p->set_status(REPLICANT_CLUSTER_JUMP);
-            p->error(__FILE__, __LINE__)
-                << "client jumped from " << m_config.cluster()
-                << " to " << new_config.cluster();
-            m_complete.push_back(p);
-        }
-
-        reset_busybee();
-        changed = true;
-    }
-    else if (m_config.version() < new_config.version())
-    {
-        std::vector<server_id> old_servers = m_config.server_ids();
-        std::vector<server_id> new_servers = new_config.server_ids();
-        std::sort(new_servers.begin(), new_servers.end());
-
-        for (size_t i = 0; i < old_servers.size(); ++i)
-        {
-            if (!std::binary_search(new_servers.begin(), new_servers.end(), old_servers[i]))
-            {
-                m_busybee->drop(old_servers[i].get());
-                handle_disruption(old_servers[i]);
-            }
-        }
-
-        changed = true;
-    }
-
-    if (changed)
-    {
-        m_config = new_config;
-        e::intrusive_ptr<pending> p = new pending_wait_new_config(this, m_config.version());
-        send(p.get());
-    }
-
-    return true;
-}
-
 int64_t
 client :: send(pending* p)
 {
@@ -1040,7 +952,7 @@ client :: send(pending* p)
 }
 
 int64_t
-client :: send_robust(pending_call_robust* p)
+client :: send_robust(pending_robust* p)
 {
     assert(p->resend_on_failure());
     server_selector ss(m_config.server_ids(), m_random_token);
@@ -1091,5 +1003,100 @@ client :: send(server_id si, std::auto_ptr<e::buffer> msg, replicant_returncode*
             ERROR(INTERNAL)
                 << "internal state is inconsistent; delete this instance and create another";
             return false;
+    }
+}
+
+void
+client :: callback_config()
+{
+    configuration new_config;
+    e::unpacker up(m_config_data, m_config_data_sz);
+    up = up >> new_config;
+
+    if (up.error() || !new_config.validate())
+    {
+        // technically not incorrect, but we could expose more info to the user
+        return;
+    }
+
+    bool changed = false;
+
+    if (m_config.cluster() != new_config.cluster())
+    {
+        while (!m_pending.empty())
+        {
+            e::intrusive_ptr<pending> p = m_pending.begin()->second;
+            m_pending.erase(m_pending.begin());
+
+            if (p->client_visible_id() < 0)
+            {
+                continue;
+            }
+
+            p->set_status(REPLICANT_CLUSTER_JUMP);
+            p->error(__FILE__, __LINE__)
+                << "client jumped from " << m_config.cluster()
+                << " to " << new_config.cluster();
+            m_complete.push_back(p);
+        }
+
+        while (!m_pending_robust.empty())
+        {
+            e::intrusive_ptr<pending> p = m_pending_robust.begin()->second.get();
+            m_pending_robust.erase(m_pending_robust.begin());
+
+            if (p->client_visible_id() < 0)
+            {
+                continue;
+            }
+
+            p->set_status(REPLICANT_CLUSTER_JUMP);
+            p->error(__FILE__, __LINE__)
+                << "client jumped from " << m_config.cluster()
+                << " to " << new_config.cluster();
+            m_complete.push_back(p);
+        }
+
+        reset_busybee();
+        changed = true;
+    }
+    else if (m_config.version() < new_config.version())
+    {
+        std::vector<server_id> old_servers = m_config.server_ids();
+        std::vector<server_id> new_servers = new_config.server_ids();
+        std::sort(new_servers.begin(), new_servers.end());
+
+        for (size_t i = 0; i < old_servers.size(); ++i)
+        {
+            if (!std::binary_search(new_servers.begin(), new_servers.end(), old_servers[i]))
+            {
+                m_busybee->drop(old_servers[i].get());
+                handle_disruption(old_servers[i]);
+            }
+        }
+
+        changed = true;
+    }
+
+    if (changed)
+    {
+        m_config = new_config;
+    }
+
+    return;
+}
+
+void
+client :: callback_tick()
+{
+    for (std::set<uint64_t>::iterator it = m_defended.begin();
+            it != m_defended.end(); ++it)
+    {
+        std::string input;
+        e::packer(&input) << *it;
+        e::intrusive_ptr<pending_robust> p = new pending_call_robust(-1, "replicant", "defend",
+                                                                     input.data(), input.size(),
+                                                                     &m_dummy_status, NULL, NULL);
+        send_robust(p.get());
     }
 }

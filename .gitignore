@@ -35,6 +35,7 @@
 /replicant-debug
 /replicant-debug-call
 /replicant-debug-condition
+/replicant-debug-defended-call
 /replicant-debug-dump
 /replicant-del-object
 /replicant-generate-unique-number

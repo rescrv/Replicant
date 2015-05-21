@@ -87,6 +87,7 @@ class replica
         void clean_dead_objects();
         uint64_t last_tick() { return m_cond_tick.peek_state(); }
         uint64_t strike_number(server_id si) const;
+        void set_defense_threshold(uint64_t tick);
 
     // snapshots
     public:
@@ -109,6 +110,7 @@ class replica
     public:
         struct history;
         struct repair_info;
+        struct defender;
         friend class object;
         typedef std::map<std::string, e::intrusive_ptr<object> > object_map_t;
         typedef std::list<e::intrusive_ptr<object> > object_list_t;
@@ -179,6 +181,24 @@ class replica
                                  server_id si,
                                  uint64_t request_nonce,
                                  const e::slice& input);
+        void execute_defended(const pvalue& p,
+                              unsigned flags,
+                              uint64_t command_nonce,
+                              server_id si,
+                              uint64_t request_nonce,
+                              const e::slice& input);
+        void execute_defend(const pvalue& p,
+                            unsigned flags,
+                            uint64_t command_nonce,
+                            server_id si,
+                            uint64_t request_nonce,
+                            const e::slice& input);
+        void execute_takedown(const pvalue& p,
+                              unsigned flags,
+                              uint64_t command_nonce,
+                              server_id si,
+                              uint64_t request_nonce,
+                              const e::slice& input);
         void executed(const pvalue& p,
                       unsigned flags,
                       uint64_t command_nonce,
@@ -199,6 +219,7 @@ class replica
         condition m_cond_config;
         condition m_cond_tick;
         condition m_cond_strikes[REPLICANT_MAX_REPLICAS];
+        std::map<uint64_t, defender> m_defended;
         uint64_t m_counter;
         std::deque<uint64_t> m_command_nonces;
         google::dense_hash_set<uint64_t> m_command_nonces_lookup;
@@ -231,6 +252,13 @@ e::unpacker
 operator >> (e::unpacker lhs, replica::history& rhs);
 size_t
 pack_size(const replica::history& rhs);
+
+e::packer
+operator << (e::packer lhs, const replica::defender& rhs);
+e::unpacker
+operator >> (e::unpacker lhs, replica::defender& rhs);
+size_t
+pack_size(const replica::defender& rhs);
 
 END_REPLICANT_NAMESPACE
 
