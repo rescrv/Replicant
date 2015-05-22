@@ -167,6 +167,9 @@ noinst_HEADERS += client/pending_call_robust.h
 noinst_HEADERS += client/pending_cond_wait.h
 noinst_HEADERS += client/pending_generate_unique_number.h
 noinst_HEADERS += client/pending.h
+noinst_HEADERS += client/pending_defended_call.h
+noinst_HEADERS += client/pending_cond_follow.h
+noinst_HEADERS += client/pending_robust.h
 noinst_HEADERS += client/pending_poke.h
 noinst_HEADERS += client/server_selector.h
 
