@@ -51,6 +51,7 @@
 #include "daemon/condition.h"
 #include "daemon/object.h"
 #include "daemon/pvalue.h"
+#include "daemon/settings.h"
 #include "daemon/snapshot.h"
 
 BEGIN_REPLICANT_NAMESPACE
@@ -69,6 +70,7 @@ class replica
     // only call from main daemon thread
     public:
         const configuration& config() const { return m_configs.front(); }
+        const settings& current_settings() const { return m_s; }
         const std::list<configuration>& configs() const { return m_configs; }
         bool any_config_has(server_id si) const;
         bool any_config_has(const po6::net::location& bind_to) const;
@@ -219,6 +221,7 @@ class replica
         condition m_cond_config;
         condition m_cond_tick;
         condition m_cond_strikes[REPLICANT_MAX_REPLICAS];
+        settings m_s;
         std::map<uint64_t, defender> m_defended;
         uint64_t m_counter;
         std::deque<uint64_t> m_command_nonces;

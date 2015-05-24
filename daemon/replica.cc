@@ -157,6 +157,7 @@ replica :: replica(daemon* d, const configuration& c)
     , m_slots(c.servers().size(), c.first_slot())
     , m_cond_config(c.version().get())
     , m_cond_tick()
+    , m_s()
     , m_defended()
     , m_counter(0)
     , m_command_nonces()
@@ -485,6 +486,7 @@ replica :: initiate_snapshot()
                   + pack_size(m_configs.front())
                   + pack_size(m_cond_config)
                   + pack_size(m_cond_tick)
+                  + pack_size(m_s)
                   + sizeof(uint32_t) + sizeof(uint64_t) * m_slots.size()
                   + sizeof(uint64_t) + sizeof(uint64_t) * command_nonces.size()
                   + pack_size(robust_history)
@@ -498,7 +500,7 @@ replica :: initiate_snapshot()
         std::auto_ptr<e::buffer> tmp(e::buffer::create(sz));
         e::packer pa = tmp->pack_at(0)
             << m_slot << m_counter << m_configs.front() << m_slots
-            << m_cond_config << m_cond_tick;
+            << m_cond_config << m_cond_tick << m_s;
 
         for (size_t i = 0; i < REPLICANT_MAX_REPLICAS; ++i)
         {
@@ -629,7 +631,7 @@ replica :: from_snapshot(daemon* d, const e::slice& snap)
     std::vector<uint64_t> command_nonces;
     std::vector<history> robust_history;
     std::vector<defender> defended;
-    up = up >> rep->m_slots >> rep->m_cond_config >> rep->m_cond_tick;
+    up = up >> rep->m_slots >> rep->m_cond_config >> rep->m_cond_tick >> rep->m_s;
 
     for (size_t i = 0; i < REPLICANT_MAX_REPLICAS; ++i)
     {

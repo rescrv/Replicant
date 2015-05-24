@@ -31,6 +31,9 @@
 // C
 #include <stdint.h>
 
+// e
+#include <e/serialization.h>
+
 // Replicant
 #include "namespace.h"
 
@@ -46,6 +49,13 @@ class settings
         uint64_t SUSPECT_STRIKES;
         uint64_t DEFEND_TIMEOUT;
 };
+
+e::packer
+operator << (e::packer lhs, const settings& rhs);
+e::unpacker
+operator >> (e::unpacker lhs, settings& rhs);
+size_t
+pack_size(const settings& rhs);
 
 END_REPLICANT_NAMESPACE
 

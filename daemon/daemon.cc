@@ -130,8 +130,7 @@ monotonic_time()
 }
 
 daemon :: daemon()
-    : m_s()
-    , m_gc()
+    : m_gc()
     , m_gc_ts()
     , m_busybee_mapper(&m_config_mtx, &m_config)
     , m_busybee()
@@ -2025,10 +2024,11 @@ daemon :: periodic_tick(uint64_t)
     e::packer pa(&cmd);
     pa = pa << m_replica->last_tick();
     enqueue_paxos_command(SLOT_TICK, cmd);
+    const uint64_t DEFEND_TIMEOUT = m_replica->current_settings().DEFEND_TIMEOUT;
 
-    if (tick >= m_s.DEFEND_TIMEOUT)
+    if (tick >= DEFEND_TIMEOUT)
     {
-        m_replica->set_defense_threshold(tick - m_s.DEFEND_TIMEOUT);
+        m_replica->set_defense_threshold(tick - DEFEND_TIMEOUT);
     }
 }
 
@@ -2128,7 +2128,7 @@ daemon :: suspect_failed(server_id si)
         {
             const uint64_t diff = now - m_last_seen[i];
             const uint64_t susp = diff - self_suspicion;
-            return susp > m_s.SUSPECT_TIMEOUT;
+            return susp > m_replica->current_settings().SUSPECT_TIMEOUT;
         }
     }
 
@@ -2151,11 +2151,11 @@ daemon :: periodic_submit_dead_nodes(uint64_t)
         const uint64_t diff = now - m_last_seen[i];
         const uint64_t susp = diff - self_suspicion;
 
-        if (servers[i].id != m_us.id && susp > m_s.SUSPECT_TIMEOUT)
+        if (servers[i].id != m_us.id && susp > m_replica->current_settings().SUSPECT_TIMEOUT)
         {
             ++m_suspect_counts[i];
 
-            if (m_suspect_counts[i] >= m_s.SUSPECT_STRIKES)
+            if (m_suspect_counts[i] >= m_replica->current_settings().SUSPECT_STRIKES)
             {
                 uint64_t strike_num = m_replica->strike_number(servers[i].id);
                 std::string cmd;

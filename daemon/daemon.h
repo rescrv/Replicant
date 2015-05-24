@@ -236,7 +236,6 @@ class daemon
         void run_periodic();
 
     private:
-        settings m_s;
         e::garbage_collector m_gc;
         e::garbage_collector::thread_state m_gc_ts;
         mapper m_busybee_mapper;

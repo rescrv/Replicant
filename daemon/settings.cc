@@ -26,6 +26,7 @@
 // POSSIBILITY OF SUCH DAMAGE.
 
 // Replicant
+#include "common/packing.h"
 #include "daemon/settings.h"
 
 #define NANOS 1ULL
@@ -40,4 +41,26 @@ settings :: settings()
     , SUSPECT_STRIKES(5)
     , DEFEND_TIMEOUT(10)
 {
+}
+
+e::packer
+replicant :: operator << (e::packer lhs, const settings& rhs)
+{
+    return lhs << rhs.SUSPECT_TIMEOUT
+               << rhs.SUSPECT_STRIKES
+               << rhs.DEFEND_TIMEOUT;
+}
+
+e::unpacker
+replicant :: operator >> (e::unpacker lhs, settings& rhs)
+{
+    return lhs >> rhs.SUSPECT_TIMEOUT
+               >> rhs.SUSPECT_STRIKES
+               >> rhs.DEFEND_TIMEOUT;
+}
+
+size_t
+replicant :: pack_size(const settings&)
+{
+    return 3 * pack_size(uint64_t());
 }
