@@ -25,8 +25,13 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
+#ifdef HAVE_CONFIG_H
+#include "config.h"
+#endif
+
 // POSIX
 #include <signal.h>
+#include <sys/stat.h>
 
 // STL
 #include <algorithm>
@@ -1691,6 +1696,55 @@ replica :: launch(object* obj, const char* executable, const char* const * args)
     return true;
 }
 
+static bool
+locate_rsm_dlopen(po6::pathname* path)
+{
+    // find the right library
+    std::vector<po6::pathname> paths;
+    paths.push_back(po6::join(REPLICANT_EXEC_DIR, "replicant-rsm-dlopen"));
+    const char* env = getenv("REPLICANT_EXEC_PATH");
+
+    if (env)
+    {
+        paths.push_back(po6::join(env, "replicant-rsm-dlopen"));
+    }
+
+    // maybe we're running out of Git.  make it "just work"
+    char selfbuf[PATH_MAX + 1];
+    memset(selfbuf, 0, sizeof(selfbuf));
+
+    if (readlink("/proc/self/exe", selfbuf, PATH_MAX) >= 0)
+    {
+        po6::pathname workdir(selfbuf);
+        workdir = workdir.dirname();
+        po6::pathname gitdir(po6::join(workdir, ".git"));
+        struct stat buf;
+
+        if (stat(gitdir.get(), &buf) == 0 &&
+            S_ISDIR(buf.st_mode))
+        {
+            paths.push_back(po6::join(workdir, "replicant-rsm-dlopen"));
+        }
+    }
+
+    size_t idx = 0;
+
+    while (idx < paths.size())
+    {
+        struct stat buf;
+
+        if (stat(paths[idx].get(), &buf) == 0)
+        {
+            *path = paths[idx];
+            return true;
+        }
+
+        ++idx;
+    }
+
+    return false;
+}
+
 replicant::object*
 replica :: launch_library(const std::string& name, uint64_t slot, const std::string& lib)
 {
@@ -1704,12 +1758,17 @@ replica :: launch_library(const std::string& name, uint64_t slot, const std::str
         return NULL;
     }
 
-    std::string exe(REPLICANT_EXEC_DIR);
-    exe.append("/");
-    exe.assign("/home/rescrv/src/replicant/replicant-rsm-dlopen");
-    const char* const args[] = {exe.c_str(), libname.c_str(), 0};
+    po6::pathname exe;
 
-    if (!launch(obj.get(), exe.c_str(), args))
+    if (!locate_rsm_dlopen(&exe))
+    {
+        PLOG(ERROR) << "could not spawn library for " << name;
+        return NULL;
+    }
+
+    const char* const args[] = {exe.get(), libname.c_str(), 0};
+
+    if (!launch(obj.get(), exe.get(), args))
     {
         return NULL;
     }
