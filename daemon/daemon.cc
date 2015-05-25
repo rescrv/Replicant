@@ -267,8 +267,6 @@ daemon :: run(bool daemonize,
         return EXIT_FAILURE;
     }
 
-    sigdelset(&ss, SIGPROF);
-
     if (pthread_sigmask(SIG_SETMASK, &ss, NULL) < 0)
     {
         PLOG(ERROR) << "could not block signals";
@@ -1602,8 +1600,6 @@ daemon :: bootstrap_thread()
         LOG(ERROR) << "could not successfully block signals; this could result in undefined behavior";
         return;
     }
-
-    sigdelset(&ss, SIGPROF);
 
     if (pthread_sigmask(SIG_BLOCK, &ss, NULL) < 0)
     {
