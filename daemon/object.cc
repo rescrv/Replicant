@@ -360,6 +360,24 @@ object :: fail_at(uint64_t slot)
 void
 object :: run()
 {
+    sigset_t ss;
+
+    if (sigfillset(&ss) < 0)
+    {
+        PLOG(ERROR) << "sigfillset";
+        LOG(ERROR) << "could not successfully block signals; this could result in undefined behavior";
+        return;
+    }
+
+    sigdelset(&ss, SIGPROF);
+
+    if (pthread_sigmask(SIG_BLOCK, &ss, NULL) < 0)
+    {
+        PLOG(ERROR) << "could not block signals";
+        LOG(ERROR) << "could not successfully block signals; this could result in undefined behavior";
+        return;
+    }
+
     bool has_ctor = false;
     bool has_rtor = false;
 
