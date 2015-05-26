@@ -132,7 +132,9 @@ replicant_daemon_LDADD =
 replicant_daemon_LDADD += $(BUSYBEE_LIBS)
 replicant_daemon_LDADD += $(E_LIBS)
 replicant_daemon_LDADD += $(LRT_LIBS)
-replicant_daemon_LDADD += -lglog -lpthread
+replicant_daemon_LDADD += $(POPT_LIBS)
+replicant_daemon_LDADD += $(GLOG_LIBS)
+replicant_daemon_LDADD += -lpthread
 
 ################################################################################
 ################################# State Machine ################################
@@ -224,56 +226,58 @@ noinst_HEADERS += tools/common.h
 
 replicant_SOURCES = replicant.cc
 replicant_CPPFLAGS = $(AM_CPPFLAGS) $(CPPFLAGS)
+replicant_LDADD = $(POPT_LIBS)
 
 replicant_debug_SOURCES = replicant-debug.cc
 replicant_debug_CPPFLAGS = $(AM_CPPFLAGS) $(CPPFLAGS)
+replicant_debug_LDADD = $(POPT_LIBS)
 
 replicant_poke_SOURCES = tools/poke.cc
-replicant_poke_LDADD = libreplicant.la
+replicant_poke_LDADD = libreplicant.la $(POPT_LIBS)
 
 replicant_generate_unique_number_SOURCES = tools/generate-unique-number.cc
-replicant_generate_unique_number_LDADD = libreplicant.la
+replicant_generate_unique_number_LDADD = libreplicant.la $(POPT_LIBS)
 
 replicant_new_object_SOURCES = tools/new-object.cc
-replicant_new_object_LDADD = libreplicant.la
+replicant_new_object_LDADD = libreplicant.la $(POPT_LIBS)
 
 replicant_del_object_SOURCES = tools/del-object.cc
-replicant_del_object_LDADD = libreplicant.la
+replicant_del_object_LDADD = libreplicant.la $(POPT_LIBS)
 
 replicant_kill_object_SOURCES = tools/kill-object.cc
-replicant_kill_object_LDADD = libreplicant.la
+replicant_kill_object_LDADD = libreplicant.la $(POPT_LIBS)
 
 replicant_backup_object_SOURCES = tools/backup-object.cc common/atomic_io.cc
 replicant_backup_object_CXXFLAGS = $(AM_CXXFLAGS) -fvisibility=default $(CXXFLAGS)
-replicant_backup_object_LDADD = libreplicant.la
+replicant_backup_object_LDADD = libreplicant.la $(POPT_LIBS)
 
 replicant_restore_object_SOURCES = tools/restore-object.cc common/atomic_io.cc
 replicant_restore_object_CXXFLAGS = $(AM_CXXFLAGS) -fvisibility=default $(CXXFLAGS)
-replicant_restore_object_LDADD = libreplicant.la
+replicant_restore_object_LDADD = libreplicant.la $(POPT_LIBS)
 
 replicant_list_objects_SOURCES = tools/list-objects.cc
-replicant_list_objects_LDADD = libreplicant.la
+replicant_list_objects_LDADD = libreplicant.la $(POPT_LIBS)
 
 replicant_conn_str_SOURCES = tools/conn-str.cc
-replicant_conn_str_LDADD = libreplicant.la
+replicant_conn_str_LDADD = libreplicant.la $(POPT_LIBS)
 
 replicant_kill_server_SOURCES = tools/kill-server.cc
-replicant_kill_server_LDADD = libreplicant.la
+replicant_kill_server_LDADD = libreplicant.la $(POPT_LIBS)
 
 #replicant_list_servers_SOURCES = tools/list-servers.cc
 #replicant_list_servers_LDADD = libreplicant.la
 
 replicant_debug_call_SOURCES = tools/debug-call.cc
-replicant_debug_call_LDADD = libreplicant.la
+replicant_debug_call_LDADD = libreplicant.la $(POPT_LIBS)
 
 replicant_debug_condition_SOURCES = tools/debug-condition.cc
-replicant_debug_condition_LDADD = libreplicant.la
+replicant_debug_condition_LDADD = libreplicant.la $(POPT_LIBS)
 
 replicant_debug_defended_call_SOURCES = tools/debug-defended-call.cc
-replicant_debug_defended_call_LDADD = libreplicant.la
+replicant_debug_defended_call_LDADD = libreplicant.la $(POPT_LIBS)
 
 replicant_benchmark_SOURCES = replicant-benchmark.cc
-replicant_benchmark_LDADD = libreplicant.la -lygor -lpthread
+replicant_benchmark_LDADD = libreplicant.la -lygor -lpthread $(POPT_LIBS)
 
 ################################################################################
 ################################### Examples ###################################
