@@ -29,6 +29,7 @@
 #define replicant_daemon_object_interface_h_
 
 /* C */
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdlib.h>
 
