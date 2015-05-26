@@ -197,7 +197,7 @@ libreplicant_la_SOURCES += client/pending_robust.cc
 libreplicant_la_SOURCES += client/server_selector.cc
 libreplicant_la_CXXFLAGS = $(AM_CXXFLAGS) $(CXXFLAGS)
 libreplicant_la_LIBADD = $(BUSYBEE_LIBS) $(E_LIBS)
-libreplicant_la_LDFLAGS = -version-info 1:0:0
+libreplicant_la_LDFLAGS = -version-info 2:0:0
 
 ################################################################################
 ##################################### Tools ####################################

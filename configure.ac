@@ -28,7 +28,7 @@
 # Process this file with autoconf to produce a configure script.
 
 AC_PREREQ([2.67])
-AC_INIT([replicant], [0.6.dev], [escriva@cs.cornell.edu])
+AC_INIT([replicant], [0.6.dev], [robert@hyperdex.org])
 AM_INIT_AUTOMAKE([foreign subdir-objects dist-bzip2])
 AM_SILENT_RULES([yes])
 LT_PREREQ([2.2])
@@ -76,9 +76,9 @@ else
     AC_SUBST([LRT_LIBS], [""])
 fi
 
-PKG_CHECK_MODULES([PO6], [libpo6 >= 0.6])
-PKG_CHECK_MODULES([E], [libe >= 0.7])
-PKG_CHECK_MODULES([BUSYBEE], [busybee >= 0.5])
+PKG_CHECK_MODULES([PO6], [libpo6 >= 0.7])
+PKG_CHECK_MODULES([E], [libe >= 0.10])
+PKG_CHECK_MODULES([BUSYBEE], [busybee >= 0.6])
 
 # Checks for header files.
 if test x"${enable_all_components}" = xyes -o \
