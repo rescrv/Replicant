@@ -63,7 +63,7 @@ AM_CONDITIONAL([ENABLE_DAEMON], [test x"${enable_daemon}" = xyes])
 AM_CONDITIONAL([ENABLE_REPLICANT_STUB], [test x"${enable_daemon}" = xyes -o x"${enable_tools}" = xyes])
 
 # Checks for libraries.
-AC_CHECK_LIB([popt], [poptGetContext], [], [AC_MSG_ERROR([
+AC_CHECK_LIB([popt], [poptGetContext], [has_popt=true], [AC_MSG_ERROR([
 ---------------------------------------
 Replicant relies upon the popt library.
 Please install popt to continue.
@@ -79,6 +79,12 @@ fi
 PKG_CHECK_MODULES([PO6], [libpo6 >= 0.7])
 PKG_CHECK_MODULES([E], [libe >= 0.10])
 PKG_CHECK_MODULES([BUSYBEE], [busybee >= 0.6])
+
+AC_ARG_VAR(POPT_LIBS, [linker flags for popt])
+AS_IF([test "x$POPT_LIBS" = x], [POPT_LIBS="-lpopt"])
+
+AC_ARG_VAR(GLOG_LIBS, [linker flags for glog])
+AS_IF([test "x$GLOG_LIBS" = x], [GLOG_LIBS="-lglog"])
 
 # Checks for header files.
 if test x"${enable_all_components}" = xyes -o \
