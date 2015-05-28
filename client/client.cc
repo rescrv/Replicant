@@ -700,18 +700,31 @@ client :: inner_loop(replicant_returncode* status)
         return -1;
     }
 
-    while (!m_pending_retry.empty())
+    pending_list_t pending_retry = m_pending_retry;
+    pending_robust_list_t pending_robust_retry = m_pending_robust_retry;
+    size_t pending_retry_sz = pending_retry.size();
+    size_t pending_robust_retry_sz = pending_robust_retry.size();
+
+    while (!pending_retry.empty())
     {
-        e::intrusive_ptr<pending> p = m_pending_retry.front();
-        m_pending_retry.pop_front();
+        e::intrusive_ptr<pending> p = pending_retry.front();
+        pending_retry.pop_front();
         send(p.get());
     }
 
-    while (!m_pending_robust_retry.empty())
+    while (!pending_robust_retry.empty())
     {
-        e::intrusive_ptr<pending_robust> p = m_pending_robust_retry.front();
-        m_pending_robust_retry.pop_front();
+        e::intrusive_ptr<pending_robust> p = pending_robust_retry.front();
+        pending_robust_retry.pop_front();
         send_robust(p.get());
+    }
+
+    if (pending_retry_sz && pending_robust_retry_sz &&
+        m_pending_retry.size() == pending_retry_sz &&
+        m_pending_robust_retry.size() == pending_robust_retry_sz)
+    {
+        m_backoff = true;
+        return 0;
     }
 
     uint64_t id;
