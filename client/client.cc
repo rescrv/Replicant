@@ -700,8 +700,10 @@ client :: inner_loop(replicant_returncode* status)
         return -1;
     }
 
-    pending_list_t pending_retry = m_pending_retry;
-    pending_robust_list_t pending_robust_retry = m_pending_robust_retry;
+    pending_list_t pending_retry;
+    pending_retry.swap(m_pending_retry);
+    pending_robust_list_t pending_robust_retry;
+    pending_robust_retry.swap(m_pending_robust_retry);
     size_t pending_retry_sz = pending_retry.size();
     size_t pending_robust_retry_sz = pending_robust_retry.size();
 

@@ -56,7 +56,6 @@ class acceptor
                   bootstrap* saved_bootstrap);
         bool save(server saved_us,
                   const bootstrap& saved_bootstrap);
-        bool close();
 
     public:
         const ballot& current_ballot() { return m_ballot; }
