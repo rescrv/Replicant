@@ -348,6 +348,16 @@ replicant_client_wait(struct replicant_client* _cl,
 }
 
 REPLICANT_API int
+replicant_client_kill(struct replicant_client* _cl, int64_t id)
+{
+    FAKE_STATUS;
+    C_WRAP_EXCEPT(
+    cl->kill(id);
+    return 0;
+    );
+}
+
+REPLICANT_API int
 replicant_client_poll_fd(replicant_client* _cl)
 {
     FAKE_STATUS;

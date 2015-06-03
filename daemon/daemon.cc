@@ -277,6 +277,17 @@ daemon :: run(bool daemonize,
 
     if (daemonize)
     {
+        char buf[PATH_MAX];
+        char* cwd = getcwd(buf, PATH_MAX);
+
+        if (!cwd)
+        {
+            LOG(ERROR) << "could not get current working directory";
+            return EXIT_FAILURE;
+        }
+
+        log = po6::join(cwd, log);
+
         struct stat x;
 
         if (lstat(log.get(), &x) < 0 || !S_ISDIR(x.st_mode))
