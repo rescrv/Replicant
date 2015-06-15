@@ -152,7 +152,7 @@ librsm_la_LIBADD = libreplicant_object_interface.la
 libreplicant_object_interface_la_SOURCES = daemon/object_interface.cc
 
 replicant_rsm_dlopen_SOURCES = daemon/rsm-dlopen.c
-replicant_rsm_dlopen_LDADD = librsm.la -ldl
+replicant_rsm_dlopen_LDADD = librsm.la $(LDL_LIBS)
 
 ################################################################################
 #################################### Client ####################################

@@ -69,11 +69,18 @@ Replicant relies upon the popt library.
 Please install popt to continue.
 ---------------------------------------])])
 AC_CHECK_LIB([rt], [clock_gettime], [needs_lrt=yes], [needs_lrt=no])
+AC_CHECK_LIB([dl], [dlopen], [needs_ldl=yes], [needs_ldl=no])
 
 if test x"${needs_lrt}" = xyes; then
     AC_SUBST([LRT_LIBS], ["-lrt"])
 else
     AC_SUBST([LRT_LIBS], [""])
+fi
+
+if test x"${needs_ldl}" = xyes; then
+    AC_SUBST([LDL_LIBS], ["-ldl"])
+else
+    AC_SUBST([LDL_LIBS], [""])
 fi
 
 PKG_CHECK_MODULES([PO6], [libpo6 >= 0.7])

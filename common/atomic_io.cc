@@ -28,6 +28,7 @@
 // POSIX
 #include <fcntl.h>
 #include <stdio.h>
+#include <sys/stat.h>
 
 // po6
 #include <po6/io/fd.h>
