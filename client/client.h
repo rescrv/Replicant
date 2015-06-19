@@ -108,6 +108,9 @@ class client
         void kill(int64_t id);
         // Return the fildescriptor that replicant uses for networking
         int poll_fd();
+        // Ensure the flagfd is set correctly
+        void possibly_set_flagfd();
+        void possibly_clear_flagfd();
         // Block unitl there is incoming data or the timeout is reached
         int block(int timeout);
         // error handling
@@ -119,7 +122,6 @@ class client
         void reset_busybee();
         int64_t inner_loop(replicant_returncode* status);
         bool maintain_connection(replicant_returncode* status);
-        void possibly_clear_flagfd();
         void handle_disruption(server_id si);
         int64_t send(pending* p);
         int64_t send_robust(pending_robust* p);

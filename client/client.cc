@@ -642,6 +642,28 @@ client :: poll_fd()
     return m_busybee->poll_fd();
 }
 
+void
+client :: possibly_set_flagfd()
+{
+    if (!m_pending_retry.empty() ||
+        !m_pending_robust_retry.empty() ||
+        !m_complete.empty())
+    {
+        m_flagfd.set();
+    }
+}
+
+void
+client :: possibly_clear_flagfd()
+{
+    if (m_pending_retry.empty() &&
+        m_pending_robust_retry.empty() &&
+        m_complete.empty())
+    {
+        m_flagfd.clear();
+    }
+}
+
 int
 client :: block(int timeout)
 {
@@ -865,17 +887,6 @@ client :: maintain_connection(replicant_returncode* status)
     }
 
     return true;
-}
-
-void
-client :: possibly_clear_flagfd()
-{
-    if (m_pending_retry.empty() &&
-        m_pending_robust_retry.empty() &&
-        m_complete.empty())
-    {
-        m_flagfd.clear();
-    }
 }
 
 void

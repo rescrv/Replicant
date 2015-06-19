@@ -64,6 +64,7 @@ inline void return_void() {}
     SIGNAL_PROTECT; \
     try \
     { \
+        e::guard gpipe = e::makeobjguard(*cl, &replicant::client::possibly_set_flagfd); \
         X \
     } \
     catch (po6::error& e) \
