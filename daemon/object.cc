@@ -784,9 +784,6 @@ object :: do_call_log(const enqueued_call& c)
         return;
     }
 
-    std::ostringstream ostr;
-    ostr << "log output for object \"" << m_obj_name << "\":\n";
-
     const char* ptr = &log_buf[0];
     const char* end = &log_buf[0] + log_buf.size();
 
@@ -809,11 +806,9 @@ object :: do_call_log(const enqueued_call& c)
             eol = static_cast<const char*>(ptr_0);
         }
 
-        ostr << m_obj_name << "." << c.func << " @ slot=" << c.p.s << ": " << std::string(ptr, eol) << "\n";
+        LOG(INFO) << m_obj_name << "." << c.func << " @ slot=" << c.p.s << ": " << std::string(ptr, eol);
         ptr = eol + 1;
     }
-
-    LOG(INFO) << ostr.str();
 }
 
 void
