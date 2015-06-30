@@ -436,7 +436,7 @@ client :: loop(int timeout, replicant_returncode* status)
 
             if (all_internal)
             {
-                possibly_clear_flagfd();
+                adjust_flagfd();
                 ERROR(NONE_PENDING) << "no outstanding operations to process";
                 return -1;
             }
@@ -463,7 +463,7 @@ client :: loop(int timeout, replicant_returncode* status)
         return -1;
     }
 
-    possibly_clear_flagfd();
+    adjust_flagfd();
     ERROR(NONE_PENDING) << "no outstanding operations to process";
     return -1;
 }
@@ -553,7 +553,7 @@ client :: wait(int64_t id, int timeout, replicant_returncode* status)
         return -1;
     }
 
-    possibly_clear_flagfd();
+    adjust_flagfd();
     ERROR(NONE_PENDING) << "no outstanding operation with id=" << id;
     return -1;
 }
@@ -633,7 +633,7 @@ client :: kill(int64_t id)
         }
     }
 
-    possibly_clear_flagfd();
+    adjust_flagfd();
 }
 
 int
@@ -643,22 +643,17 @@ client :: poll_fd()
 }
 
 void
-client :: possibly_set_flagfd()
+client :: adjust_flagfd()
 {
-    if (!m_pending_retry.empty() ||
-        !m_pending_robust_retry.empty() ||
-        !m_complete.empty())
+    bool expect = !m_pending_retry.empty() ||
+                  !m_pending_robust_retry.empty() ||
+                  !m_complete.empty();
+
+    if (expect)
     {
         m_flagfd.set();
     }
-}
-
-void
-client :: possibly_clear_flagfd()
-{
-    if (m_pending_retry.empty() &&
-        m_pending_robust_retry.empty() &&
-        m_complete.empty())
+    else
     {
         m_flagfd.clear();
     }
@@ -934,7 +929,7 @@ client ::handle_disruption(server_id si)
         }
     }
 
-    possibly_clear_flagfd();
+    adjust_flagfd();
 }
 
 int64_t
