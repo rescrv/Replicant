@@ -64,7 +64,6 @@ inline void return_void() {}
     SIGNAL_PROTECT; \
     try \
     { \
-        e::guard gpipe = e::makeobjguard(*cl, &replicant::client::adjust_flagfd); \
         X \
     } \
     catch (po6::error& e) \
@@ -334,7 +333,9 @@ replicant_client_loop(struct replicant_client* _cl, int timeout,
                       enum replicant_returncode* status)
 {
     C_WRAP_EXCEPT(
-    return cl->loop(timeout, status);
+    int64_t ret = cl->loop(timeout, status);
+    cl->adjust_flagfd();
+    return ret;
     );
 }
 
@@ -344,7 +345,9 @@ replicant_client_wait(struct replicant_client* _cl,
                       enum replicant_returncode* status)
 {
     C_WRAP_EXCEPT(
-    return cl->wait(specific_op, timeout, status);
+    int64_t ret = cl->wait(specific_op, timeout, status);
+    cl->adjust_flagfd();
+    return ret;
     );
 }
 
