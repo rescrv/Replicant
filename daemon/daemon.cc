@@ -214,6 +214,23 @@ install_signal_handler(int signum, void (*f)(int))
     return sigaction(signum, &handle, NULL) >= 0;
 }
 
+static bool
+atomically_allow_pending_blocked_signals()
+{
+    sigset_t ss;
+    sigemptyset(&ss);
+
+    if (sigpending(&ss) == 0 &&
+        (sigismember(&ss, SIGHUP) == 1 ||
+         sigismember(&ss, SIGINT) == 1 ||
+         sigismember(&ss, SIGTERM) == 1 ||
+         sigismember(&ss, SIGQUIT) == 1))
+    {
+        sigemptyset(&ss);
+        sigsuspend(&ss);
+    }
+}
+
 int
 daemon :: run(bool daemonize,
               po6::pathname data,
@@ -267,15 +284,10 @@ daemon :: run(bool daemonize,
 
     sigset_t ss;
 
-    if (sigfillset(&ss) < 0)
+    if (sigfillset(&ss) < 0 ||
+        pthread_sigmask(SIG_SETMASK, &ss, NULL) < 0)
     {
-        PLOG(ERROR) << "sigfillset";
-        return EXIT_FAILURE;
-    }
-
-    if (pthread_sigmask(SIG_SETMASK, &ss, NULL) < 0)
-    {
-        PLOG(ERROR) << "could not block signals";
+        std::cerr << "could not block signals" << std::endl;
         return EXIT_FAILURE;
     }
 
@@ -356,16 +368,28 @@ daemon :: run(bool daemonize,
     m_us.bind_to = bind_to;
     bool init = false;
 
-    // case 1:  start a new cluster
+    // case 1: start a new cluster
     if (!saved && !set_existing)
     {
         uint64_t cluster;
         uint64_t this_server;
 
-        if (!generate_token(&cluster) ||
-            !generate_token(&this_server))
+        if (m_acceptor.current_ballot() != ballot())
         {
-            PLOG(ERROR) << "could not read random tokens from /dev/urandom";
+            this_server = m_acceptor.current_ballot().leader.get();
+        }
+        else
+        {
+            if (!generate_token(&this_server))
+            {
+                PLOG(ERROR) << "could not generate random identifier for this server";
+                return EXIT_FAILURE;
+            }
+        }
+
+        if (!generate_token(&cluster))
+        {
+            PLOG(ERROR) << "could not generate random identifier for the cluster";
             return EXIT_FAILURE;
         }
 
@@ -373,12 +397,17 @@ daemon :: run(bool daemonize,
         m_config_mtx.lock();
         m_config = configuration(cluster_id(cluster), version_id(1), 0, &m_us, 1);
         m_config_mtx.unlock();
-        LOG(INFO) << "started " << m_config.cluster();
+        m_config.current_bootstrap().conn_str();
+        saved_bootstrap = m_config.current_bootstrap();
+        LOG(INFO) << "starting " << m_config.cluster() << " from this server (" << m_us << ")";
         init = init_obj && init_lib;
 
-        m_acceptor.adopt(ballot(1, m_us.id));
-        m_acceptor.accept(pvalue(m_acceptor.current_ballot(), 0, construct_become_member_command(m_us)));
+        m_acceptor.adopt(ballot(m_acceptor.current_ballot().number + 1, m_us.id));
+        pvalue p(m_acceptor.current_ballot(), 0, construct_become_member_command(m_us));
+        m_acceptor.accept(p);
         m_replica.reset(new replica(this, m_config));
+        m_replica->learn(p);
+
         uint64_t snapshot_slot;
         e::slice snapshot;
         std::auto_ptr<e::buffer> snapshot_backing;
@@ -390,54 +419,53 @@ daemon :: run(bool daemonize,
             return EXIT_FAILURE;
         }
     }
-    // case 2: joining a new cluster
+    // case 2: new node, joining an existing cluster
     else if (!saved && set_existing)
     {
-        uint64_t this_server;
-
-        if (!generate_token(&this_server))
-        {
-            PLOG(ERROR) << "could not read random tokens from /dev/urandom";
-            return EXIT_FAILURE;
-        }
-
-        m_us.id = server_id(this_server);
-
-        if (!m_acceptor.save(m_us, existing))
-        {
-            return EXIT_FAILURE;
-        }
-
-        join_the_cluster(existing);
-
-        if (m_config.has(m_us.bind_to) && !m_config.has(m_us.id))
-        {
-            LOG(ERROR) << "configuration already has a server on our address";
-            LOG(ERROR) << "use the command line tools to remove said server and restart this one";
-            return EXIT_FAILURE;
-        }
+        setup_replica_from_bootstrap(existing, &m_replica);
 
         if (!m_replica.get())
         {
             return EXIT_FAILURE;
         }
 
+        if (m_replica->config().has(m_us.bind_to))
+        {
+            LOG(ERROR) << "configuration already has a server on our address";
+            LOG(ERROR) << "use the command line tools to remove said server and restart this one";
+            return EXIT_FAILURE;
+        }
+
+        uint64_t this_server = 0;
+
+        while (this_server == 0 || m_replica->config().get(server_id(this_server)))
+        {
+            if (!generate_token(&this_server))
+            {
+                PLOG(ERROR) << "could not generate random identifier for this server";
+                return EXIT_FAILURE;
+            }
+        }
+
+        m_us.id = server_id(this_server);
         saved_bootstrap = existing;
     }
+    // case 3: existing node, coming back online
     else
     {
-        LOG(INFO) << "re-joining cluster as " << saved_us.id;
-        m_us.id = saved_us.id;
+        m_us = saved_us;
 
-        if (!set_bind_to)
+        if (set_bind_to)
         {
-            m_us.bind_to = saved_us.bind_to;
+            m_us.bind_to = bind_to;
         }
 
         if (set_existing)
         {
             saved_bootstrap = existing;
         }
+
+        LOG(INFO) << "re-joining cluster as " << m_us << " using bootstrap " << saved_bootstrap;
 
         e::slice snapshot;
         std::auto_ptr<e::buffer> snapshot_backing;
@@ -450,19 +478,9 @@ daemon :: run(bool daemonize,
 
         m_replica.reset(replica::from_snapshot(this, snapshot));
 
-        if (m_replica.get() && !m_replica->config().has(m_us.id))
-        {
-            m_replica.reset();
-            join_the_cluster(saved_bootstrap);
-        }
-
         if (!m_replica.get())
         {
-            if (__sync_fetch_and_add(&s_interrupts, 0) == 0)
-            {
-                LOG(ERROR) << "gave up trying to join the cluster after 10s";
-            }
-
+            LOG(ERROR) << "could not restore replica from previous execution";
             return EXIT_FAILURE;
         }
     }
@@ -473,11 +491,6 @@ daemon :: run(bool daemonize,
     {
         return EXIT_FAILURE;
     }
-
-    assert(m_replica.get());
-    m_config_mtx.lock();
-    m_config = m_replica->config();
-    m_config_mtx.unlock();
 
     if (!init && init_rst)
     {
@@ -490,8 +503,47 @@ daemon :: run(bool daemonize,
         return EXIT_FAILURE;
     }
 
+    if (!m_replica->config().has(m_us.id))
+    {
+        bootstrap current = m_replica->config().current_bootstrap();
+        LOG(WARNING) << m_us << " is not in configuration " << m_replica->config().version();
+        LOG(INFO) << "adding ourselves to the configuration now";
+        m_replica.reset();
+        become_cluster_member(current);
+
+        for (size_t i = 0; __sync_fetch_and_add(&s_interrupts, 0) == 0 && i < 10; ++i)
+        {
+            setup_replica_from_bootstrap(current, &m_replica);
+
+            if (m_replica.get() && m_replica->config().has(m_us.id))
+            {
+                break;
+            }
+
+            atomically_allow_pending_blocked_signals();
+            LOG(INFO) << "this server still not visible in the configuration; retrying in 1s";
+            timespec ts;
+            ts.tv_sec = 1;
+            ts.tv_nsec = 0;
+            nanosleep(&ts, NULL);
+            atomically_allow_pending_blocked_signals();
+        }
+    }
+
+    if (!m_replica->config().has(m_us.id))
+    {
+        LOG(ERROR) << "despite repeated efforts to rectify the situation, " << m_us
+                   << " is not in configuration " << m_replica->config().version()
+                   << "; exiting";
+        return EXIT_FAILURE;
+    }
+
     m_busybee.reset(new busybee_mta(&m_gc, &m_busybee_mapper, m_us.bind_to, m_us.id.get(), 0/*we don't use pause/unpause*/));
     e::atomic::store_32_release(&m_busybee_init, 1);
+    assert(m_replica.get());
+    m_config_mtx.lock();
+    m_config = m_replica->config();
+    m_config_mtx.unlock();
 
     if (!post_config_change_hook())
     {
@@ -712,47 +764,117 @@ daemon :: run(bool daemonize,
 
     m_bootstrap_thread.join();
     LOG(INFO) << "replicant is gracefully shutting down";
-
-    uint64_t snapshot_slot;
-    e::slice snapshot;
-    std::auto_ptr<e::buffer> snapshot_backing;
-    m_replica->take_blocking_snapshot(&snapshot_slot, &snapshot, &snapshot_backing);
-
-    if (snapshot_slot == 0)
-    {
-        LOG(ERROR) << "could not take snapshot when shutting down";
-        return EXIT_FAILURE;
-    }
-    else if (!m_acceptor.record_snapshot(snapshot_slot, snapshot))
-    {
-        LOG(ERROR) << "error saving starting replica state to disk: " << e::error::strerror(errno);
-        m_replica.reset();
-    }
-
     LOG(INFO) << "replicant will now terminate";
     return EXIT_SUCCESS;
 }
 
 void
-daemon :: join_the_cluster(const bootstrap& existing)
+daemon :: setup_replica_from_bootstrap(const bootstrap& bs,
+                                       std::auto_ptr<replica>* rep)
 {
-    if (m_replica.get())
-    {
-        return;
-    }
-
-    bool success = false;
+    LOG(INFO) << "copying replica state from existing cluster using " << bs;
     configuration c;
+    e::error err;
+    bool has_err = false;
 
     for (unsigned iteration = 0; __sync_fetch_and_add(&s_interrupts, 0) == 0 && iteration < 100; ++iteration)
     {
-        LOG_IF(INFO, iteration == 0) << "bootstrapping off existing cluster using " << existing;
-        e::error err;
+        replicant_returncode rc = bs.do_it(&c, &err);
+        atomically_allow_pending_blocked_signals();
 
-        if (existing.do_it(&c, &err) != REPLICANT_SUCCESS)
+        if (rc == REPLICANT_TIMEOUT)
         {
-            LOG(ERROR) << err.msg();
-            return;
+            continue;
+        }
+        else if (rc != REPLICANT_SUCCESS)
+        {
+            has_err = true;
+            continue;
+        }
+
+        for (size_t i = 0; !rep->get() && i < c.servers().size(); ++i)
+        {
+            busybee_single bs(c.servers()[i].bind_to);
+            const size_t sz = BUSYBEE_HEADER_SIZE
+                            + pack_size(REPLNET_STATE_TRANSFER);
+            std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
+            msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_STATE_TRANSFER;
+
+            try
+            {
+                bs.send(msg);
+                bs.recv(&msg);
+            }
+            catch (po6::error& e)
+            {
+                continue;
+            }
+
+            if (!msg.get())
+            {
+                continue;
+            }
+
+            network_msgtype mt;
+            uint64_t slot;
+            e::slice snapshot;
+            e::unpacker up = msg->unpack_from(BUSYBEE_HEADER_SIZE);
+            up = up >> mt >> slot >> snapshot;
+
+            if (!up.error())
+            {
+                rep->reset(replica::from_snapshot(this, snapshot));
+
+                if (rep->get())
+                {
+                    uint64_t snapshot_slot;
+                    std::auto_ptr<e::buffer> snapshot_backing;
+                    (*rep)->take_blocking_snapshot(&snapshot_slot, &snapshot, &snapshot_backing);
+
+                    if (!m_acceptor.record_snapshot(snapshot_slot, snapshot))
+                    {
+                        LOG(ERROR) << "error saving starting replica state to disk: " << e::error::strerror(errno);
+                        rep->reset();
+                    }
+
+                    return;
+                }
+            }
+        }
+    }
+
+    if (has_err)
+    {
+        LOG(ERROR) << "replica state transfer encountered an error: " << err.msg();
+    }
+    else
+    {
+        LOG(ERROR) << "replica state transfer timed out, or was interrupted by the user";
+    }
+}
+
+void
+daemon :: become_cluster_member(const bootstrap& bs)
+{
+    LOG(INFO) << "trying to join the existing cluster using " << bs;
+    configuration c;
+    e::error err;
+    bool has_err = false;
+    bool success = false;
+
+    for (unsigned iteration = 0; __sync_fetch_and_add(&s_interrupts, 0) == 0 && iteration < 100; ++iteration)
+    {
+        replicant_returncode rc = bs.do_it(&c, &err);
+        atomically_allow_pending_blocked_signals();
+
+        if (rc == REPLICANT_TIMEOUT)
+        {
+            continue;
+        }
+        else if (rc != REPLICANT_SUCCESS)
+        {
+            has_err = true;
+            continue;
         }
 
         if (c.has(m_us.id))
@@ -760,12 +882,6 @@ daemon :: join_the_cluster(const bootstrap& existing)
             success = true;
             break;
         }
-
-        sigset_t tmp;
-        sigset_t old;
-        sigemptyset(&tmp);
-        pthread_sigmask(SIG_SETMASK, &tmp, &old);
-        e::guard g_sigmask = e::makeguard(pthread_sigmask, SIG_SETMASK, &old, (sigset_t*)NULL);
 
         if (iteration > 0)
         {
@@ -778,6 +894,7 @@ daemon :: join_the_cluster(const bootstrap& existing)
             ts.tv_sec = 0;
             ts.tv_nsec = 100 * 1000ULL * 1000ULL;
             nanosleep(&ts, NULL);
+            atomically_allow_pending_blocked_signals();
         }
 
         for (size_t i = 0; i < c.servers().size(); ++i)
@@ -820,69 +937,16 @@ daemon :: join_the_cluster(const bootstrap& existing)
         }
     }
 
-    if (!success)
+    if (success)
     {
-        return;
     }
-
-    LOG(INFO) << "joining " << c.cluster() << " as " << m_us.id;
-
-    for (size_t i = 0; !m_replica.get() && i < c.servers().size(); ++i)
+    else if (has_err)
     {
-        busybee_single bs(c.servers()[i].bind_to);
-        const size_t sz = BUSYBEE_HEADER_SIZE
-                        + pack_size(REPLNET_STATE_TRANSFER);
-        std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
-        msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_STATE_TRANSFER;
-
-        try
-        {
-            bs.send(msg);
-            bs.recv(&msg);
-        }
-        catch (po6::error& e)
-        {
-            continue;
-        }
-
-        network_msgtype mt;
-        uint64_t slot;
-        e::slice snapshot;
-        e::unpacker up = msg->unpack_from(BUSYBEE_HEADER_SIZE);
-        up = up >> mt >> slot >> snapshot;
-
-        if (!up.error())
-        {
-            m_replica.reset(replica::from_snapshot(this, snapshot));
-        }
+        LOG(ERROR) << "join process encountered an error: " << err.msg();
     }
-
-    if (m_replica.get())
+    else
     {
-        uint64_t snapshot_slot;
-        e::slice snapshot;
-        std::auto_ptr<e::buffer> snapshot_backing;
-        m_replica->take_blocking_snapshot(&snapshot_slot, &snapshot, &snapshot_backing);
-
-        if (snapshot_slot == 0)
-        {
-            LOG(ERROR) << "could not take snapshot of new state";
-            m_replica.reset();
-        }
-        else if (!m_acceptor.record_snapshot(snapshot_slot, snapshot))
-        {
-            LOG(ERROR) << "error saving starting replica state to disk: " << e::error::strerror(errno);
-            m_replica.reset();
-        }
-
-        m_config_mtx.lock();
-
-        if (m_replica.get())
-        {
-            m_config = m_replica->config();
-        }
-
-        m_config_mtx.unlock();
+        LOG(ERROR) << "join process timed out, or was interrupted by the user";
     }
 }
 
@@ -960,12 +1024,12 @@ daemon :: process_suggest_rejoin(server_id,
                                  e::unpacker)
 {
     std::auto_ptr<replica> old_replica = m_replica;
-    join_the_cluster(m_saved_bootstrap);
+    setup_replica_from_bootstrap(m_saved_bootstrap, &m_replica);
 
     if (!m_replica.get() ||
         m_replica->config().cluster() != old_replica->config().cluster())
     {
-        old_replica = m_replica;
+        m_replica = old_replica;
     }
 
     post_config_change_hook();
@@ -1692,7 +1756,12 @@ daemon :: bootstrap_thread()
                     continue;
                 }
 
-                m_busybee_mapper.add_aux(s);
+                const server* sptr = config.get(s.id);
+
+                if (!sptr || sptr->bind_to != s.bind_to)
+                {
+                    m_busybee_mapper.add_aux(s);
+                }
             }
             catch (po6::error& e)
             {
@@ -1746,7 +1815,7 @@ daemon :: periodic_check_address(uint64_t)
 {
     const server* s = m_config.get(m_us.id);
 
-    if (s->bind_to == m_us.bind_to)
+    if (!s || s->bind_to == m_us.bind_to)
     {
         return;
     }

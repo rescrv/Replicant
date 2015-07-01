@@ -89,7 +89,9 @@ class daemon
         const server_id id() const { return m_us.id; }
 
     public:
-        void join_the_cluster(const bootstrap& bs);
+        void setup_replica_from_bootstrap(const bootstrap& bs,
+                                          std::auto_ptr<replica>* rep);
+        void become_cluster_member(const bootstrap& bs);
         void process_bootstrap(server_id si,
                                std::auto_ptr<e::buffer> msg,
                                e::unpacker up);
