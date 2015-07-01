@@ -247,6 +247,12 @@ daemon :: run(bool daemonize,
         return EXIT_FAILURE;
     }
 
+    if (!install_signal_handler(SIGQUIT, exit_on_signal))
+    {
+        std::cerr << "could not install SIGTERM handler; exiting" << std::endl;
+        return EXIT_FAILURE;
+    }
+
     if (!install_signal_handler(SIGUSR1, handle_debug_dump))
     {
         std::cerr << "could not install SIGUSR2 handler; exiting" << std::endl;
@@ -396,6 +402,12 @@ daemon :: run(bool daemonize,
         }
 
         m_us.id = server_id(this_server);
+
+        if (!m_acceptor.save(m_us, existing))
+        {
+            return EXIT_FAILURE;
+        }
+
         join_the_cluster(existing);
 
         if (m_config.has(m_us.bind_to) && !m_config.has(m_us.id))
@@ -785,6 +797,11 @@ daemon :: join_the_cluster(const bootstrap& existing)
                 bs.recv(&msg);
             }
             catch (po6::error& e)
+            {
+                continue;
+            }
+
+            if (!msg.get())
             {
                 continue;
             }
@@ -2211,9 +2228,13 @@ daemon :: send(server_id si, std::auto_ptr<e::buffer> msg)
 bool
 daemon :: send_from_non_main_thread(server_id si, std::auto_ptr<e::buffer> msg)
 {
-    if (e::atomic::load_32_acquire(&m_busybee_init) == 0)
+    while (e::atomic::load_32_acquire(&m_busybee_init) == 0)
     {
-        return false;
+        e::atomic::memory_barrier();
+        timespec tv;
+        tv.tv_sec = 0;
+        tv.tv_nsec = 10ULL * 1000ULL * 1000ULL;
+        nanosleep(&tv, NULL);
     }
 
     if (si == m_us.id)

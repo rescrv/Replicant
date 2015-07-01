@@ -27,6 +27,9 @@
 
 #define __STDC_LIMIT_MACROS
 
+// POSIX
+#include <signal.h>
+
 // Google Log
 #include <glog/logging.h>
 
@@ -73,6 +76,14 @@ main(int argc, const char* argv[])
     const char* init_str = NULL;
     const char* init_rst = NULL;
     bool log_immediate = false;
+    sigset_t ss;
+
+    if (sigfillset(&ss) < 0 ||
+        sigprocmask(SIG_BLOCK, &ss, NULL) < 0)
+    {
+        std::cerr << "could not block signals";
+        return EXIT_FAILURE;
+    }
 
     e::argparser ap;
     ap.autohelp();
