@@ -42,6 +42,9 @@
 #include <e/flagfd.h>
 #include <e/intrusive_ptr.h>
 
+// BusyBee
+#include <busybee_st.h>
+
 // Replicant
 #include <replicant.h>
 #include "namespace.h"
@@ -137,7 +140,7 @@ class client
         // communication
         bootstrap m_bootstrap;
         mapper m_busybee_mapper;
-        std::auto_ptr<class busybee_st> m_busybee;
+        busybee_st m_busybee;
         // server selection
         uint64_t m_random_token;
         // configuration

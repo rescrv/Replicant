@@ -69,7 +69,7 @@ using replicant::client;
 client :: client(const char* coordinator, uint16_t port)
     : m_bootstrap(coordinator, port)
     , m_busybee_mapper(&m_config)
-    , m_busybee()
+    , m_busybee(&m_busybee_mapper, 0)
     , m_random_token(0)
     , m_config_state(0)
     , m_config_data(NULL)
@@ -112,7 +112,7 @@ client :: client(const char* coordinator, uint16_t port)
 client :: client(const char* cs)
     : m_bootstrap(cs)
     , m_busybee_mapper(&m_config)
-    , m_busybee()
+    , m_busybee(&m_busybee_mapper, 0)
     , m_random_token(0)
     , m_config_state(0)
     , m_config_data(NULL)
@@ -391,7 +391,7 @@ client :: loop(int timeout, replicant_returncode* status)
             !m_pending_robust_retry.empty()) &&
            m_complete.empty())
     {
-        m_busybee->set_timeout(timeout);
+        m_busybee.set_timeout(timeout);
         int64_t ret = inner_loop(status);
 
         if (ret < 0 && *status == REPLICANT_TIMEOUT)
@@ -537,7 +537,7 @@ client :: wait(int64_t id, int timeout, replicant_returncode* status)
             break;
         }
 
-        m_busybee->set_timeout(timeout);
+        m_busybee.set_timeout(timeout);
         int64_t ret = inner_loop(status);
 
         if (ret < 0)
@@ -639,7 +639,7 @@ client :: kill(int64_t id)
 int
 client :: poll_fd()
 {
-    return m_busybee->poll_fd();
+    return m_busybee.poll_fd();
 }
 
 void
@@ -692,8 +692,8 @@ client :: set_error_message(const char* msg)
 void
 client :: reset_busybee()
 {
-    m_busybee.reset(new busybee_st(&m_busybee_mapper, 0));
-    m_busybee->set_external_fd(m_flagfd.poll_fd());
+    m_busybee.reset();
+    m_busybee.set_external_fd(m_flagfd.poll_fd());
 
     for (pending_list_t::iterator it = m_persistent.begin();
             it != m_persistent.end(); ++it)
@@ -750,7 +750,7 @@ client :: inner_loop(replicant_returncode* status)
     std::auto_ptr<e::buffer> msg;
     const bool isset = m_flagfd.isset();
     m_flagfd.clear();
-    busybee_returncode rc = m_busybee->recv(&id, &msg);
+    busybee_returncode rc = m_busybee.recv(&id, &msg);
 
     if (isset)
     {
@@ -1005,7 +1005,7 @@ client :: send_robust(pending_robust* p)
 bool
 client :: send(server_id si, std::auto_ptr<e::buffer> msg, replicant_returncode* status)
 {
-    busybee_returncode rc = m_busybee->send(si.get(), msg);
+    busybee_returncode rc = m_busybee.send(si.get(), msg);
 
     switch (rc)
     {
@@ -1091,7 +1091,7 @@ client :: callback_config()
         {
             if (!std::binary_search(new_servers.begin(), new_servers.end(), old_servers[i]))
             {
-                m_busybee->drop(old_servers[i].get());
+                m_busybee.drop(old_servers[i].get());
                 handle_disruption(old_servers[i]);
             }
         }
