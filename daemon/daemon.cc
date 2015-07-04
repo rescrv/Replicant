@@ -910,7 +910,7 @@ daemon :: become_cluster_member(const bootstrap& bs)
             try
             {
                 bs.send(msg);
-                bs.set_timeout(10);
+                bs.set_timeout(1000);
                 bs.recv(&msg);
             }
             catch (po6::error& e)
@@ -1739,7 +1739,7 @@ daemon :: bootstrap_thread()
                     continue;
                 }
 
-                bbs.set_timeout(250);
+                bbs.set_timeout(1000);
 
                 if (bbs.recv(&msg) != BUSYBEE_SUCCESS)
                 {

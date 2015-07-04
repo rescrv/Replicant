@@ -122,7 +122,7 @@ bootstrap :: bootstrap_one(const po6::net::hostname& hn,
                 abort();
         }
 
-        bbs.set_timeout(250);
+        bbs.set_timeout(1000);
 
         switch (bbs.recv(&msg))
         {
