@@ -283,12 +283,14 @@ replicant_benchmark_LDADD = libreplicant.la -lygor -lpthread $(POPT_LIBS)
 ################################### Examples ###################################
 ################################################################################
 
+if ENABLE_EXAMPLES
 replicantexec_LTLIBRARIES += libreplicant-example-tick.la
 replicantexec_LTLIBRARIES += libreplicant-example-condition.la
 replicantexec_LTLIBRARIES += libreplicant-example-counter.la
 replicantexec_LTLIBRARIES += libreplicant-example-echo.la
 replicantexec_LTLIBRARIES += libreplicant-example-log.la
 replicantexec_LTLIBRARIES += libreplicant-example-nop.la
+endif
 
 libreplicant_example_tick_la_SOURCES = examples/tick.c
 libreplicant_example_tick_la_CFLAGS = $(CFLAGS)
