@@ -288,7 +288,9 @@ replica :: gc_up_to() const
         return 0;
     }
 
-    return *std::min_element(m_slots.begin(), m_slots.end());
+    std::vector<uint64_t> slots(m_slots);
+    std::sort(slots.begin(), slots.end());
+    return slots[0];
 }
 
 void

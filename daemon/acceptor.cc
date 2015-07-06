@@ -295,7 +295,7 @@ acceptor :: garbage_collector :: run()
 
     while (true)
     {
-        while (gced == m_below_slot && !m_killed)
+        while (gced >= m_below_slot && !m_killed)
         {
             m_cnd.wait();
         }
