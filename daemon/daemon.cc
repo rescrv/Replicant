@@ -776,6 +776,7 @@ daemon :: setup_replica_from_bootstrap(const bootstrap& bs,
     configuration c;
     e::error err;
     bool has_err = false;
+    rep->reset();
 
     for (unsigned iteration = 0; __sync_fetch_and_add(&s_interrupts, 0) == 0 && iteration < 100; ++iteration)
     {
@@ -1021,18 +1022,29 @@ daemon :: process_state_transfer(server_id si,
 void
 daemon :: process_suggest_rejoin(server_id,
                                  std::auto_ptr<e::buffer>,
-                                 e::unpacker)
+                                 e::unpacker up)
 {
-    std::auto_ptr<replica> old_replica = m_replica;
-    setup_replica_from_bootstrap(m_saved_bootstrap, &m_replica);
+    uint64_t lowest;
+    up = up >> lowest;
+    CHECK_UNPACK(SUGGEST_REJOIN, up);
 
-    if (!m_replica.get() ||
-        m_replica->config().cluster() != old_replica->config().cluster())
+    if (lowest <= m_acceptor.lowest_acceptable_slot())
     {
-        m_replica = old_replica;
+        return;
     }
 
-    post_config_change_hook();
+    std::auto_ptr<replica> new_replica;
+    setup_replica_from_bootstrap(m_saved_bootstrap, &new_replica);
+
+    if (new_replica.get() &&
+        m_replica->config().cluster() == new_replica->config().cluster())
+    {
+        m_scout.reset();
+        m_leader.reset();
+        m_replica = new_replica;
+        m_acceptor.garbage_collect(m_replica->gc_up_to());
+        post_config_change_hook();
+    }
 }
 
 void
@@ -1166,9 +1178,10 @@ daemon :: process_paxos_phase2a(server_id si,
     if (p.s < m_acceptor.lowest_acceptable_slot())
     {
         size_t sz = BUSYBEE_HEADER_SIZE
-                  + pack_size(REPLNET_SUGGEST_REJOIN);
+                  + pack_size(REPLNET_SUGGEST_REJOIN)
+                  + sizeof(uint64_t);
         std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
-        msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_SUGGEST_REJOIN;
+        msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_SUGGEST_REJOIN << m_acceptor.lowest_acceptable_slot();
         send(si, msg);
         return;
     }
