@@ -184,6 +184,7 @@ object :: object(replica* r, uint64_t slot, const std::string& n, object_t t, co
     , m_fail_at(UINT64_MAX)
     , m_failed(false)
     , m_done(false)
+    , m_keepalive(false)
     , m_snap_mtx()
     , m_snap()
     , m_thread(po6::threads::make_thread_wrapper(&object::run, this))
@@ -361,6 +362,14 @@ object :: fail_at(uint64_t slot)
 }
 
 void
+object :: keepalive()
+{
+    po6::threads::mutex::hold hold(&m_mtx);
+    m_keepalive = true;
+    m_cond.signal();
+}
+
+void
 object :: run()
 {
     sigset_t ss;
@@ -489,6 +498,7 @@ object :: run()
     std::list<enqueued_call> calls;
     std::list<e::intrusive_ptr<snapshot> > snapshots;
     uint64_t failed_at = m_fail_at;
+    bool keepalive = false;
 
     while (true)
     {
@@ -497,7 +507,12 @@ object :: run()
         {
             po6::threads::mutex::hold hold(&m_mtx);
 
-            while (!m_failed && m_calls.empty() && m_cond_waits.empty() && m_snapshots.empty() && m_fail_at == UINT64_MAX)
+            while (!m_failed &&
+                   m_calls.empty() &&
+                   m_cond_waits.empty() &&
+                   m_snapshots.empty() &&
+                   m_fail_at == UINT64_MAX &&
+                   !m_keepalive)
             {
                 m_cond.wait();
             }
@@ -514,6 +529,8 @@ object :: run()
             assert(m_cond_waits.empty());
             assert(m_calls.empty());
             assert(m_snapshots.empty());
+            keepalive = m_keepalive;
+            m_keepalive = false;
         }
 
         while (!calls.empty() || !snapshots.empty())
@@ -551,6 +568,11 @@ object :: run()
         {
             e::atomic::store_64_release(&m_last_executed, failed_at);
             fail();
+        }
+
+        if (keepalive)
+        {
+            do_nop();
         }
     }
 
@@ -600,6 +622,22 @@ object :: do_cond_wait(const enqueued_cond_wait& cw)
     else
     {
         it->second->wait(m_replica->m_daemon, cw.si, cw.nonce, cw.state);
+    }
+}
+
+void
+object :: do_nop()
+{
+    char c = char(ACTION_NOP);
+
+    if (!write(&c, 1))
+    {
+        return;
+    }
+
+    if (!read(&c, 1))
+    {
+        return;
     }
 }
 

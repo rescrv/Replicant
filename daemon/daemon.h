@@ -176,7 +176,7 @@ class daemon
         void process_object_failed(server_id si,
                                    std::auto_ptr<e::buffer> msg,
                                    e::unpacker up);
-        void periodic_clean_dead_objects(uint64_t now);
+        void periodic_maintain_objects(uint64_t now);
 
     public:
         void callback_condition(server_id si,

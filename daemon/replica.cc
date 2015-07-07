@@ -405,6 +405,16 @@ replica :: clean_dead_objects()
     }
 }
 
+void
+replica :: keepalive_objects()
+{
+    for (object_map_t::iterator it = m_objects.begin();
+            it != m_objects.end(); ++it)
+    {
+        it->second->keepalive();
+    }
+}
+
 uint64_t
 replica :: strike_number(server_id si) const
 {

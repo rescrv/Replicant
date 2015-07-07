@@ -54,6 +54,7 @@ enum action_t
     ACTION_RTOR = 2,
     ACTION_COMMAND  = 3,
     ACTION_SNAPSHOT = 4,
+    ACTION_NOP = 5,
     ACTION_SHUTDOWN = 16
 };
 
@@ -103,6 +104,8 @@ void object_tick_interval(struct object_interface* obj_int,
 
 void object_snapshot(struct object_interface* obj_int,
                      const char* data, size_t data_sz);
+
+void object_nop_response(struct object_interface* obj_int);
 
 #ifdef __cplusplus
 } /* extern "C" */

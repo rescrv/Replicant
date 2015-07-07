@@ -58,6 +58,11 @@ action_snapshot(struct state_machine* rsm,
                 void* state,
                 struct object_interface* obj_int);
 
+static void
+action_nop(struct state_machine* rsm,
+           void* state,
+           struct object_interface* obj_int);
+
 int
 main(int argc, const char* argv[])
 {
@@ -140,6 +145,9 @@ main(int argc, const char* argv[])
                 break;
             case ACTION_SNAPSHOT:
                 action_snapshot(rsm, state, obj_int);
+                break;
+            case ACTION_NOP:
+                action_nop(rsm, state, obj_int);
                 break;
             case ACTION_SHUTDOWN:
                 break;
@@ -257,4 +265,14 @@ action_snapshot(struct state_machine* rsm,
     {
         free(data);
     }
+}
+
+static void
+action_nop(struct state_machine* rsm,
+           void* state,
+           struct object_interface* obj_int)
+{
+    object_nop_response(obj_int);
+    (void) rsm;
+    (void) state;
 }

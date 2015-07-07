@@ -86,6 +86,7 @@ class object
                   uint64_t request_nonce);
         void take_snapshot(e::intrusive_ptr<snapshot> snap);
         void fail_at(uint64_t slot);
+        void keepalive();
 
     public:
         struct enqueued_cond_wait;
@@ -94,6 +95,7 @@ class object
     private:
         void run();
         void do_cond_wait(const enqueued_cond_wait& cw);
+        void do_nop();
         void do_call(const enqueued_call& c);
         void do_snapshot(e::intrusive_ptr<snapshot> snap);
         void do_snapshot(std::string* s);
@@ -138,6 +140,7 @@ class object
         uint64_t m_fail_at;
         bool m_failed;
         bool m_done;
+        bool m_keepalive;
 
         // snapshot state
         po6::threads::mutex m_snap_mtx;

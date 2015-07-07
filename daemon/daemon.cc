@@ -173,7 +173,7 @@ daemon :: daemon()
     register_periodic(1000, &daemon::periodic_generate_nonce_sequence);
     register_periodic(10, &daemon::periodic_ping_acceptors);
     register_periodic(100, &daemon::periodic_flush_enqueued_commands);
-    register_periodic(1000, &daemon::periodic_clean_dead_objects);
+    register_periodic(1000, &daemon::periodic_maintain_objects);
     register_periodic(1000, &daemon::periodic_tick);
     register_periodic(10 * 1000, &daemon::periodic_check_address);
     m_gc.register_thread(&m_gc_ts);
@@ -1954,9 +1954,10 @@ daemon :: process_object_failed(server_id si,
 }
 
 void
-daemon :: periodic_clean_dead_objects(uint64_t)
+daemon :: periodic_maintain_objects(uint64_t)
 {
     m_replica->clean_dead_objects();
+    m_replica->keepalive_objects();
 }
 
 void

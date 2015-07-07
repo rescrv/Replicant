@@ -87,6 +87,7 @@ class replica
                         replicant_returncode* status,
                         std::string* output);
         void clean_dead_objects();
+        void keepalive_objects();
         uint64_t last_tick() { return m_cond_tick.peek_state(); }
         uint64_t strike_number(server_id si) const;
         void set_defense_threshold(uint64_t tick);

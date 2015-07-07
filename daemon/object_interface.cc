@@ -170,6 +170,7 @@ object_next_action(object_interface* obj_int, action_t* action)
         case ACTION_RTOR:
         case ACTION_COMMAND:
         case ACTION_SNAPSHOT:
+        case ACTION_NOP:
             return 0;
         case ACTION_SHUTDOWN:
             obj_int->shutdown = true;
@@ -394,6 +395,12 @@ object_snapshot(object_interface* obj_int,
     e::pack32be(o, buf);
     obj_int->write(buf, 4);
     obj_int->write(data, o);
+}
+
+REPLICANT_API void
+object_nop_response(struct object_interface* obj_int)
+{
+    obj_int->write("\x90", 1);
 }
 
 } // extern "C"
