@@ -83,7 +83,7 @@ snapshot :: finish_object(const std::string& name, const std::string& snap)
     if (it != m_objects.end())
     {
         m_objects.erase(it);
-        m_packer << e::slice(name) << e::slice(snap);
+        m_packer = m_packer << e::slice(name) << e::slice(snap);
     }
 
     m_cond.broadcast();
