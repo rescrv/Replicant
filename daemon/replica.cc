@@ -1710,6 +1710,9 @@ replica :: launch(object* obj, const char* executable, const char* const * args)
     return true;
 }
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wlarger-than="
+
 static bool
 locate_rsm_dlopen(po6::pathname* path)
 {
@@ -1758,6 +1761,8 @@ locate_rsm_dlopen(po6::pathname* path)
 
     return false;
 }
+
+#pragma GCC diagnostic pop
 
 replicant::object*
 replica :: launch_library(const std::string& name, uint64_t slot, const std::string& lib)

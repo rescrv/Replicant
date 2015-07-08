@@ -214,7 +214,7 @@ install_signal_handler(int signum, void (*f)(int))
     return sigaction(signum, &handle, NULL) >= 0;
 }
 
-static bool
+static void
 atomically_allow_pending_blocked_signals()
 {
     sigset_t ss;
@@ -337,12 +337,12 @@ daemon :: run(bool daemonize,
 
         if (has_pidfile)
         {
-            char buf[21];
-            ssize_t buf_sz = sprintf(buf, "%d\n", getpid());
-            assert(buf_sz < static_cast<ssize_t>(sizeof(buf)));
+            char pidbuf[21];
+            ssize_t pidbuf_sz = sprintf(pidbuf, "%d\n", getpid());
+            assert(pidbuf_sz < static_cast<ssize_t>(sizeof(pidbuf)));
             po6::io::fd pid(open(pidfile.get(), O_WRONLY|O_CREAT|O_TRUNC, S_IRUSR|S_IWUSR));
 
-            if (pid.get() < 0 || pid.xwrite(buf, buf_sz) != buf_sz)
+            if (pid.get() < 0 || pid.xwrite(pidbuf, pidbuf_sz) != pidbuf_sz)
             {
                 PLOG(ERROR) << "could not create pidfile " << pidfile.get();
                 return EXIT_FAILURE;
@@ -769,10 +769,10 @@ daemon :: run(bool daemonize,
 }
 
 void
-daemon :: setup_replica_from_bootstrap(const bootstrap& bs,
+daemon :: setup_replica_from_bootstrap(const bootstrap& current,
                                        std::auto_ptr<replica>* rep)
 {
-    LOG(INFO) << "copying replica state from existing cluster using " << bs;
+    LOG(INFO) << "copying replica state from existing cluster using " << current;
     configuration c;
     e::error err;
     bool has_err = false;
@@ -780,7 +780,7 @@ daemon :: setup_replica_from_bootstrap(const bootstrap& bs,
 
     for (unsigned iteration = 0; __sync_fetch_and_add(&s_interrupts, 0) == 0 && iteration < 100; ++iteration)
     {
-        replicant_returncode rc = bs.do_it(&c, &err);
+        replicant_returncode rc = current.do_it(&c, &err);
         atomically_allow_pending_blocked_signals();
 
         if (rc == REPLICANT_TIMEOUT)
@@ -855,9 +855,9 @@ daemon :: setup_replica_from_bootstrap(const bootstrap& bs,
 }
 
 void
-daemon :: become_cluster_member(const bootstrap& bs)
+daemon :: become_cluster_member(const bootstrap& current)
 {
-    LOG(INFO) << "trying to join the existing cluster using " << bs;
+    LOG(INFO) << "trying to join the existing cluster using " << current;
     configuration c;
     e::error err;
     bool has_err = false;
@@ -865,7 +865,7 @@ daemon :: become_cluster_member(const bootstrap& bs)
 
     for (unsigned iteration = 0; __sync_fetch_and_add(&s_interrupts, 0) == 0 && iteration < 100; ++iteration)
     {
-        replicant_returncode rc = bs.do_it(&c, &err);
+        replicant_returncode rc = current.do_it(&c, &err);
         atomically_allow_pending_blocked_signals();
 
         if (rc == REPLICANT_TIMEOUT)
