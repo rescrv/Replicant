@@ -746,6 +746,12 @@ client :: inner_loop(replicant_returncode* status)
         return 0;
     }
 
+    if (m_pending.empty() && m_pending_robust.empty())
+    {
+        m_backoff = true;
+        return 0;
+    }
+
     uint64_t id;
     std::auto_ptr<e::buffer> msg;
     const bool isset = m_flagfd.isset();
