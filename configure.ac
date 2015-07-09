@@ -83,9 +83,9 @@ else
     AC_SUBST([LDL_LIBS], [""])
 fi
 
-PKG_CHECK_MODULES([PO6], [libpo6 >= 0.7])
-PKG_CHECK_MODULES([E], [libe >= 0.10])
-PKG_CHECK_MODULES([BUSYBEE], [busybee >= 0.6])
+PKG_CHECK_MODULES([PO6], [libpo6 >= 0.8])
+PKG_CHECK_MODULES([E], [libe >= 0.11])
+PKG_CHECK_MODULES([BUSYBEE], [busybee >= 0.7])
 
 AC_ARG_VAR(POPT_LIBS, [linker flags for popt])
 AS_IF([test "x$POPT_LIBS" = x], [POPT_LIBS="-lpopt"])
