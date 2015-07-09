@@ -30,6 +30,7 @@
 
 // POSIX
 #include <poll.h>
+#include <signal.h>
 
 // e
 #include <e/endian.h>
@@ -662,11 +663,55 @@ client :: adjust_flagfd()
 int
 client :: block(int timeout)
 {
-    pollfd pfd;
-    pfd.fd = poll_fd();
-    pfd.events = POLLIN|POLLHUP;
-    pfd.revents = 0;
-    return ::poll(&pfd, 1, timeout) >= 0 ? 0 : -1;
+    while (true)
+    {
+        pollfd pfd;
+        pfd.fd = poll_fd();
+        pfd.events = POLLIN|POLLHUP;
+        pfd.revents = 0;
+        int this_iter = std::min(timeout, 100);
+        this_iter = this_iter < 0 ? 100 : this_iter;
+        int ret = ::poll(&pfd, 1, this_iter);
+
+        if (ret > 0)
+        {
+            return 0;
+        }
+        else if (ret < 0)
+        {
+            return -1;
+        }
+
+        // check for signals
+        sigset_t ss;
+        sigemptyset(&ss);
+
+        if (sigpending(&ss) == 0)
+        {
+            for (int s = 0; s < 64; ++s)
+            {
+                if (sigismember(&ss, s) > 0)
+                {
+                    sigemptyset(&ss);
+                    sigsuspend(&ss);
+                    errno = EINTR;
+                    return -1;
+                }
+            }
+        }
+
+        // timeout case
+        if (this_iter == timeout)
+        {
+            return 0;
+        }
+
+        if (timeout > 0)
+        {
+            assert(timeout > this_iter);
+            timeout -= this_iter;
+        }
+    }
 }
 
 const char*
