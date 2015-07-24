@@ -50,16 +50,14 @@
 #include <glog/raw_logging.h>
 
 // po6
-#include <po6/pathname.h>
+#include <po6/time.h>
 
 // e
 #include <e/compat.h>
 #include <e/endian.h>
-#include <e/envconfig.h>
 #include <e/guard.h>
 #include <e/error.h>
 #include <e/strescape.h>
-#include <e/time.h>
 
 // BusyBee
 #include <busybee_constants.h>
@@ -115,18 +113,6 @@ static void
 handle_debug_mode(int /*signum*/)
 {
     s_debug_mode = !s_debug_mode;
-}
-static uint64_t
-monotonic_time()
-{
-    timespec ts;
-
-    if (clock_gettime(CLOCK_MONOTONIC, &ts) < 0)
-    {
-        throw po6::error(errno);
-    }
-
-    return ts.tv_sec * 1000000000 + ts.tv_nsec;
 }
 
 daemon :: daemon()
@@ -233,9 +219,9 @@ atomically_allow_pending_blocked_signals()
 
 int
 daemon :: run(bool daemonize,
-              po6::pathname data,
-              po6::pathname log,
-              po6::pathname pidfile,
+              std::string data,
+              std::string log,
+              std::string pidfile,
               bool has_pidfile,
               bool set_bind_to,
               po6::net::location bind_to,
@@ -304,21 +290,21 @@ daemon :: run(bool daemonize,
             return EXIT_FAILURE;
         }
 
-        log = po6::join(cwd, log);
+        log = po6::path::join(cwd, log);
 
         struct stat x;
 
-        if (lstat(log.get(), &x) < 0 || !S_ISDIR(x.st_mode))
+        if (lstat(log.c_str(), &x) < 0 || !S_ISDIR(x.st_mode))
         {
             LOG(ERROR) << "cannot fork off to the background because "
-                       << log.get() << " does not exist or is not writable";
+                       << log.c_str() << " does not exist or is not writable";
             return EXIT_FAILURE;
         }
 
         if (!has_pidfile)
         {
             LOG(INFO) << "forking off to the background";
-            LOG(INFO) << "you can find the log at " << log.get() << "/replicant-daemon-YYYYMMDD-HHMMSS.sssss";
+            LOG(INFO) << "you can find the log at " << log.c_str() << "/replicant-daemon-YYYYMMDD-HHMMSS.sssss";
             LOG(INFO) << "provide \"--foreground\" on the command-line if you want to run in the foreground";
         }
 
@@ -326,8 +312,8 @@ daemon :: run(bool daemonize,
         google::SetLogSymlink(google::WARNING, "");
         google::SetLogSymlink(google::ERROR, "");
         google::SetLogSymlink(google::FATAL, "");
-        log = po6::join(log, "replicant-daemon-");
-        google::SetLogDestination(google::INFO, log.get());
+        log = po6::path::join(log, "replicant-daemon-");
+        google::SetLogDestination(google::INFO, log.c_str());
 
         if (::daemon(1, 0) < 0)
         {
@@ -340,11 +326,11 @@ daemon :: run(bool daemonize,
             char pidbuf[21];
             ssize_t pidbuf_sz = sprintf(pidbuf, "%d\n", getpid());
             assert(pidbuf_sz < static_cast<ssize_t>(sizeof(pidbuf)));
-            po6::io::fd pid(open(pidfile.get(), O_WRONLY|O_CREAT|O_TRUNC, S_IRUSR|S_IWUSR));
+            po6::io::fd pid(open(pidfile.c_str(), O_WRONLY|O_CREAT|O_TRUNC, S_IRUSR|S_IWUSR));
 
             if (pid.get() < 0 || pid.xwrite(pidbuf, pidbuf_sz) != pidbuf_sz)
             {
-                PLOG(ERROR) << "could not create pidfile " << pidfile.get();
+                PLOG(ERROR) << "could not create pidfile " << pidfile.c_str();
                 return EXIT_FAILURE;
             }
         }
@@ -800,16 +786,8 @@ daemon :: setup_replica_from_bootstrap(const bootstrap& current,
                             + pack_size(REPLNET_STATE_TRANSFER);
             std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
             msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_STATE_TRANSFER;
-
-            try
-            {
-                bs.send(msg);
-                bs.recv(&msg);
-            }
-            catch (po6::error& e)
-            {
-                continue;
-            }
+            bs.send(msg);
+            bs.recv(&msg);
 
             if (!msg.get())
             {
@@ -908,16 +886,9 @@ daemon :: become_cluster_member(const bootstrap& current)
             msg->pack_at(BUSYBEE_HEADER_SIZE)
                 << REPLNET_SERVER_BECOME_MEMBER << m_us;
 
-            try
-            {
-                bs.send(msg);
-                bs.set_timeout(1000);
-                bs.recv(&msg);
-            }
-            catch (po6::error& e)
-            {
-                continue;
-            }
+            bs.send(msg);
+            bs.set_timeout(1000);
+            bs.recv(&msg);
 
             if (!msg.get())
             {
@@ -1681,7 +1652,7 @@ daemon :: post_config_change_hook()
     m_highest_ballot = std::max(m_highest_ballot, m_acceptor.current_ballot());
     m_last_seen.resize(m_config.servers().size());
     m_suspect_counts.resize(m_config.servers().size());
-    const uint64_t now = monotonic_time();
+    const uint64_t now = po6::monotonic_time();
 
     for (size_t i = 0; i < m_last_seen.size(); ++i)
     {
@@ -1739,45 +1710,39 @@ daemon :: bootstrap_thread()
 
         for (size_t i = 0; i < hosts.size(); ++i)
         {
-            try
+            const size_t sz = BUSYBEE_HEADER_SIZE
+                            + pack_size(REPLNET_WHO_ARE_YOU);
+            std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
+            msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_WHO_ARE_YOU;
+            busybee_single bbs(hosts[i]);
+
+            if (bbs.send(msg) != BUSYBEE_SUCCESS)
             {
-                const size_t sz = BUSYBEE_HEADER_SIZE
-                                + pack_size(REPLNET_WHO_ARE_YOU);
-                std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
-                msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_WHO_ARE_YOU;
-                busybee_single bbs(hosts[i]);
-
-                if (bbs.send(msg) != BUSYBEE_SUCCESS)
-                {
-                    continue;
-                }
-
-                bbs.set_timeout(1000);
-
-                if (bbs.recv(&msg) != BUSYBEE_SUCCESS)
-                {
-                    continue;
-                }
-
-                network_msgtype mt = REPLNET_NOP;
-                server s;
-                e::unpacker up = msg->unpack_from(BUSYBEE_HEADER_SIZE);
-                up >> mt >> s;
-
-                if (up.error() || mt != REPLNET_IDENTITY)
-                {
-                    continue;
-                }
-
-                const server* sptr = config.get(s.id);
-
-                if (!sptr || sptr->bind_to != s.bind_to)
-                {
-                    m_busybee_mapper.add_aux(s);
-                }
+                continue;
             }
-            catch (po6::error& e)
+
+            bbs.set_timeout(1000);
+
+            if (bbs.recv(&msg) != BUSYBEE_SUCCESS)
             {
+                continue;
+            }
+
+            network_msgtype mt = REPLNET_NOP;
+            server s;
+            e::unpacker up = msg->unpack_from(BUSYBEE_HEADER_SIZE);
+            up >> mt >> s;
+
+            if (up.error() || mt != REPLNET_IDENTITY)
+            {
+                continue;
+            }
+
+            const server* sptr = config.get(s.id);
+
+            if (!sptr || sptr->bind_to != s.bind_to)
+            {
+                m_busybee_mapper.add_aux(s);
             }
         }
     }
@@ -2198,7 +2163,7 @@ daemon :: process_pong(server_id si,
     {
         if (servers[i].id == si)
         {
-            m_last_seen[i] = monotonic_time();
+            m_last_seen[i] = po6::monotonic_time();
         }
     }
 }
@@ -2218,7 +2183,7 @@ bool
 daemon :: suspect_failed(server_id si)
 {
     assert(!m_last_seen.empty());
-    const uint64_t now = monotonic_time();
+    const uint64_t now = po6::monotonic_time();
     const uint64_t last = *std::max_element(m_last_seen.begin(), m_last_seen.end());
     const uint64_t self_suspicion = now - last;
 
@@ -2249,7 +2214,7 @@ daemon :: periodic_submit_dead_nodes(uint64_t)
     assert(m_last_seen.size() == servers.size());
     assert(m_suspect_counts.size() == servers.size());
     assert(!m_last_seen.empty());
-    const uint64_t now = monotonic_time();
+    const uint64_t now = po6::monotonic_time();
     const uint64_t last = *std::max_element(m_last_seen.begin(), m_last_seen.end());
     const uint64_t self_suspicion = now - last;
 
@@ -2535,7 +2500,7 @@ next_interval(uint64_t x, uint64_t y)
 void
 daemon :: run_periodic()
 {
-    uint64_t now = monotonic_time();
+    uint64_t now = po6::monotonic_time();
 
     for (size_t i = 0; i < m_periodic.size(); ++i)
     {

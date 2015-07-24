@@ -32,7 +32,7 @@
 #include <memory>
 
 // po6
-#include <po6/pathname.h>
+#include <po6/path.h>
 
 // Replicant
 #include "namespace.h"
@@ -51,7 +51,7 @@ class acceptor
 
     public:
         // This *will* change the current directory to dir.
-        bool open(const po6::pathname& dir,
+        bool open(const std::string& dir,
                   bool* saved, server* saved_us,
                   bootstrap* saved_bootstrap);
         bool save(server saved_us,

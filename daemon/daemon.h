@@ -43,7 +43,7 @@
 // po6
 #include <po6/net/hostname.h>
 #include <po6/net/ipaddr.h>
-#include <po6/pathname.h>
+#include <po6/path.h>
 #include <po6/threads/thread.h>
 
 // BusyBee
@@ -74,9 +74,9 @@ class daemon
 
     public:
         int run(bool daemonize,
-                po6::pathname data,
-                po6::pathname log,
-                po6::pathname pidfile,
+                std::string data,
+                std::string log,
+                std::string pidfile,
                 bool has_pidfile,
                 bool set_bind_to,
                 po6::net::location bind_to,

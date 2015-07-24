@@ -27,6 +27,9 @@
 
 #define __STDC_LIMIT_MACROS
 
+// POSIX
+#include <errno.h>
+
 // Replicant
 #include <replicant.h>
 #include "tools/common.h"

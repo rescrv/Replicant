@@ -434,22 +434,22 @@ acceptor :: ~acceptor() throw ()
 }
 
 bool
-acceptor :: open(const po6::pathname& dir,
+acceptor :: open(const std::string& dir,
                  bool* saved, server* saved_us,
                  bootstrap* saved_bootstrap)
 {
     struct stat stbuf;
-    int ret = stat(dir.get(), &stbuf);
+    int ret = stat(dir.c_str(), &stbuf);
 
     if (ret < 0 && errno == ENOENT)
     {
-        if (mkdir(dir.get(), S_IRWXU) < 0)
+        if (mkdir(dir.c_str(), S_IRWXU) < 0)
         {
             LOG(ERROR) << "could not create data directory: " << e::error::strerror(errno);
             return false;
         }
 
-        ret = stat(dir.get(), &stbuf);
+        ret = stat(dir.c_str(), &stbuf);
     }
 
     if (ret < 0)
@@ -463,7 +463,7 @@ acceptor :: open(const po6::pathname& dir,
         return false;
     }
 
-    if (chdir(dir.get()) < 0)
+    if (chdir(dir.c_str()) < 0)
     {
         LOG(ERROR) << "could not initialize data directory: " << e::error::strerror(errno);
         return false;
@@ -958,7 +958,7 @@ acceptor :: replay_log(int dir,
         return false;
     }
 
-    e::unpacker up(static_cast<const char*>(map.get()), st.st_size);
+    e::unpacker up(static_cast<const char*>(map.base()), st.st_size);
 
     while (up.remain() && !up.error())
     {

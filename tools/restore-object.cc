@@ -27,6 +27,10 @@
 
 #define __STDC_LIMIT_MACROS
 
+// POSIX
+#include <errno.h>
+#include <fcntl.h>
+
 // e
 #include <e/error.h>
 

@@ -93,77 +93,68 @@ replicant_returncode
 bootstrap :: bootstrap_one(const po6::net::hostname& hn,
                            configuration* config, e::error* err)
 {
-    try
+    const size_t sz = BUSYBEE_HEADER_SIZE
+                    + pack_size(REPLNET_BOOTSTRAP);
+    std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
+    msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_BOOTSTRAP;
+    busybee_single bbs(hn);
+
+    switch (bbs.send(msg))
     {
-        const size_t sz = BUSYBEE_HEADER_SIZE
-                        + pack_size(REPLNET_BOOTSTRAP);
-        std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
-        msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_BOOTSTRAP;
-        busybee_single bbs(hn);
-
-        switch (bbs.send(msg))
-        {
-            case BUSYBEE_SUCCESS:
-                break;
-            case BUSYBEE_TIMEOUT:
-                err->set_loc(__FILE__, __LINE__);
-                err->set_msg() << "timed out connecting to " << hn;
-                return REPLICANT_TIMEOUT;
-            case BUSYBEE_SHUTDOWN:
-            case BUSYBEE_POLLFAILED:
-            case BUSYBEE_DISRUPTED:
-            case BUSYBEE_ADDFDFAIL:
-            case BUSYBEE_EXTERNAL:
-            case BUSYBEE_INTERRUPTED:
-                err->set_loc(__FILE__, __LINE__);
-                err->set_msg() << "communication error with " << hn;
-                return REPLICANT_COMM_FAILED;
-            default:
-                abort();
-        }
-
-        bbs.set_timeout(1000);
-
-        switch (bbs.recv(&msg))
-        {
-            case BUSYBEE_SUCCESS:
-                break;
-            case BUSYBEE_TIMEOUT:
-                err->set_loc(__FILE__, __LINE__);
-                err->set_msg() << "timed out connecting to " << hn;
-                return REPLICANT_TIMEOUT;
-            case BUSYBEE_SHUTDOWN:
-            case BUSYBEE_POLLFAILED:
-            case BUSYBEE_DISRUPTED:
-            case BUSYBEE_ADDFDFAIL:
-            case BUSYBEE_EXTERNAL:
-            case BUSYBEE_INTERRUPTED:
-                err->set_loc(__FILE__, __LINE__);
-                err->set_msg() << "communication error with " << hn;
-                return REPLICANT_COMM_FAILED;
-            default:
-                abort();
-        }
-
-        network_msgtype mt = REPLNET_NOP;
-        e::unpacker up = msg->unpack_from(BUSYBEE_HEADER_SIZE);
-        up >> mt >> *config;
-
-        if (up.error() || mt != REPLNET_BOOTSTRAP || !config->validate())
-        {
+        case BUSYBEE_SUCCESS:
+            break;
+        case BUSYBEE_TIMEOUT:
             err->set_loc(__FILE__, __LINE__);
-            err->set_msg() << "received a malformed bootstrap message from " << hn;
+            err->set_msg() << "timed out connecting to " << hn;
+            return REPLICANT_TIMEOUT;
+        case BUSYBEE_SHUTDOWN:
+        case BUSYBEE_POLLFAILED:
+        case BUSYBEE_DISRUPTED:
+        case BUSYBEE_ADDFDFAIL:
+        case BUSYBEE_EXTERNAL:
+        case BUSYBEE_INTERRUPTED:
+            err->set_loc(__FILE__, __LINE__);
+            err->set_msg() << "communication error with " << hn;
             return REPLICANT_COMM_FAILED;
-        }
-
-        return REPLICANT_SUCCESS;
+        default:
+            abort();
     }
-    catch (po6::error& e)
+
+    bbs.set_timeout(1000);
+
+    switch (bbs.recv(&msg))
+    {
+        case BUSYBEE_SUCCESS:
+            break;
+        case BUSYBEE_TIMEOUT:
+            err->set_loc(__FILE__, __LINE__);
+            err->set_msg() << "timed out connecting to " << hn;
+            return REPLICANT_TIMEOUT;
+        case BUSYBEE_SHUTDOWN:
+        case BUSYBEE_POLLFAILED:
+        case BUSYBEE_DISRUPTED:
+        case BUSYBEE_ADDFDFAIL:
+        case BUSYBEE_EXTERNAL:
+        case BUSYBEE_INTERRUPTED:
+            err->set_loc(__FILE__, __LINE__);
+            err->set_msg() << "communication error with " << hn;
+            return REPLICANT_COMM_FAILED;
+        default:
+            abort();
+    }
+
+    network_msgtype mt = REPLNET_NOP;
+    e::unpacker up = msg->unpack_from(BUSYBEE_HEADER_SIZE);
+    up >> mt >> *config;
+
+    if (up.error() || mt != REPLNET_BOOTSTRAP || !config->validate())
     {
         err->set_loc(__FILE__, __LINE__);
-        err->set_msg() << "could not connect to " << hn << ": " << e::error::strerror(errno);
+        err->set_msg() << "received a malformed bootstrap message from " << hn;
         return REPLICANT_COMM_FAILED;
     }
+
+    return REPLICANT_SUCCESS;
 }
 
 std::string

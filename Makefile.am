@@ -152,7 +152,10 @@ librsm_la_LIBADD = libreplicant_object_interface.la
 libreplicant_object_interface_la_SOURCES = daemon/object_interface.cc
 
 replicant_rsm_dlopen_SOURCES = daemon/rsm-dlopen.c
-replicant_rsm_dlopen_LDADD = librsm.la $(LDL_LIBS)
+replicant_rsm_dlopen_LDADD =
+replicant_rsm_dlopen_LDADD += librsm.la
+replicant_rsm_dlopen_LDADD += $(PO6_LIBS)
+replicant_rsm_dlopen_LDADD += $(LDL_LIBS)
 
 ################################################################################
 #################################### Client ####################################
@@ -198,8 +201,11 @@ libreplicant_la_SOURCES += client/pending_poke.cc
 libreplicant_la_SOURCES += client/pending_robust.cc
 libreplicant_la_SOURCES += client/server_selector.cc
 libreplicant_la_CXXFLAGS = $(AM_CXXFLAGS) $(CXXFLAGS)
-libreplicant_la_LIBADD = $(BUSYBEE_LIBS) $(E_LIBS)
-libreplicant_la_LDFLAGS = -version-info 2:1:0
+libreplicant_la_LIBADD =
+libreplicant_la_LIBADD += $(BUSYBEE_LIBS)
+libreplicant_la_LIBADD += $(E_LIBS)
+libreplicant_la_LIBADD += $(PO6_LIBS)
+libreplicant_la_LDFLAGS = -version-info 2:2:0
 
 ################################################################################
 ##################################### Tools ####################################
@@ -226,11 +232,17 @@ noinst_HEADERS += tools/common.h
 
 replicant_SOURCES = replicant.cc
 replicant_CPPFLAGS = $(AM_CPPFLAGS) $(CPPFLAGS)
-replicant_LDADD = $(POPT_LIBS)
+replicant_LDADD =
+replicant_LDADD += $(E_LIBS)
+replicant_LDADD += $(PO6_LIBS)
+replicant_LDADD += $(POPT_LIBS)
 
 replicant_debug_SOURCES = replicant-debug.cc
 replicant_debug_CPPFLAGS = $(AM_CPPFLAGS) $(CPPFLAGS)
-replicant_debug_LDADD = $(POPT_LIBS)
+replicant_debug_LDADD =
+replicant_debug_LDADD += $(E_LIBS)
+replicant_debug_LDADD += $(PO6_LIBS)
+replicant_debug_LDADD += $(POPT_LIBS)
 
 replicant_poke_SOURCES = tools/poke.cc
 replicant_poke_LDADD = libreplicant.la $(POPT_LIBS)

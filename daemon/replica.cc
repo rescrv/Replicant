@@ -1714,16 +1714,16 @@ replica :: launch(object* obj, const char* executable, const char* const * args)
 #pragma GCC diagnostic ignored "-Wlarger-than="
 
 static bool
-locate_rsm_dlopen(po6::pathname* path)
+locate_rsm_dlopen(std::string* path)
 {
     // find the right library
-    std::vector<po6::pathname> paths;
-    paths.push_back(po6::join(REPLICANT_EXEC_DIR, "replicant-rsm-dlopen"));
+    std::vector<std::string> paths;
+    paths.push_back(po6::path::join(REPLICANT_EXEC_DIR, "replicant-rsm-dlopen"));
     const char* env = getenv("REPLICANT_EXEC_PATH");
 
     if (env)
     {
-        paths.push_back(po6::join(env, "replicant-rsm-dlopen"));
+        paths.push_back(po6::path::join(env, "replicant-rsm-dlopen"));
     }
 
     // maybe we're running out of Git.  make it "just work"
@@ -1732,15 +1732,15 @@ locate_rsm_dlopen(po6::pathname* path)
 
     if (readlink("/proc/self/exe", selfbuf, PATH_MAX) >= 0)
     {
-        po6::pathname workdir(selfbuf);
-        workdir = workdir.dirname();
-        po6::pathname gitdir(po6::join(workdir, ".git"));
+        std::string workdir(selfbuf);
+        workdir = po6::path::dirname(workdir);
+        std::string gitdir(po6::path::join(workdir, ".git"));
         struct stat buf;
 
-        if (stat(gitdir.get(), &buf) == 0 &&
+        if (stat(gitdir.c_str(), &buf) == 0 &&
             S_ISDIR(buf.st_mode))
         {
-            paths.push_back(po6::join(workdir, "replicant-rsm-dlopen"));
+            paths.push_back(po6::path::join(workdir, "replicant-rsm-dlopen"));
         }
     }
 
@@ -1750,7 +1750,7 @@ locate_rsm_dlopen(po6::pathname* path)
     {
         struct stat buf;
 
-        if (stat(paths[idx].get(), &buf) == 0)
+        if (stat(paths[idx].c_str(), &buf) == 0)
         {
             *path = paths[idx];
             return true;
@@ -1777,7 +1777,7 @@ replica :: launch_library(const std::string& name, uint64_t slot, const std::str
         return NULL;
     }
 
-    po6::pathname exe;
+    std::string exe;
 
     if (!locate_rsm_dlopen(&exe))
     {
@@ -1785,9 +1785,9 @@ replica :: launch_library(const std::string& name, uint64_t slot, const std::str
         return NULL;
     }
 
-    const char* const args[] = {exe.get(), libname.c_str(), 0};
+    const char* const args[] = {exe.c_str(), libname.c_str(), 0};
 
-    if (!launch(obj.get(), exe.get(), args))
+    if (!launch(obj.get(), exe.c_str(), args))
     {
         return NULL;
     }

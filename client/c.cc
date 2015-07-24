@@ -30,9 +30,6 @@
 #include <errno.h>
 #include <signal.h>
 
-// po6
-#include <po6/error.h>
-
 // e
 #include <e/guard.h>
 
@@ -66,13 +63,6 @@ inline void return_void() {}
     { \
         X \
     } \
-    catch (po6::error& e) \
-    { \
-        errno = e; \
-        *status = REPLICANT_EXCEPTION; \
-        cl->set_error_message("unhandled exception was thrown"); \
-        return -1; \
-    } \
     catch (std::bad_alloc& ba) \
     { \
         errno = ENOMEM; \
@@ -93,12 +83,6 @@ inline void return_void() {}
     try \
     { \
         X \
-    } \
-    catch (po6::error& e) \
-    { \
-        errno = e; \
-        *status = REPLICANT_EXCEPTION; \
-        cl->set_error_message("unhandled exception was thrown"); \
     } \
     catch (std::bad_alloc& ba) \
     { \
@@ -124,11 +108,6 @@ replicant_client_create(const char* coordinator, uint16_t port)
     {
         return reinterpret_cast<replicant_client*>(new replicant::client(coordinator, port));
     }
-    catch (po6::error& e)
-    {
-        errno = e;
-        return NULL;
-    }
     catch (std::bad_alloc& ba)
     {
         errno = ENOMEM;
@@ -148,11 +127,6 @@ replicant_client_create_conn_str(const char* conn_str)
     try
     {
         return reinterpret_cast<replicant_client*>(new replicant::client(conn_str));
-    }
-    catch (po6::error& e)
-    {
-        errno = e;
-        return NULL;
     }
     catch (std::bad_alloc& ba)
     {
