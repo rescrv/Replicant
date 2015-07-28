@@ -284,6 +284,10 @@ class daemon
         };
         std::list<deferred_msg> m_deferred_msgs;
 
+        // messages waiting to send when BusyBee comes online
+        po6::threads::mutex m_busybee_queue_mtx;
+        std::list<deferred_msg> m_busybee_queue;
+
         // messages waiting for nonces
         std::list<deferred_msg> m_msgs_waiting_for_nonces;
 

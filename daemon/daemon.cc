@@ -151,6 +151,8 @@ daemon :: daemon()
     , m_unordered__cmds()
     , m_unassigned_cmds()
     , m_deferred_msgs()
+    , m_busybee_queue_mtx()
+    , m_busybee_queue()
     , m_msgs_waiting_for_nonces()
     , m_acceptor()
     , m_highest_ballot()
@@ -539,7 +541,20 @@ daemon :: run(bool daemonize,
     }
 
     m_busybee.reset(new busybee_mta(&m_gc, &m_busybee_mapper, m_us.bind_to, m_us.id.get(), 0/*we don't use pause/unpause*/));
-    e::atomic::store_32_release(&m_busybee_init, 1);
+
+    {
+        po6::threads::mutex::hold hold(&m_busybee_queue_mtx);
+        e::atomic::store_32_release(&m_busybee_init, 1);
+
+        while (!m_busybee_queue.empty())
+        {
+            const deferred_msg& dm(m_busybee_queue.front());
+            std::auto_ptr<e::buffer> msg(dm.msg);
+            send_from_non_main_thread(dm.si, msg);
+            m_busybee_queue.pop_front();
+        }
+    }
+
     assert(m_replica.get());
     m_config_mtx.lock();
     m_config = m_replica->config();
@@ -2311,13 +2326,15 @@ daemon :: send(server_id si, std::auto_ptr<e::buffer> msg)
 bool
 daemon :: send_from_non_main_thread(server_id si, std::auto_ptr<e::buffer> msg)
 {
-    while (e::atomic::load_32_acquire(&m_busybee_init) == 0)
+    if (e::atomic::load_32_acquire(&m_busybee_init) == 0)
     {
-        e::atomic::memory_barrier();
-        timespec tv;
-        tv.tv_sec = 0;
-        tv.tv_nsec = 10ULL * 1000ULL * 1000ULL;
-        nanosleep(&tv, NULL);
+        po6::threads::mutex::hold hold(&m_busybee_queue_mtx);
+
+        if (e::atomic::load_32_acquire(&m_busybee_init) == 0)
+        {
+            m_busybee_queue.push_back(deferred_msg(0, si, msg.release()));
+            return true;
+        }
     }
 
     if (si == m_us.id)
