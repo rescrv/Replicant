@@ -403,7 +403,7 @@ daemon :: run(bool daemonize,
 
         if (!m_acceptor.record_snapshot(snapshot_slot, snapshot))
         {
-            LOG(ERROR) << "error saving starting replica state to disk: " << e::error::strerror(errno);
+            LOG(ERROR) << "error saving starting replica state to disk: " << po6::strerror(errno);
             return EXIT_FAILURE;
         }
     }
@@ -460,7 +460,7 @@ daemon :: run(bool daemonize,
 
         if (!m_acceptor.load_latest_snapshot(&snapshot, &snapshot_backing))
         {
-            LOG(ERROR) << "error loading replica state from disk: " << e::error::strerror(errno);
+            LOG(ERROR) << "error loading replica state from disk: " << po6::strerror(errno);
             return EXIT_FAILURE;
         }
 
@@ -827,7 +827,7 @@ daemon :: setup_replica_from_bootstrap(const bootstrap& current,
 
                     if (!m_acceptor.record_snapshot(snapshot_slot, snapshot))
                     {
-                        LOG(ERROR) << "error saving starting replica state to disk: " << e::error::strerror(errno);
+                        LOG(ERROR) << "error saving starting replica state to disk: " << po6::strerror(errno);
                         rep->reset();
                     }
 
@@ -1296,7 +1296,7 @@ daemon :: process_paxos_learn(server_id si,
             }
             else
             {
-                LOG(ERROR) << "could not save snapshot: " << e::error::strerror(errno);
+                LOG(ERROR) << "could not save snapshot: " << po6::strerror(errno);
             }
         }
 

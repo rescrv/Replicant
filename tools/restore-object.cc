@@ -31,6 +31,9 @@
 #include <errno.h>
 #include <fcntl.h>
 
+// po6
+#include <po6/errno.h>
+
 // e
 #include <e/error.h>
 
@@ -84,7 +87,7 @@ main(int argc, const char* argv[])
 
     if (!replicant::atomic_read(AT_FDCWD, ap.args()[1], &state))
     {
-        std::cerr << "could not read state: " << e::error::strerror(errno) << std::endl;
+        std::cerr << "could not read state: " << po6::strerror(errno) << std::endl;
         return EXIT_FAILURE;
     }
 

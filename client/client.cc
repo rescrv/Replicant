@@ -193,7 +193,7 @@ client :: new_object(const char* object,
 
     if (!atomic_read(AT_FDCWD, path, &lib))
     {
-        ERROR(SEE_ERRNO) << "could not open library: " << e::error::strerror(errno);
+        ERROR(SEE_ERRNO) << "could not open library: " << po6::strerror(errno);
         return -1;
     }
 

@@ -176,7 +176,7 @@ acceptor :: log_segment :: maybe_sync(uint64_t opnum)
 
     if (aio_return(&afsync) != 0)
     {
-        LOG(ERROR) << "acceptor failing permanently: " << e::error::strerror(errno);
+        LOG(ERROR) << "acceptor failing permanently: " << po6::strerror(errno);
         permafail = true;
         return;
     }
@@ -445,7 +445,7 @@ acceptor :: open(const std::string& dir,
     {
         if (mkdir(dir.c_str(), S_IRWXU) < 0)
         {
-            LOG(ERROR) << "could not create data directory: " << e::error::strerror(errno);
+            LOG(ERROR) << "could not create data directory: " << po6::strerror(errno);
             return false;
         }
 
@@ -454,7 +454,7 @@ acceptor :: open(const std::string& dir,
 
     if (ret < 0)
     {
-        LOG(ERROR) << "could not initialize data directory: " << e::error::strerror(errno);
+        LOG(ERROR) << "could not initialize data directory: " << po6::strerror(errno);
         return false;
     }
     else if (!S_ISDIR(stbuf.st_mode))
@@ -465,7 +465,7 @@ acceptor :: open(const std::string& dir,
 
     if (chdir(dir.c_str()) < 0)
     {
-        LOG(ERROR) << "could not initialize data directory: " << e::error::strerror(errno);
+        LOG(ERROR) << "could not initialize data directory: " << po6::strerror(errno);
         return false;
     }
 
@@ -473,7 +473,7 @@ acceptor :: open(const std::string& dir,
 
     if (m_dir.get() < 0)
     {
-        LOG(ERROR) << "could not initialize data directory: " << e::error::strerror(errno);
+        LOG(ERROR) << "could not initialize data directory: " << po6::strerror(errno);
         return false;
     }
 
@@ -481,7 +481,7 @@ acceptor :: open(const std::string& dir,
 
     if (m_lock.get() < 0)
     {
-        LOG(ERROR) << "could not create lock file: " << e::error::strerror(errno);
+        LOG(ERROR) << "could not create lock file: " << po6::strerror(errno);
         return false;
     }
 
@@ -505,7 +505,7 @@ acceptor :: open(const std::string& dir,
     {
         if (errno != ENOENT)
         {
-            LOG(INFO) << "could not read identity: " << e::error::strerror(errno);
+            LOG(INFO) << "could not read identity: " << po6::strerror(errno);
             return false;
         }
 
@@ -577,7 +577,7 @@ acceptor :: save(server saved_us,
 
     if (!atomic_write("IDENTITY", ostr.str()))
     {
-        LOG(ERROR) << "could not write identity to disk: " << e::error::strerror(errno);
+        LOG(ERROR) << "could not write identity to disk: " << po6::strerror(errno);
         return false;
     }
 
@@ -909,7 +909,7 @@ acceptor :: get_writable_log()
 
         if (!next->open(m_dir.get(), m_current->lognum + 1))
         {
-            LOG(ERROR) << "acceptor failing permanently while creating new log file: " << e::error::strerror(errno);
+            LOG(ERROR) << "acceptor failing permanently while creating new log file: " << po6::strerror(errno);
             m_permafail = true;
             return NULL;
         }

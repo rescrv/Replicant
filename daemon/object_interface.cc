@@ -97,7 +97,7 @@ object_interface :: read(char* data, size_t sz)
 {
     if (fd.xread(data, sz) != ssize_t(sz))
     {
-        object_permanent_error(this, "short read: %s", e::error::strerror(errno).c_str());
+        object_permanent_error(this, "short read: %s", po6::strerror(errno).c_str());
     }
 }
 
@@ -106,7 +106,7 @@ object_interface :: write(const char* data, size_t sz)
 {
     if (fd.xwrite(data, sz) != ssize_t(sz))
     {
-        object_permanent_error(this, "short write: %s", e::error::strerror(errno).c_str());
+        object_permanent_error(this, "short write: %s", po6::strerror(errno).c_str());
     }
 }
 

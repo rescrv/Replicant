@@ -31,6 +31,9 @@
 #include <errno.h>
 #include <fcntl.h>
 
+// po6
+#include <po6/errno.h>
+
 // e
 #include <e/error.h>
 
@@ -98,7 +101,7 @@ main(int argc, const char* argv[])
 
         if (!replicant::atomic_write(AT_FDCWD, output.c_str(), std::string(state, state_sz)))
         {
-            std::cerr << "could not write state: " << e::error::strerror(errno) << std::endl;
+            std::cerr << "could not write state: " << po6::strerror(errno) << std::endl;
             return EXIT_FAILURE;
         }
 
