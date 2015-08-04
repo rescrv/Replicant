@@ -68,14 +68,7 @@ AC_CHECK_LIB([popt], [poptGetContext], [has_popt=true], [AC_MSG_ERROR([
 Replicant relies upon the popt library.
 Please install popt to continue.
 ---------------------------------------])])
-AC_CHECK_LIB([rt], [clock_gettime], [needs_lrt=yes], [needs_lrt=no])
 AC_CHECK_LIB([dl], [dlopen], [needs_ldl=yes], [needs_ldl=no])
-
-if test x"${needs_lrt}" = xyes; then
-    AC_SUBST([LRT_LIBS], ["-lrt"])
-else
-    AC_SUBST([LRT_LIBS], [""])
-fi
 
 if test x"${needs_ldl}" = xyes; then
     AC_SUBST([LDL_LIBS], ["-ldl"])
@@ -139,8 +132,6 @@ AC_ARG_ENABLE([example_state_machines], [AS_HELP_STRING([--enable-example-state-
               [build Python bindings @<:@default: no@:>@])],
               [example_state_machines=${enableval}], [example_state_machines=no])
 AM_CONDITIONAL([ENABLE_EXAMPLES], [test x"${example_state_machines}" = xyes])
-
-AC_CHECK_FUNCS([clock_gettime mach_absolute_time])
 
 AC_CONFIG_FILES([Makefile
                  replicant.pc])
