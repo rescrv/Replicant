@@ -32,6 +32,7 @@
 #endif
 
 // C
+#include <limits.h>
 #include <math.h>
 #include <string.h>
 

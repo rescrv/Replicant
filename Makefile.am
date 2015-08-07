@@ -146,7 +146,7 @@ include_HEADERS += include/rsm.h
 replicantexec_PROGRAMS += replicant-rsm-dlopen
 
 librsm_la_SOURCES = daemon/rsm.cc
-librsm_la_LIBADD = libreplicant_object_interface.la
+librsm_la_LIBADD = libreplicant_object_interface.la $(E_LIBS)
 
 libreplicant_object_interface_la_SOURCES = daemon/object_interface.cc
 
@@ -271,6 +271,9 @@ replicant_list_objects_LDADD = libreplicant.la $(PO6_LIBS) $(POPT_LIBS)
 
 replicant_conn_str_SOURCES = tools/conn-str.cc
 replicant_conn_str_LDADD = libreplicant.la $(PO6_LIBS) $(POPT_LIBS)
+
+replicant_list_servers_SOURCES = tools/list-servers.cc
+replicant_list_servers_LDADD = libreplicant.la $(PO6_LIBS) $(POPT_LIBS)
 
 replicant_kill_server_SOURCES = tools/kill-server.cc
 replicant_kill_server_LDADD = libreplicant.la $(PO6_LIBS) $(POPT_LIBS)

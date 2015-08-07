@@ -31,6 +31,9 @@
 #include "config.h"
 #endif
 
+// C
+#include <limits.h>
+
 // POSIX
 #include <signal.h>
 #include <sys/stat.h>
