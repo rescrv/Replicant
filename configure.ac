@@ -113,6 +113,12 @@ fi
 # Checks for typedefs, structures, and compiler characteristics.
 
 # Checks for library functions.
+AC_CHECK_LIB([rt], [aio_write], [needs_lrt=yes], [needs_lrt=no])
+if test x"${needs_lrt}" = xyes; then
+    AC_SUBST([RT_LIBS], ["-lrt"])
+else
+    AC_SUBST([RT_LIBS], [""])
+fi
 
 AC_ARG_ENABLE([log-commands], [AS_HELP_STRING([--enable-log-commands],
               [enable code to log all commands @<:@default: no@:>@])],

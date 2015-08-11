@@ -133,6 +133,7 @@ replicant_daemon_LDADD += $(BUSYBEE_LIBS)
 replicant_daemon_LDADD += $(E_LIBS)
 replicant_daemon_LDADD += $(POPT_LIBS)
 replicant_daemon_LDADD += $(GLOG_LIBS)
+replicant_daemon_LDADD += $(RT_LIBS)
 replicant_daemon_LDADD += -lpthread
 
 ################################################################################
