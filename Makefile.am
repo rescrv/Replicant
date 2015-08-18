@@ -180,6 +180,7 @@ noinst_HEADERS += client/pending_cond_follow.h
 noinst_HEADERS += client/pending_robust.h
 noinst_HEADERS += client/pending_poke.h
 noinst_HEADERS += client/server_selector.h
+noinst_HEADERS += client/server_status.h
 
 libreplicant_la_SOURCES =
 libreplicant_la_SOURCES += common/atomic_io.cc
@@ -320,32 +321,41 @@ libreplicant_example_tick_la_SOURCES = examples/tick.c
 libreplicant_example_tick_la_CFLAGS = $(CFLAGS)
 libreplicant_example_tick_la_LIBADD = librsm.la
 check_SCRIPTS += test/example-tick.gremlin
+EXTRA_DIST += test/example-tick.gremlin
 
 libreplicant_example_condition_la_SOURCES = examples/condition.c
 libreplicant_example_condition_la_CFLAGS = $(CFLAGS)
 libreplicant_example_condition_la_LIBADD = librsm.la
 check_SCRIPTS += test/example-condition.gremlin
+EXTRA_DIST += test/example-condition.gremlin
 
 libreplicant_example_counter_la_SOURCES = examples/counter.c
 libreplicant_example_counter_la_CFLAGS = $(CFLAGS)
 libreplicant_example_counter_la_LIBADD = librsm.la
 check_SCRIPTS += test/example-counter.gremlin
+EXTRA_DIST += test/example-counter.gremlin
 
 libreplicant_example_echo_la_SOURCES = examples/echo.c
 libreplicant_example_echo_la_CFLAGS = $(CFLAGS)
 libreplicant_example_echo_la_LIBADD = librsm.la
 check_SCRIPTS += test/example-echo.gremlin
+EXTRA_DIST += test/example-echo.gremlin
 
 libreplicant_example_log_la_SOURCES = examples/log.c
 libreplicant_example_log_la_CFLAGS = $(CFLAGS)
 libreplicant_example_log_la_LIBADD = librsm.la
 check_SCRIPTS += test/example-log.gremlin
+EXTRA_DIST += test/example-log.gremlin
 
 libreplicant_example_nop_la_SOURCES = examples/nop.c
 libreplicant_example_nop_la_CFLAGS = $(CFLAGS)
 libreplicant_example_nop_la_LIBADD = librsm.la
 check_SCRIPTS += test/example-nop.gremlin
+EXTRA_DIST += test/example-nop.gremlin
 
 ################################################################################
 ##################################### Tests ####################################
 ################################################################################
+
+EXTRA_DIST += test/env.sh
+EXTRA_DIST += test/5-node-cluster.gremlin
