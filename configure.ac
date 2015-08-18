@@ -29,7 +29,13 @@
 
 AC_PREREQ([2.67])
 AC_INIT([replicant], [0.8.dev], [robert@hyperdex.org])
-AM_INIT_AUTOMAKE([foreign subdir-objects dist-bzip2])
+m4_define([serial_tests], [
+    m4_esyscmd([case `automake --version | head -n 1` in
+                *1.11*);;
+                *) echo serial-tests;;
+                esac])
+])
+AM_INIT_AUTOMAKE(foreign serial_tests subdir-objects dist-bzip2)
 AM_SILENT_RULES([yes])
 LT_PREREQ([2.2])
 LT_INIT

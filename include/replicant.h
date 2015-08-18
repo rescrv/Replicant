@@ -77,7 +77,7 @@ enum replicant_returncode
 };
 
 struct replicant_client*
-replicant_client_create(const char* coordinator, uint16_t port);
+replicant_client_create(const char* host, uint16_t port);
 struct replicant_client*
 replicant_client_create_conn_str(const char* conn_str);
 void
@@ -198,6 +198,11 @@ replicant_client_error_location(struct replicant_client* client);
 
 const char*
 replicant_returncode_to_string(enum replicant_returncode);
+
+int
+replicant_server_status(const char* host, uint16_t port, int timeout,
+                        enum replicant_returncode* status,
+                        char** human_readable);
 
 #ifdef __cplusplus
 } /* extern "C" */

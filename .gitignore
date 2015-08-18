@@ -46,6 +46,7 @@
 /replicant-list-servers
 /replicant-new_object
 /replicant-new-object
+/replicant-server-status
 /replicant.pc
 /replicant-poke
 /replicant-restore-object

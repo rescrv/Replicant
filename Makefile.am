@@ -32,6 +32,7 @@ AM_CFLAGS    = -fvisibility=hidden $(WANAL_CFLAGS)
 AM_CXXFLAGS  = -fvisibility=hidden -fvisibility-inlines-hidden $(SPARSEHASH_CFLAGS) $(PO6_CFLAGS) $(E_CFLAGS) $(BUSYBEE_CFLAGS) $(WANAL_CXXFLAGS)
 AM_MAKEFLAGS = --no-print-directory
 HELP2MAN_FLAGS = --no-discard-stderr --libtool --no-info --version-string=$(VERSION) --manual="Replicant User Manual"
+TESTS_ENVIRONMENT = . $(abs_top_srcdir)/test/env.sh "${abs_top_srcdir}" "${abs_top_builddir}" "${VERSION}";
 
 replicantexecdir = $(libexecdir)/$(PACKAGE)-$(VERSION)
 pkgconfigdir = $(libdir)/pkgconfig
@@ -51,6 +52,8 @@ noinst_LTLIBRARIES =
 bin_PROGRAMS =
 noinst_PROGRAMS =
 EXTRA_PROGRAMS =
+
+check_SCRIPTS =
 
 replicantexec_PROGRAMS =
 replicantexec_LTLIBRARIES =
@@ -200,6 +203,7 @@ libreplicant_la_SOURCES += client/pending_generate_unique_number.cc
 libreplicant_la_SOURCES += client/pending_poke.cc
 libreplicant_la_SOURCES += client/pending_robust.cc
 libreplicant_la_SOURCES += client/server_selector.cc
+libreplicant_la_SOURCES += client/server_status.cc
 libreplicant_la_CXXFLAGS = $(AM_CXXFLAGS) $(CXXFLAGS)
 libreplicant_la_LIBADD =
 libreplicant_la_LIBADD += $(BUSYBEE_LIBS)
@@ -223,6 +227,7 @@ replicantexec_PROGRAMS += replicant-restore-object
 replicantexec_PROGRAMS += replicant-list-objects
 replicantexec_PROGRAMS += replicant-conn-str
 replicantexec_PROGRAMS += replicant-kill-server
+replicantexec_PROGRAMS += replicant-server-status
 replicantexec_PROGRAMS += replicant-debug-call
 replicantexec_PROGRAMS += replicant-debug-condition
 replicantexec_PROGRAMS += replicant-debug-defended-call
@@ -260,11 +265,9 @@ replicant_kill_object_SOURCES = tools/kill-object.cc
 replicant_kill_object_LDADD = libreplicant.la $(PO6_LIBS) $(POPT_LIBS)
 
 replicant_backup_object_SOURCES = tools/backup-object.cc common/atomic_io.cc
-replicant_backup_object_CXXFLAGS = $(AM_CXXFLAGS) -fvisibility=default $(CXXFLAGS)
 replicant_backup_object_LDADD = libreplicant.la $(PO6_LIBS) $(POPT_LIBS)
 
 replicant_restore_object_SOURCES = tools/restore-object.cc common/atomic_io.cc
-replicant_restore_object_CXXFLAGS = $(AM_CXXFLAGS) -fvisibility=default $(CXXFLAGS)
 replicant_restore_object_LDADD = libreplicant.la $(PO6_LIBS) $(POPT_LIBS)
 
 replicant_list_objects_SOURCES = tools/list-objects.cc
@@ -279,11 +282,14 @@ replicant_list_servers_LDADD = libreplicant.la $(PO6_LIBS) $(POPT_LIBS)
 replicant_kill_server_SOURCES = tools/kill-server.cc
 replicant_kill_server_LDADD = libreplicant.la $(PO6_LIBS) $(POPT_LIBS)
 
+replicant_server_status_SOURCES = tools/server-status.cc
+replicant_server_status_LDADD = libreplicant.la $(PO6_LIBS) $(POPT_LIBS)
+
 replicant_debug_call_SOURCES = tools/debug-call.cc
-replicant_debug_call_LDADD = libreplicant.la $(PO6_LIBS) $(POPT_LIBS)
+replicant_debug_call_LDADD = libreplicant.la $(E_LIBS) $(PO6_LIBS) $(POPT_LIBS)
 
 replicant_debug_condition_SOURCES = tools/debug-condition.cc
-replicant_debug_condition_LDADD = libreplicant.la $(PO6_LIBS) $(POPT_LIBS)
+replicant_debug_condition_LDADD = libreplicant.la $(E_LIBS) $(PO6_LIBS) $(POPT_LIBS)
 
 replicant_debug_defended_call_SOURCES = tools/debug-defended-call.cc
 replicant_debug_defended_call_LDADD = libreplicant.la $(PO6_LIBS) $(POPT_LIBS)
@@ -302,28 +308,44 @@ replicantexec_LTLIBRARIES += libreplicant-example-counter.la
 replicantexec_LTLIBRARIES += libreplicant-example-echo.la
 replicantexec_LTLIBRARIES += libreplicant-example-log.la
 replicantexec_LTLIBRARIES += libreplicant-example-nop.la
+TESTS += test/example-tick.gremlin
+TESTS += test/example-condition.gremlin
+TESTS += test/example-counter.gremlin
+TESTS += test/example-echo.gremlin
+TESTS += test/example-log.gremlin
+TESTS += test/example-nop.gremlin
 endif
 
 libreplicant_example_tick_la_SOURCES = examples/tick.c
 libreplicant_example_tick_la_CFLAGS = $(CFLAGS)
 libreplicant_example_tick_la_LIBADD = librsm.la
+check_SCRIPTS += test/example-tick.gremlin
 
 libreplicant_example_condition_la_SOURCES = examples/condition.c
 libreplicant_example_condition_la_CFLAGS = $(CFLAGS)
 libreplicant_example_condition_la_LIBADD = librsm.la
+check_SCRIPTS += test/example-condition.gremlin
 
 libreplicant_example_counter_la_SOURCES = examples/counter.c
 libreplicant_example_counter_la_CFLAGS = $(CFLAGS)
 libreplicant_example_counter_la_LIBADD = librsm.la
+check_SCRIPTS += test/example-counter.gremlin
 
 libreplicant_example_echo_la_SOURCES = examples/echo.c
 libreplicant_example_echo_la_CFLAGS = $(CFLAGS)
 libreplicant_example_echo_la_LIBADD = librsm.la
+check_SCRIPTS += test/example-echo.gremlin
 
 libreplicant_example_log_la_SOURCES = examples/log.c
 libreplicant_example_log_la_CFLAGS = $(CFLAGS)
 libreplicant_example_log_la_LIBADD = librsm.la
+check_SCRIPTS += test/example-log.gremlin
 
 libreplicant_example_nop_la_SOURCES = examples/nop.c
 libreplicant_example_nop_la_CFLAGS = $(CFLAGS)
 libreplicant_example_nop_la_LIBADD = librsm.la
+check_SCRIPTS += test/example-nop.gremlin
+
+################################################################################
+##################################### Tests ####################################
+################################################################################

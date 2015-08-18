@@ -25,58 +25,77 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
-#ifndef replicant_common_bootstrap_h_
-#define replicant_common_bootstrap_h_
+#define __STDC_LIMIT_MACROS
 
-// STL
-#include <vector>
+// C
+#include <limits.h>
 
-// po6
-#include <po6/net/hostname.h>
+// POSIX
+#include <errno.h>
 
 // e
-#include <e/error.h>
+#include <e/safe_math.h>
 
 // Replicant
 #include <replicant.h>
-#include "namespace.h"
+#include "tools/common.h"
 
-BEGIN_REPLICANT_NAMESPACE
-class configuration;
-
-class bootstrap
+int
+main(int argc, const char* argv[])
 {
-    public:
-        static bool parse_hosts(const char* conn_str,
-                                std::vector<po6::net::hostname>* hosts);
-        static std::string conn_str(const po6::net::hostname* hns, size_t hns_sz);
+    long timeout = 10;
+    connect_opts conn;
+    e::argparser ap;
+    ap.autohelp();
+    ap.arg().name('t', "timeout")
+            .description("number of seconds to retry before failing (default: 10)")
+            .metavar("S").as_long(&timeout);
+    ap.option_string("[OPTIONS]");
+    ap.add("Server to kill:", conn.parser());
 
-    public:
-        bootstrap();
-        bootstrap(const char* host, uint16_t port);
-        bootstrap(const char* conn_str);
-        bootstrap(const char* host, uint16_t port, const char* conn_str);
-        bootstrap(const std::vector<po6::net::hostname>& hosts);
-        bootstrap(const bootstrap& other);
-        ~bootstrap() throw ();
+    if (!ap.parse(argc, argv))
+    {
+        return EXIT_FAILURE;
+    }
 
-    public:
-        bool valid() const { return m_valid; }
-        replicant_returncode do_it(int timeout, configuration* config, e::error* err) const;
-        std::string conn_str() const;
-        const std::vector<po6::net::hostname>& hosts() const { return m_hosts; }
+    if (ap.args_sz() != 0)
+    {
+        std::cerr << "command takes no positional arguments\n" << std::endl;
+        ap.usage();
+        return EXIT_FAILURE;
+    }
 
-    public:
-        bootstrap& operator = (const bootstrap& rhs);
+    if (!conn.validate())
+    {
+        std::cerr << "invalid host:port specification\n" << std::endl;
+        ap.usage();
+        return EXIT_FAILURE;
+    }
 
-    private:
-        std::vector<po6::net::hostname> m_hosts;
-        bool m_valid;
-};
+    int64_t to = timeout;
 
-std::ostream&
-operator << (std::ostream& lhs, const bootstrap& rhs);
+    if (!e::safe_mul(to, 1000, &to) || to > INT_MAX)
+    {
+        std::cerr << "timeout too large\n" << std::endl;
+        ap.usage();
+        return EXIT_FAILURE;
+    }
 
-END_REPLICANT_NAMESPACE
+    replicant_returncode status;
+    char* desc = NULL;
 
-#endif // replicant_common_bootstrap_h_
+    if (replicant_server_status(conn.host(), conn.port(), to, &status, &desc) < 0)
+    {
+        if (desc)
+        {
+            std::cerr << "error: " << desc << std::endl;
+            free(desc);
+        }
+
+        return EXIT_FAILURE;
+    }
+
+    assert(desc);
+    std::cerr << desc << std::flush;
+    return EXIT_SUCCESS;
+}

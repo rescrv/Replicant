@@ -782,7 +782,7 @@ daemon :: setup_replica_from_bootstrap(const bootstrap& current,
 
     for (unsigned iteration = 0; __sync_fetch_and_add(&s_interrupts, 0) == 0 && iteration < 100; ++iteration)
     {
-        replicant_returncode rc = current.do_it(&c, &err);
+        replicant_returncode rc = current.do_it(10000, &c, &err);
         atomically_allow_pending_blocked_signals();
 
         if (rc == REPLICANT_TIMEOUT)
@@ -859,7 +859,7 @@ daemon :: become_cluster_member(const bootstrap& current)
 
     for (unsigned iteration = 0; __sync_fetch_and_add(&s_interrupts, 0) == 0 && iteration < 100; ++iteration)
     {
-        replicant_returncode rc = current.do_it(&c, &err);
+        replicant_returncode rc = current.do_it(10000, &c, &err);
         atomically_allow_pending_blocked_signals();
 
         if (rc == REPLICANT_TIMEOUT)

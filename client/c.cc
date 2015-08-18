@@ -38,6 +38,7 @@
 #include "visibility.h"
 #include "common/macros.h"
 #include "client/client.h"
+#include "client/server_status.h"
 
 #define FAKE_STATUS replicant_returncode _status; replicant_returncode* status = &_status
 
@@ -104,6 +105,7 @@ replicant_client_create(const char* coordinator, uint16_t port)
 {
     FAKE_STATUS;
     SIGNAL_PROTECT_ERR(NULL);
+
     try
     {
         return reinterpret_cast<replicant_client*>(new replicant::client(coordinator, port));
@@ -124,6 +126,7 @@ replicant_client_create_conn_str(const char* conn_str)
 {
     FAKE_STATUS;
     SIGNAL_PROTECT_ERR(NULL);
+
     try
     {
         return reinterpret_cast<replicant_client*>(new replicant::client(conn_str));
@@ -397,6 +400,30 @@ replicant_returncode_to_string(enum replicant_returncode stat)
         CSTRINGIFY(REPLICANT_GARBAGE);
         default:
             return "unknown replicant_returncode";
+    }
+}
+
+REPLICANT_API int
+replicant_server_status(const char* host, uint16_t port, int timeout,
+                        enum replicant_returncode* status,
+                        char** human_readable)
+{
+    SIGNAL_PROTECT_ERR(-1);
+
+    try
+    {
+        return replicant::server_status(host, port, timeout, status, human_readable);
+    }
+    catch (std::bad_alloc& ba)
+    {
+        *status = REPLICANT_SEE_ERRNO;
+        errno = ENOMEM;
+        return -1;
+    }
+    catch (...)
+    {
+        *status = REPLICANT_INTERNAL;
+        return -1;
     }
 }
 

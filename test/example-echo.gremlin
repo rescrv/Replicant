@@ -1,0 +1,3 @@
+#!/usr/bin/env gremlin
+
+include 5-node-cluster.gremlin

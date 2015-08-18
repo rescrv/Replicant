@@ -1,0 +1,18 @@
+env GLOG_logtostderr
+env GLOG_minloglevel 0
+env GLOG_logbufsecs 0
+
+tcp-port 1982 1983 1984 1985 1986
+
+run mkdir replica0 replica1 replica2 replica3 replica4
+
+daemon replicant daemon --foreground --data=coord0 --listen 127.0.0.1 --listen-port 1982
+run replicant server-status --host 127.0.0.1 --port 1982
+daemon replicant daemon --foreground --data=coord1 --listen 127.0.0.1 --listen-port 1983 --connect-port 1982
+run replicant server-status --host 127.0.0.1 --port 1983
+daemon replicant daemon --foreground --data=coord2 --listen 127.0.0.1 --listen-port 1984 --connect-port 1983
+run replicant server-status --host 127.0.0.1 --port 1984
+daemon replicant daemon --foreground --data=coord3 --listen 127.0.0.1 --listen-port 1985 --connect-port 1984
+run replicant server-status --host 127.0.0.1 --port 1985
+daemon replicant daemon --foreground --data=coord4 --listen 127.0.0.1 --listen-port 1986 --connect-port 1985
+run replicant server-status --host 127.0.0.1 --port 1986

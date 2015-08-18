@@ -25,8 +25,8 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
-#ifndef replicant_daemon_client_h_
-#define replicant_daemon_client_h_
+#ifndef replicant_client_client_h_
+#define replicant_client_client_h_
 
 // C
 #include <stdint.h>
@@ -182,4 +182,4 @@ class client
 
 END_REPLICANT_NAMESPACE
 
-#endif // replicant_daemon_client_h_
+#endif // replicant_client_client_h_
