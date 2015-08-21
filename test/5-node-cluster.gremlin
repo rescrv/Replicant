@@ -16,3 +16,9 @@ daemon replicant daemon --foreground --data=coord3 --listen 127.0.0.1 --listen-p
 run replicant server-status --host 127.0.0.1 --port 1985
 daemon replicant daemon --foreground --data=coord4 --listen 127.0.0.1 --listen-port 1986 --connect-port 1985
 run replicant server-status --host 127.0.0.1 --port 1986
+
+kill USR2 0
+kill USR2 1
+kill USR2 2
+kill USR2 3
+kill USR2 4
