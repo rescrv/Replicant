@@ -33,6 +33,7 @@ AM_CXXFLAGS  = -fvisibility=hidden -fvisibility-inlines-hidden $(SPARSEHASH_CFLA
 AM_MAKEFLAGS = --no-print-directory
 HELP2MAN_FLAGS = --no-discard-stderr --libtool --no-info --version-string=$(VERSION) --manual="Replicant User Manual"
 TESTS_ENVIRONMENT = . $(abs_top_srcdir)/test/env.sh "${abs_top_srcdir}" "${abs_top_builddir}" "${VERSION}";
+AM_DISTCHECK_CONFIGURE_FLAGS = --enable-example-state-machines
 
 replicantexecdir = $(libexecdir)/$(PACKAGE)-$(VERSION)
 pkgconfigdir = $(libdir)/pkgconfig
@@ -232,7 +233,6 @@ replicantexec_PROGRAMS += replicant-server-status
 replicantexec_PROGRAMS += replicant-debug-call
 replicantexec_PROGRAMS += replicant-debug-condition
 replicantexec_PROGRAMS += replicant-debug-defended-call
-EXTRA_PROGRAMS += replicant-benchmark
 
 noinst_HEADERS += tools/common.h
 
@@ -295,9 +295,6 @@ replicant_debug_condition_LDADD = libreplicant.la $(E_LIBS) $(PO6_LIBS) $(POPT_L
 replicant_debug_defended_call_SOURCES = tools/debug-defended-call.cc
 replicant_debug_defended_call_LDADD = libreplicant.la $(PO6_LIBS) $(POPT_LIBS)
 
-replicant_benchmark_SOURCES = replicant-benchmark.cc
-replicant_benchmark_LDADD = libreplicant.la -lygor -lpthread $(POPT_LIBS)
-
 ################################################################################
 ################################### Examples ###################################
 ################################################################################
@@ -359,3 +356,16 @@ EXTRA_DIST += test/example-nop.gremlin
 
 EXTRA_DIST += test/env.sh
 EXTRA_DIST += test/5-node-cluster.gremlin
+
+check_SCRIPTS += test/chaos.gremlin
+EXTRA_DIST += test/chaos.gremlin
+TESTS += test/chaos.gremlin
+
+################################################################################
+################################### Benchmark ##################################
+################################################################################
+
+EXTRA_PROGRAMS += replicant-benchmark
+
+replicant_benchmark_SOURCES = replicant-benchmark.cc
+replicant_benchmark_LDADD = libreplicant.la -lygor -lpthread $(POPT_LIBS)

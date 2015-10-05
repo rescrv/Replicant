@@ -1,3 +1,4 @@
 #!/usr/bin/env gremlin
 
 include 5-node-cluster.gremlin
+run replicant new-object --host 127.0.0.1 --port 1982 tick ${REPLICANT_BUILDDIR}/.libs/libreplicant-example-tick.so

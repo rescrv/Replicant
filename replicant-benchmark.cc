@@ -31,12 +31,13 @@
 #include <google/dense_hash_map>
 
 // po6
+#include <po6/errno.h>
 #include <po6/threads/mutex.h>
 #include <po6/threads/thread.h>
+#include <po6/time.h>
 
 // e
 #include <e/atomic.h>
-#include <e/time.h>
 
 // Ygor
 #include <ygor.h>
@@ -100,7 +101,7 @@ benchmark :: ~benchmark() throw ()
 void
 benchmark :: producer()
 {
-    const uint64_t start = e::time();
+    const uint64_t start = po6::wallclock_time();
     const uint64_t end = start + length * SECONDS;
     uint64_t now = start;
     uint64_t issued = 0;
@@ -113,7 +114,7 @@ benchmark :: producer()
         for (uint64_t i = issued; i < expected; ++i)
         {
             po6::threads::mutex::hold hold(&mtx);
-            now = e::time();
+            now = po6::wallclock_time();
             int64_t id = replicant_client_call(client, object, function, "", 0, 0, &rr, NULL, 0);
 
             if (id < 0)
@@ -134,7 +135,7 @@ benchmark :: producer()
         ts.tv_nsec = 1 * MILLIS;
         nanosleep(&ts, NULL);
 
-        now = e::time();
+        now = po6::wallclock_time();
     }
 
     e::atomic::store_32_release(&done, 1);
@@ -174,7 +175,7 @@ benchmark :: consumer()
             abort();
         }
 
-        const uint64_t end = e::time();
+        const uint64_t end = po6::wallclock_time();
         google::dense_hash_map<int64_t, uint64_t>::iterator it = times.find(id);
 
         if (it == times.end())
@@ -193,7 +194,7 @@ benchmark :: consumer()
 
         if (ygor_data_logger_record(dl, &dr) < 0)
         {
-            std::cerr << "could not record data point: " << strerror(errno) << std::endl;
+            std::cerr << "could not record data point: " << po6::strerror(errno) << std::endl;
             abort();
         }
     }
@@ -246,7 +247,7 @@ main(int argc, const char* argv[])
 
     if (!dl)
     {
-        std::cerr << "could not open output: " << strerror(errno) << std::endl;
+        std::cerr << "could not open output: " << po6::strerror(errno) << std::endl;
         return EXIT_FAILURE;
     }
 
@@ -261,7 +262,7 @@ main(int argc, const char* argv[])
 
     if (ygor_data_logger_flush_and_destroy(dl) < 0)
     {
-        std::cerr << "could not close output: " << strerror(errno) << std::endl;
+        std::cerr << "could not close output: " << po6::strerror(errno) << std::endl;
         return EXIT_FAILURE;
     }
 

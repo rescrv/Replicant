@@ -47,6 +47,8 @@
 #include "common/bootstrap.h"
 #include "daemon/daemon.h"
 
+extern bool s_debug_mode;
+
 int
 main(int argc, const char* argv[])
 {
@@ -132,6 +134,9 @@ main(int argc, const char* argv[])
     ap.arg().long_name("log-immediate")
             .description("immediately flush all log output")
             .set_true(&log_immediate).hidden();
+    ap.arg().long_name("debug")
+            .description("start in debug mode")
+            .set_true(&s_debug_mode).hidden();
 
     if (!ap.parse(argc, argv))
     {
