@@ -171,9 +171,10 @@ object :: object(replica* r, uint64_t slot, const std::string& n, object_t t, co
     , m_obj_name(n)
     , m_type(t)
     , m_init(init)
-    , m_obj_pid()
     , m_mtx()
     , m_cond(&m_mtx)
+    , m_obj_pid(0)
+    , m_fd(-1)
     , m_has_ctor(false)
     , m_has_rtor(false)
     , m_rtor()
@@ -188,7 +189,6 @@ object :: object(replica* r, uint64_t slot, const std::string& n, object_t t, co
     , m_snap_mtx()
     , m_snap()
     , m_thread(po6::threads::make_thread_wrapper(&object::run, this))
-    , m_fd()
     , m_conditions()
     , m_tick_func()
     , m_tick_interval()
@@ -229,6 +229,8 @@ void
 object :: set_child(pid_t child, int fd)
 {
     po6::threads::mutex::hold hold(&m_mtx);
+    assert(m_obj_pid == 0);
+    assert(m_fd.get() == -1);
     m_obj_pid = child;
     m_fd = fd;
     m_cond.signal();
@@ -252,6 +254,7 @@ void
 object :: ctor()
 {
     po6::threads::mutex::hold hold(&m_mtx);
+    assert(m_obj_pid > 0);
     m_has_ctor = true;
     m_cond.signal();
 }
@@ -260,6 +263,7 @@ void
 object :: rtor(e::unpacker up)
 {
     po6::threads::mutex::hold hold(&m_mtx);
+    assert(m_obj_pid > 0);
     e::slice tf;
     uint64_t cond_size;
     up = up >> m_fail_at >> tf >> m_tick_interval >> e::unpack_varint(cond_size);
@@ -393,8 +397,13 @@ object :: run()
 
     {
         po6::threads::mutex::hold hold(&m_mtx);
+        // Normally, it's bad practice to have a split condition wait like this.
+        // Here, we are explicitly expecting a call to "set_child" that will
+        // trigger the first condition followed by a call to "ctor" or "rtor"
+        // that will trigger the second.  In case of a failure, we'll fall
+        // through to the return.
 
-        while (!m_failed && m_fd.get() < 0)
+        while (!m_failed && m_obj_pid == 0)
         {
             m_cond.wait();
         }
@@ -654,6 +663,7 @@ object :: do_call(const enqueued_call& c)
 
     if (c.func == "__backup__")
     {
+        po6::threads::mutex::hold hold(&m_snap_mtx);
         m_replica->executed(c.p, c.flags, c.command_nonce, c.si, c.request_nonce, REPLICANT_SUCCESS, m_snap);
         return;
     }
@@ -1112,13 +1122,16 @@ object :: fail()
         m_cond.signal();
     }
 
-    int status;
-    pid_t p = waitpid(m_obj_pid, &status, WNOHANG);
-
-    if (p <= 0)
+    if (m_obj_pid > 0)
     {
-        kill(m_obj_pid, SIGKILL);
-        p = waitpid(m_obj_pid, &status, 0);
+        int status;
+        pid_t p = waitpid(m_obj_pid, &status, WNOHANG);
+
+        if (p <= 0)
+        {
+            kill(m_obj_pid, SIGKILL);
+            p = waitpid(m_obj_pid, &status, 0);
+        }
     }
 
     for (std::list<enqueued_cond_wait>::iterator it = cond_waits.begin();

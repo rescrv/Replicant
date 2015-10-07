@@ -361,6 +361,10 @@ check_SCRIPTS += test/chaos.gremlin
 EXTRA_DIST += test/chaos.gremlin
 TESTS += test/chaos.gremlin
 
+check_SCRIPTS += test/leader-rotate.gremlin
+EXTRA_DIST += test/leader-rotate.gremlin
+TESTS += test/leader-rotate.gremlin
+
 ################################################################################
 ################################### Benchmark ##################################
 ################################################################################

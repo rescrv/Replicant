@@ -133,7 +133,6 @@ daemon :: daemon()
     , m_unique_base(0)
     , m_unique_offset(0)
     , m_last_seen()
-    , m_suspect_counts()
     , m_unordered_mtx()
     , m_unordered__cmds()
     , m_unassigned_cmds()
@@ -155,15 +154,13 @@ daemon :: daemon()
     po6::threads::mutex::hold hold(&m_unordered_mtx);
     m_unordered__cmds.set_empty_key(INT64_MAX);
     m_unordered__cmds.set_deleted_key(INT64_MAX - 1);
-    register_periodic(25, &daemon::periodic_scout);
-    register_periodic(25, &daemon::periodic_abdicate);
-    register_periodic(10 * 1000, &daemon::periodic_warn_scout_stuck);
-    register_periodic(1000, &daemon::periodic_submit_dead_nodes);
+    register_periodic(250, &daemon::periodic_scout);
+    register_periodic(500, &daemon::periodic_ping_acceptors);
     register_periodic(1000, &daemon::periodic_generate_nonce_sequence);
-    register_periodic(10, &daemon::periodic_ping_acceptors);
-    register_periodic(100, &daemon::periodic_flush_enqueued_commands);
+    register_periodic(1000, &daemon::periodic_flush_enqueued_commands);
     register_periodic(1000, &daemon::periodic_maintain_objects);
     register_periodic(1000, &daemon::periodic_tick);
+    register_periodic(10 * 1000, &daemon::periodic_warn_scout_stuck);
     register_periodic(10 * 1000, &daemon::periodic_check_address);
     m_gc.register_thread(&m_gc_ts);
 }
@@ -1577,40 +1574,6 @@ daemon :: periodic_scout(uint64_t)
 }
 
 void
-daemon :: periodic_abdicate(uint64_t)
-{
-    if (!m_leader.get())
-    {
-        return;
-    }
-
-    const size_t quorum = m_leader->quorum_size();
-    const std::vector<server_id>& acceptors(m_leader->acceptors());
-    size_t not_suspected = 0;
-
-    for (size_t i = 0; i < acceptors.size(); ++i)
-    {
-        if (!suspect_failed(acceptors[i]))
-        {
-            ++not_suspected;
-        }
-    }
-
-    if (not_suspected < quorum)
-    {
-        LOG(WARNING) << "abdicating leadership of " << m_leader->current_ballot()
-                     << " because only " << not_suspected
-                     << " servers seem to be alive, and we need " << quorum
-                     << " to make progress";
-        m_leader.reset();
-    }
-    else
-    {
-        m_leader->send_all_proposals(this);
-    }
-}
-
-void
 daemon :: periodic_warn_scout_stuck(uint64_t)
 {
     if (!m_scout.get())
@@ -1667,13 +1630,11 @@ daemon :: post_config_change_hook()
 
     m_highest_ballot = std::max(m_highest_ballot, m_acceptor.current_ballot());
     m_last_seen.resize(m_config.servers().size());
-    m_suspect_counts.resize(m_config.servers().size());
     const uint64_t now = po6::monotonic_time();
 
     for (size_t i = 0; i < m_last_seen.size(); ++i)
     {
         m_last_seen[i] = now;
-        m_suspect_counts[i] = 0;
     }
 
     periodic_generate_nonce_sequence(now);
@@ -2107,6 +2068,11 @@ daemon :: process_call_robust(server_id si,
 void
 daemon :: periodic_tick(uint64_t)
 {
+    if (!m_leader.get())
+    {
+        return;
+    }
+
     const uint64_t tick = m_replica->last_tick();
     std::string cmd;
     e::packer pa(&cmd);
@@ -2220,44 +2186,7 @@ daemon :: suspect_failed(server_id si)
         }
     }
 
-    return !m_config.has(si);
-}
-
-void
-daemon :: periodic_submit_dead_nodes(uint64_t)
-{
-    const std::vector<server>& servers(m_config.servers());
-    assert(m_last_seen.size() == servers.size());
-    assert(m_suspect_counts.size() == servers.size());
-    assert(!m_last_seen.empty());
-    const uint64_t now = po6::monotonic_time();
-    const uint64_t last = *std::max_element(m_last_seen.begin(), m_last_seen.end());
-    const uint64_t self_suspicion = now - last;
-
-    for (size_t i = 0; i < servers.size(); ++i)
-    {
-        const uint64_t diff = now - m_last_seen[i];
-        const uint64_t susp = diff - self_suspicion;
-
-        if (servers[i].id != m_us.id && susp > m_replica->current_settings().SUSPECT_TIMEOUT)
-        {
-            ++m_suspect_counts[i];
-
-            if (m_suspect_counts[i] >= m_replica->current_settings().SUSPECT_STRIKES)
-            {
-                uint64_t strike_num = m_replica->strike_number(servers[i].id);
-                std::string cmd;
-                e::packer pa(&cmd);
-                pa = pa << servers[i].id << strike_num;
-                enqueue_paxos_command(SLOT_SERVER_RECORD_STRIKE, cmd);
-                m_suspect_counts[i] = 0;
-            }
-        }
-        else
-        {
-            m_suspect_counts[i] = 0;
-        }
-    }
+    return true;
 }
 
 bool
@@ -2361,34 +2290,6 @@ daemon :: handle_disruption(server_id si)
         if (servers[i].id == si)
         {
             m_last_seen[i] = 0;
-        }
-    }
-
-    // remove invalid messages
-
-    for (std::list<deferred_msg>::iterator it = m_deferred_msgs.begin();
-            it != m_deferred_msgs.end(); )
-    {
-        if (it->si == si)
-        {
-            it = m_deferred_msgs.erase(it);
-        }
-        else
-        {
-            ++it;
-        }
-    }
-
-    for (std::list<deferred_msg>::iterator it = m_msgs_waiting_for_nonces.begin();
-            it != m_msgs_waiting_for_nonces.end(); )
-    {
-        if (it->si == si)
-        {
-            it = m_msgs_waiting_for_nonces.erase(it);
-        }
-        else
-        {
-            ++it;
         }
     }
 }

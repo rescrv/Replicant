@@ -72,6 +72,7 @@ class object
         void set_child(pid_t child, int fd);
         bool failed();
         bool done();
+        // must call set_child before these functions
         void ctor();
         void rtor(e::unpacker up);
         void cond_wait(server_id si, uint64_t nonce,
@@ -125,11 +126,12 @@ class object
         const std::string m_obj_name;
         const object_t m_type;
         const std::string m_init;
-        pid_t m_obj_pid;
 
         // state to be protected by the mutex
         po6::threads::mutex m_mtx;
         po6::threads::cond m_cond;
+        pid_t m_obj_pid;
+        po6::io::fd m_fd;
         bool m_has_ctor;
         bool m_has_rtor;
         std::string m_rtor;
@@ -146,9 +148,8 @@ class object
         po6::threads::mutex m_snap_mtx;
         std::string m_snap;
 
-        // state to only be used by the background thread
+        // state to only be used by the background thread (except at init)
         po6::threads::thread m_thread;
-        po6::io::fd m_fd;
         typedef std::map<std::string, condition*> cond_map_t;
         cond_map_t m_conditions;
         std::string m_tick_func;

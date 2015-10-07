@@ -150,7 +150,6 @@ class daemon
         void send_unordered_command(unordered_command* uc);
         void observe_ballot(const ballot& b);
         void periodic_scout(uint64_t now);
-        void periodic_abdicate(uint64_t now);
         void periodic_warn_scout_stuck(uint64_t now);
         bool post_config_change_hook(); // true if good; false if need to exit
         void bootstrap_thread();
@@ -219,7 +218,6 @@ class daemon
                           e::unpacker up);
         void periodic_ping_acceptors(uint64_t now);
         bool suspect_failed(server_id si);
-        void periodic_submit_dead_nodes(uint64_t now);
 
     public:
         bool send(server_id si, std::auto_ptr<e::buffer> msg);
@@ -258,7 +256,6 @@ class daemon
 
         // failure detection
         std::vector<uint64_t> m_last_seen;
-        std::vector<uint64_t> m_suspect_counts;
 
         // unordered commands; received from clients, and awaiting consensus
         po6::threads::mutex m_unordered_mtx;

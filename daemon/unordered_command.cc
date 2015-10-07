@@ -59,7 +59,7 @@ unordered_command :: set_command_nonce(uint64_t cn)
 void
 unordered_command :: set_last_used_ballot(const ballot& b)
 {
-    assert(m_last_used_ballot <= b);
+    m_last_used_ballot = b;
 }
 
 void
