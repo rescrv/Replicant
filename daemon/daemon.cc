@@ -144,7 +144,6 @@ daemon :: daemon()
     , m_highest_ballot()
     , m_first_scout(true)
     , m_scout()
-    , m_scouts_since_last_leader(0)
     , m_scout_wait_cycles(0)
     , m_leader()
     , m_replica()
@@ -1131,7 +1130,6 @@ daemon :: process_paxos_phase1b(server_id si,
             m_leader.reset(new leader(*m_scout));
             m_leader->send_all_proposals(this);
             m_scout.reset();
-            m_scouts_since_last_leader = 0;
             m_first_scout = false;
         }
     }
@@ -1240,6 +1238,16 @@ daemon :: process_paxos_learn(server_id si,
 
     if (si == p.b.leader)
     {
+        const std::vector<server>& servers(m_config.servers());
+
+        for (size_t i = 0; i < servers.size(); ++i)
+        {
+            if (servers[i].id == p.b.leader)
+            {
+                m_last_seen[i] = po6::monotonic_time();
+            }
+        }
+
         m_replica->learn(p);
 
         if (m_replica->config().version() > m_config.version())
@@ -1543,8 +1551,7 @@ daemon :: periodic_scout(uint64_t)
         ballot next_ballot(m_highest_ballot.number + 1, m_us.id);
         LOG(INFO) << "starting scout for " << next_ballot;
         m_scout.reset(new scout(next_ballot, &servers[0], servers.size()));
-        m_scouts_since_last_leader += 1ULL << m_config.index(m_us.id);
-        m_scout_wait_cycles = m_scouts_since_last_leader;
+        m_scout_wait_cycles =  1ULL << m_config.index(m_us.id);
         uint64_t start;
         uint64_t limit;
         m_replica->window(&start, &limit);
@@ -2135,6 +2142,16 @@ daemon :: process_pong(server_id si,
                        std::auto_ptr<e::buffer>,
                        e::unpacker up)
 {
+    if (si == m_us.id)
+    {
+        return;
+    }
+
+    if (si == m_acceptor.current_ballot().leader)
+    {
+        return;
+    }
+
     ballot b;
     up = up >> b;
     CHECK_UNPACK(PING, up);
@@ -2165,6 +2182,18 @@ bool
 daemon :: suspect_failed(server_id si)
 {
     assert(!m_last_seen.empty());
+    const std::vector<server>& servers(m_config.servers());
+    assert(m_last_seen.size() == servers.size());
+
+    for (size_t i = 0; i < servers.size(); ++i)
+    {
+        if (servers[i].id == m_us.id)
+        {
+            m_last_seen[i] = *std::min_element(m_last_seen.begin(), m_last_seen.end());
+        }
+    }
+
+
     const uint64_t now = po6::monotonic_time();
     const uint64_t last = *std::max_element(m_last_seen.begin(), m_last_seen.end());
     const uint64_t self_suspicion = now - last;
@@ -2173,8 +2202,6 @@ daemon :: suspect_failed(server_id si)
     {
         return false;
     }
-
-    const std::vector<server>& servers(m_config.servers());
 
     for (size_t i = 0; i < servers.size(); ++i)
     {

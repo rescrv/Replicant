@@ -293,7 +293,6 @@ class daemon
         ballot m_highest_ballot;
         bool m_first_scout;
         std::auto_ptr<scout> m_scout;
-        uint64_t m_scouts_since_last_leader;
         uint64_t m_scout_wait_cycles;
         std::auto_ptr<leader> m_leader;
         std::auto_ptr<replica> m_replica;
