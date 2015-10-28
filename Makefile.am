@@ -1,4 +1,4 @@
-## Copyright (c) 2012-2013, Robert Escriva
+## Copyright (c) 2012-2015, Robert Escriva
 ## All rights reserved.
 ##
 ## Redistribution and use in source and binary forms, with or without
@@ -121,6 +121,7 @@ replicant_daemon_SOURCES += daemon/ballot.cc
 replicant_daemon_SOURCES += daemon/commander.cc
 replicant_daemon_SOURCES += daemon/condition.cc
 replicant_daemon_SOURCES += daemon/daemon.cc
+replicant_daemon_SOURCES += daemon/failure_tracker.cc
 replicant_daemon_SOURCES += daemon/leader.cc
 replicant_daemon_SOURCES += daemon/main.cc
 replicant_daemon_SOURCES += daemon/mapper.cc
@@ -360,6 +361,10 @@ EXTRA_DIST += test/5-node-cluster.gremlin
 check_SCRIPTS += test/chaos.gremlin
 EXTRA_DIST += test/chaos.gremlin
 TESTS += test/chaos.gremlin
+
+check_SCRIPTS += test/restart-diff-address.gremlin
+EXTRA_DIST += test/restart-diff-address.gremlin
+TESTS += test/restart-diff-address.gremlin
 
 check_SCRIPTS += test/leader-rotate.gremlin
 EXTRA_DIST += test/leader-rotate.gremlin

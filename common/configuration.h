@@ -36,6 +36,9 @@
 
 BEGIN_REPLICANT_NAMESPACE
 
+// All configuration methods must be "const" (and no mutable keyword or const
+// cast).
+
 class configuration
 {
     public:

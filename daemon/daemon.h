@@ -55,6 +55,8 @@
 #include "common/configuration.h"
 #include "daemon/acceptor.h"
 #include "daemon/ballot.h"
+#include "daemon/deferred_msg.h"
+#include "daemon/failure_tracker.h"
 #include "daemon/mapper.h"
 #include "daemon/pvalue.h"
 #include "daemon/replica.h"
@@ -88,26 +90,24 @@ class daemon
                 const char* init_rst);
         const server_id id() const { return m_us.id; }
 
+    // getting to steady state
     public:
+        void become_cluster_member(const bootstrap& bs);
         void setup_replica_from_bootstrap(const bootstrap& bs,
                                           std::auto_ptr<replica>* rep);
-        void become_cluster_member(const bootstrap& bs);
+        void send_bootstrap(server_id si);
         void process_bootstrap(server_id si,
                                std::auto_ptr<e::buffer> msg,
                                e::unpacker up);
-        void process_silent_bootstrap(server_id si,
-                                      std::auto_ptr<e::buffer> msg,
-                                      e::unpacker up);
-        void send_bootstrap(server_id si);
         void process_state_transfer(server_id si,
-                                    std::auto_ptr<e::buffer> msg,
-                                    e::unpacker up);
-        void process_suggest_rejoin(server_id si,
                                     std::auto_ptr<e::buffer> msg,
                                     e::unpacker up);
         void process_who_are_you(server_id si,
                                  std::auto_ptr<e::buffer> msg,
                                  e::unpacker up);
+
+    // core Paxos protocol in steady state
+    public:
         void send_paxos_phase1a(server_id to, const ballot& b);
         void process_paxos_phase1a(server_id si,
                                    std::auto_ptr<e::buffer> msg,
@@ -148,12 +148,14 @@ class daemon
         void periodic_flush_enqueued_commands(uint64_t now);
         void convert_unassigned_to_unordered();
         void send_unordered_command(unordered_command* uc);
-        void observe_ballot(const ballot& b);
-        void periodic_scout(uint64_t now);
+        void periodic_maintain(uint64_t now);
+        void periodic_maintain_scout();
+        void periodic_maintain_leader();
+        void periodic_start_scout();
         void periodic_warn_scout_stuck(uint64_t now);
         bool post_config_change_hook(); // true if good; false if need to exit
-        void bootstrap_thread();
 
+    // Manage cluster membership
     public:
         std::string construct_become_member_command(const server& s);
         void process_server_become_member(server_id si,
@@ -161,6 +163,7 @@ class daemon
                                           e::unpacker up);
         void periodic_check_address(uint64_t now);
 
+    // Nonce-oriented stuff
     public:
         void process_unique_number(server_id si,
                                    std::auto_ptr<e::buffer> msg,
@@ -171,12 +174,14 @@ class daemon
         void process_when_nonces_available(server_id si,
                                            std::auto_ptr<e::buffer> msg);
 
+    // Dead objects?
     public:
         void process_object_failed(server_id si,
                                    std::auto_ptr<e::buffer> msg,
                                    e::unpacker up);
         void periodic_maintain_objects(uint64_t now);
 
+    // Callbacks from the replica
     public:
         void callback_condition(server_id si,
                                 uint64_t nonce,
@@ -189,6 +194,7 @@ class daemon
                              replicant_returncode status,
                              const std::string& result);
 
+    // Client-library calls
     public:
         void process_poke(server_id si,
                           std::auto_ptr<e::buffer> msg,
@@ -207,6 +213,7 @@ class daemon
                                  e::unpacker up);
         void periodic_tick(uint64_t now);
 
+    // Pinging to overthrow the leaders
     public:
         void send_ping(server_id si);
         void process_ping(server_id si,
@@ -216,15 +223,16 @@ class daemon
         void process_pong(server_id si,
                           std::auto_ptr<e::buffer> msg,
                           e::unpacker up);
-        void periodic_ping_acceptors(uint64_t now);
-        bool suspect_failed(server_id si);
+        void periodic_ping_servers(uint64_t now);
+
+    public:
+        void rebootstrap(bootstrap b);
 
     public:
         bool send(server_id si, std::auto_ptr<e::buffer> msg);
         bool send_from_non_main_thread(server_id si, std::auto_ptr<e::buffer> msg);
         bool send_when_acceptor_persistent(server_id si, std::auto_ptr<e::buffer> msg);
         void flush_acceptor_messages();
-        void handle_disruption(server_id si);
 
     public:
         void debug_dump();
@@ -232,72 +240,60 @@ class daemon
     private:
         typedef void (daemon::*periodic_fptr)(uint64_t now);
         struct periodic;
+        daemon(const daemon&);
+        daemon& operator = (const daemon&);
         void register_periodic(unsigned interval_ms, periodic_fptr fp);
         void run_periodic();
 
     private:
         e::garbage_collector m_gc;
         e::garbage_collector::thread_state m_gc_ts;
-        mapper m_busybee_mapper;
-        std::auto_ptr<busybee_mta> m_busybee;
-        uint32_t m_busybee_init;
         server m_us;
+        // This mutex must be held whenever non-const operations are performed
+        // on the configuration (mainly assignment), or whenever the config is
+        // accessed outside the main thread that loops from "run".
         po6::threads::mutex m_config_mtx;
         configuration m_config;
-        po6::threads::thread m_bootstrap_thread;
-        bootstrap m_saved_bootstrap;
-        bootstrap m_bootstrap;
+        // This mapper uses the above lock to access the config (potentially
+        // from other threads).
+        mapper m_busybee_mapper;
+        busybee_mta* m_busybee;
+        failure_tracker m_ft;
         std::vector<periodic> m_periodic;
+
+        // Bootstrap when every node in the cluster has changed its address
+        std::auto_ptr<po6::threads::thread> m_bootstrap_thread;
+        uint32_t m_bootstrap_stop;
 
         // generate unique numbers, using a counter in the replica
         uint64_t m_unique_token;
         uint64_t m_unique_base;
         uint64_t m_unique_offset;
 
-        // failure detection
-        std::vector<uint64_t> m_last_seen;
-
         // unordered commands; received from clients, and awaiting consensus
-        po6::threads::mutex m_unordered_mtx;
         typedef google::dense_hash_map<uint64_t, unordered_command*> unordered_map_t;
-        unordered_map_t m_unordered__cmds;
         typedef std::list<unordered_command*> unordered_list_t;
+        po6::threads::mutex m_unordered_mtx;
+        unordered_map_t m_unordered_cmds;
         unordered_list_t m_unassigned_cmds;
 
         // messages enqueued to wait for persistence
-        struct deferred_msg
-        {
-            deferred_msg(uint64_t w, server_id t, e::buffer* m)
-                : when(w), si(t), msg(m) {}
-            deferred_msg(const deferred_msg& other)
-                : when(other.when), si(other.si), msg(other.msg) {}
-            ~deferred_msg() throw () {}
+        std::list<deferred_msg> m_msgs_waiting_for_persistence;
 
-            deferred_msg& operator = (const deferred_msg&);
-
-            uint64_t when;
-            server_id si;
-            e::buffer* msg;
-        };
-        std::list<deferred_msg> m_deferred_msgs;
-
-        // messages waiting to send when BusyBee comes online
-        po6::threads::mutex m_busybee_queue_mtx;
-        std::list<deferred_msg> m_busybee_queue;
-
-        // messages waiting for nonces
+        // messages waiting for nonces are sent to this server by a client.
+        // They require a nonce to be available to be properly processed.  When
+        // nonces become available, these messages will be re-delivered via
+        // busybee.
         std::list<deferred_msg> m_msgs_waiting_for_nonces;
 
         // paxos state
         acceptor m_acceptor;
-        ballot m_highest_ballot;
-        bool m_first_scout;
         std::auto_ptr<scout> m_scout;
         uint64_t m_scout_wait_cycles;
         std::auto_ptr<leader> m_leader;
         std::auto_ptr<replica> m_replica;
-        uint64_t m_last_replica_snapshot;
-        uint64_t m_last_gc_slot;
+        uint64_t m_last_replica_snapshot; // XXX remove
+        uint64_t m_last_gc_slot; // XXX remove
 };
 
 END_REPLICANT_NAMESPACE

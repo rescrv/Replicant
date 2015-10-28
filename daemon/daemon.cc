@@ -119,30 +119,24 @@ handle_debug_mode(int /*signum*/)
 daemon :: daemon()
     : m_gc()
     , m_gc_ts()
-    , m_busybee_mapper(&m_config_mtx, &m_config)
-    , m_busybee()
-    , m_busybee_init(0)
     , m_us()
     , m_config_mtx()
     , m_config()
-    , m_bootstrap_thread(po6::threads::make_thread_wrapper(&daemon::bootstrap_thread, this))
-    , m_saved_bootstrap()
-    , m_bootstrap()
+    , m_busybee_mapper(&m_config_mtx, &m_config)
+    , m_busybee(NULL)
+    , m_ft(&m_config)
     , m_periodic()
+    , m_bootstrap_thread()
+    , m_bootstrap_stop(0)
     , m_unique_token(0)
     , m_unique_base(0)
     , m_unique_offset(0)
-    , m_last_seen()
     , m_unordered_mtx()
-    , m_unordered__cmds()
+    , m_unordered_cmds()
     , m_unassigned_cmds()
-    , m_deferred_msgs()
-    , m_busybee_queue_mtx()
-    , m_busybee_queue()
+    , m_msgs_waiting_for_persistence()
     , m_msgs_waiting_for_nonces()
     , m_acceptor()
-    , m_highest_ballot()
-    , m_first_scout(true)
     , m_scout()
     , m_scout_wait_cycles(0)
     , m_leader()
@@ -151,10 +145,10 @@ daemon :: daemon()
     , m_last_gc_slot(0)
 {
     po6::threads::mutex::hold hold(&m_unordered_mtx);
-    m_unordered__cmds.set_empty_key(INT64_MAX);
-    m_unordered__cmds.set_deleted_key(INT64_MAX - 1);
-    register_periodic(250, &daemon::periodic_scout);
-    register_periodic(500, &daemon::periodic_ping_acceptors);
+    m_unordered_cmds.set_empty_key(INT64_MAX);
+    m_unordered_cmds.set_deleted_key(INT64_MAX - 1);
+    register_periodic(250, &daemon::periodic_maintain);
+    register_periodic(500, &daemon::periodic_ping_servers);
     register_periodic(1000, &daemon::periodic_generate_nonce_sequence);
     register_periodic(1000, &daemon::periodic_flush_enqueued_commands);
     register_periodic(1000, &daemon::periodic_maintain_objects);
@@ -168,16 +162,16 @@ daemon :: ~daemon() throw ()
 {
     po6::threads::mutex::hold hold(&m_unordered_mtx);
 
-    for (unordered_map_t::iterator it = m_unordered__cmds.begin();
-            it != m_unordered__cmds.end(); ++it)
+    for (unordered_map_t::iterator it = m_unordered_cmds.begin();
+            it != m_unordered_cmds.end(); ++it)
     {
         delete it->second;
     }
 
-    while (!m_deferred_msgs.empty())
+    while (!m_msgs_waiting_for_persistence.empty())
     {
-        delete m_deferred_msgs.front().msg;
-        m_deferred_msgs.pop_front();
+        delete m_msgs_waiting_for_persistence.front().msg;
+        m_msgs_waiting_for_persistence.pop_front();
     }
 
     while (!m_msgs_waiting_for_nonces.empty())
@@ -382,7 +376,6 @@ daemon :: run(bool daemonize,
         m_config_mtx.lock();
         m_config = configuration(cluster_id(cluster), version_id(1), 0, &m_us, 1);
         m_config_mtx.unlock();
-        m_config.current_bootstrap().conn_str();
         saved_bootstrap = m_config.current_bootstrap();
         LOG(INFO) << "starting " << m_config.cluster() << " from this server (" << m_us << ")";
         init = init_obj && init_lib;
@@ -470,8 +463,6 @@ daemon :: run(bool daemonize,
         }
     }
 
-    m_saved_bootstrap = saved_bootstrap;
-
     if (!m_acceptor.save(m_us, saved_bootstrap))
     {
         return EXIT_FAILURE;
@@ -483,7 +474,7 @@ daemon :: run(bool daemonize,
                   << "but we are not initializing a new cluster";
         LOG(INFO) << "the restore operations only have an effect when "
                   << "starting a fresh cluster";
-        LOG(INFO) << "this likely means you'll want to start with a new data-dir "
+        LOG(INFO) << "this means you'll want to start with a new data-dir "
                   << "and omit any options for connecting to an existing cluster";
         return EXIT_FAILURE;
     }
@@ -506,12 +497,16 @@ daemon :: run(bool daemonize,
             }
 
             atomically_allow_pending_blocked_signals();
-            LOG(INFO) << "this server still not visible in the configuration; retrying in 1s";
+
+            if (i + 1 < 10)
+            {
+                LOG(INFO) << "this server still not visible in the configuration; retrying in 1s";
+            }
+
             timespec ts;
             ts.tv_sec = 1;
             ts.tv_nsec = 0;
             nanosleep(&ts, NULL);
-            atomically_allow_pending_blocked_signals();
         }
     }
 
@@ -523,25 +518,12 @@ daemon :: run(bool daemonize,
         return EXIT_FAILURE;
     }
 
-    m_busybee.reset(new busybee_mta(&m_gc, &m_busybee_mapper, m_us.bind_to, m_us.id.get(), 0/*we don't use pause/unpause*/));
-
-    {
-        po6::threads::mutex::hold hold(&m_busybee_queue_mtx);
-        e::atomic::store_32_release(&m_busybee_init, 1);
-
-        while (!m_busybee_queue.empty())
-        {
-            const deferred_msg& dm(m_busybee_queue.front());
-            std::auto_ptr<e::buffer> msg(dm.msg);
-            send_from_non_main_thread(dm.si, msg);
-            m_busybee_queue.pop_front();
-        }
-    }
-
     assert(m_replica.get());
     m_config_mtx.lock();
     m_config = m_replica->config();
     m_config_mtx.unlock();
+    e::atomic::store_ptr_release(&m_busybee, new busybee_mta(&m_gc, &m_busybee_mapper, m_us.bind_to, m_us.id.get(), 0));
+    m_ft.set_server_id(m_us.id);
 
     if (!post_config_change_hook())
     {
@@ -616,7 +598,9 @@ daemon :: run(bool daemonize,
         }
     }
 
-    m_bootstrap_thread.start();
+    e::atomic::store_32_nobarrier(&m_bootstrap_stop, 0);
+    m_bootstrap_thread.reset(new po6::threads::thread(po6::threads::make_thread_wrapper(&daemon::rebootstrap, this, saved_bootstrap)));
+    m_bootstrap_thread->start();
 
     while (__sync_fetch_and_add(&s_interrupts, 0) == 0)
     {
@@ -665,7 +649,6 @@ daemon :: run(bool daemonize,
 
                 continue;
             case BUSYBEE_DISRUPTED:
-                handle_disruption(server_id(token));
                 continue;
             case BUSYBEE_SHUTDOWN:
             case BUSYBEE_POLLFAILED:
@@ -689,14 +672,8 @@ daemon :: run(bool daemonize,
             case REPLNET_BOOTSTRAP:
                 process_bootstrap(si, msg, up);
                 break;
-            case REPLNET_SILENT_BOOTSTRAP:
-                process_silent_bootstrap(si, msg, up);
-                break;
             case REPLNET_STATE_TRANSFER:
                 process_state_transfer(si, msg, up);
-                break;
-            case REPLNET_SUGGEST_REJOIN:
-                process_suggest_rejoin(si, msg, up);
                 break;
             case REPLNET_WHO_ARE_YOU:
                 process_who_are_you(si, msg, up);
@@ -760,88 +737,12 @@ daemon :: run(bool daemonize,
         }
     }
 
-    m_bootstrap_thread.join();
+    e::atomic::store_32_nobarrier(&m_bootstrap_stop, 1);
+    m_bootstrap_thread->join();
+
     LOG(INFO) << "replicant is gracefully shutting down";
     LOG(INFO) << "replicant will now terminate";
     return EXIT_SUCCESS;
-}
-
-void
-daemon :: setup_replica_from_bootstrap(const bootstrap& current,
-                                       std::auto_ptr<replica>* rep)
-{
-    LOG(INFO) << "copying replica state from existing cluster using " << current;
-    configuration c;
-    e::error err;
-    bool has_err = false;
-    rep->reset();
-
-    for (unsigned iteration = 0; __sync_fetch_and_add(&s_interrupts, 0) == 0 && iteration < 100; ++iteration)
-    {
-        replicant_returncode rc = current.do_it(10000, &c, &err);
-        atomically_allow_pending_blocked_signals();
-
-        if (rc == REPLICANT_TIMEOUT)
-        {
-            continue;
-        }
-        else if (rc != REPLICANT_SUCCESS)
-        {
-            has_err = true;
-            continue;
-        }
-
-        for (size_t i = 0; !rep->get() && i < c.servers().size(); ++i)
-        {
-            busybee_single bs(c.servers()[i].bind_to);
-            const size_t sz = BUSYBEE_HEADER_SIZE
-                            + pack_size(REPLNET_STATE_TRANSFER);
-            std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
-            msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_STATE_TRANSFER;
-            bs.send(msg);
-            bs.recv(&msg);
-
-            if (!msg.get())
-            {
-                continue;
-            }
-
-            network_msgtype mt;
-            uint64_t slot;
-            e::slice snapshot;
-            e::unpacker up = msg->unpack_from(BUSYBEE_HEADER_SIZE);
-            up = up >> mt >> slot >> snapshot;
-
-            if (!up.error())
-            {
-                rep->reset(replica::from_snapshot(this, snapshot));
-
-                if (rep->get())
-                {
-                    uint64_t snapshot_slot;
-                    std::auto_ptr<e::buffer> snapshot_backing;
-                    (*rep)->take_blocking_snapshot(&snapshot_slot, &snapshot, &snapshot_backing);
-
-                    if (!m_acceptor.record_snapshot(snapshot_slot, snapshot))
-                    {
-                        LOG(ERROR) << "error saving starting replica state to disk: " << po6::strerror(errno);
-                        rep->reset();
-                    }
-
-                    return;
-                }
-            }
-        }
-    }
-
-    if (has_err)
-    {
-        LOG(ERROR) << "replica state transfer encountered an error: " << err.msg();
-    }
-    else
-    {
-        LOG(ERROR) << "replica state transfer timed out, or was interrupted by the user";
-    }
 }
 
 void
@@ -935,6 +836,95 @@ daemon :: become_cluster_member(const bootstrap& current)
 }
 
 void
+daemon :: setup_replica_from_bootstrap(const bootstrap& current,
+                                       std::auto_ptr<replica>* rep)
+{
+    LOG(INFO) << "copying replica state from existing cluster using " << current;
+    configuration c;
+    e::error err;
+    bool has_err = false;
+    rep->reset();
+
+    for (unsigned iteration = 0; __sync_fetch_and_add(&s_interrupts, 0) == 0 && iteration < 100; ++iteration)
+    {
+        replicant_returncode rc = current.do_it(10000, &c, &err);
+        atomically_allow_pending_blocked_signals();
+
+        if (rc == REPLICANT_TIMEOUT)
+        {
+            continue;
+        }
+        else if (rc != REPLICANT_SUCCESS)
+        {
+            has_err = true;
+            continue;
+        }
+
+        for (size_t i = 0; !rep->get() && i < c.servers().size(); ++i)
+        {
+            busybee_single bs(c.servers()[i].bind_to);
+            const size_t sz = BUSYBEE_HEADER_SIZE
+                            + pack_size(REPLNET_STATE_TRANSFER);
+            std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
+            msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_STATE_TRANSFER;
+            bs.send(msg);
+            bs.recv(&msg);
+
+            if (!msg.get())
+            {
+                continue;
+            }
+
+            network_msgtype mt;
+            uint64_t slot;
+            e::slice snapshot;
+            e::unpacker up = msg->unpack_from(BUSYBEE_HEADER_SIZE);
+            up = up >> mt >> slot >> snapshot;
+
+            if (!up.error())
+            {
+                rep->reset(replica::from_snapshot(this, snapshot));
+
+                if (rep->get())
+                {
+                    uint64_t snapshot_slot;
+                    std::auto_ptr<e::buffer> snapshot_backing;
+                    (*rep)->take_blocking_snapshot(&snapshot_slot, &snapshot, &snapshot_backing);
+
+                    if (!m_acceptor.record_snapshot(snapshot_slot, snapshot))
+                    {
+                        LOG(ERROR) << "error saving starting replica state to disk: " << po6::strerror(errno);
+                        rep->reset();
+                    }
+
+                    return;
+                }
+            }
+        }
+    }
+
+    if (has_err)
+    {
+        LOG(ERROR) << "replica state transfer encountered an error: " << err.msg();
+    }
+    else
+    {
+        LOG(ERROR) << "replica state transfer timed out, or was interrupted by the user";
+    }
+}
+
+void
+daemon :: send_bootstrap(server_id si)
+{
+    size_t sz = BUSYBEE_HEADER_SIZE
+              + pack_size(REPLNET_BOOTSTRAP)
+              + pack_size(m_config);
+    std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
+    msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_BOOTSTRAP << m_config;
+    send(si, msg);
+}
+
+void
 daemon :: process_bootstrap(server_id si,
                             std::auto_ptr<e::buffer>,
                             e::unpacker)
@@ -951,25 +941,6 @@ daemon :: process_bootstrap(server_id si,
     }
 
     send_bootstrap(si);
-}
-
-void
-daemon :: process_silent_bootstrap(server_id si,
-                                   std::auto_ptr<e::buffer>,
-                                   e::unpacker)
-{
-    send_bootstrap(si);
-}
-
-void
-daemon :: send_bootstrap(server_id si)
-{
-    size_t sz = BUSYBEE_HEADER_SIZE
-              + pack_size(REPLNET_BOOTSTRAP)
-              + pack_size(m_config);
-    std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
-    msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_BOOTSTRAP << m_config;
-    send(si, msg);
 }
 
 void
@@ -1000,34 +971,6 @@ daemon :: process_state_transfer(server_id si,
     msg->pack_at(BUSYBEE_HEADER_SIZE)
         << REPLNET_STATE_TRANSFER << snapshot_slot << snapshot;
     send(si, msg);
-}
-
-void
-daemon :: process_suggest_rejoin(server_id,
-                                 std::auto_ptr<e::buffer>,
-                                 e::unpacker up)
-{
-    uint64_t lowest;
-    up = up >> lowest;
-    CHECK_UNPACK(SUGGEST_REJOIN, up);
-
-    if (lowest <= m_acceptor.lowest_acceptable_slot())
-    {
-        return;
-    }
-
-    std::auto_ptr<replica> new_replica;
-    setup_replica_from_bootstrap(m_saved_bootstrap, &new_replica);
-
-    if (new_replica.get() &&
-        m_replica->config().cluster() == new_replica->config().cluster())
-    {
-        m_scout.reset();
-        m_leader.reset();
-        m_replica = new_replica;
-        m_acceptor.garbage_collect(m_replica->gc_up_to());
-        post_config_change_hook();
-    }
 }
 
 void
@@ -1066,13 +1009,20 @@ daemon :: process_paxos_phase1a(server_id si,
     if (si == b.leader && b > m_acceptor.current_ballot())
     {
         m_acceptor.adopt(b);
+
+        if (b.leader != m_us.id)
+        {
+            m_scout.reset();
+            m_leader.reset();
+        }
+
+        m_ft.proof_of_life(si);
         LOG(INFO) << "phase 1a:  taking up " << b;
         flush_enqueued_commands_with_stale_leader();
     }
 
     LOG_IF(ERROR, si != b.leader) << si << " is misusing " << b;
     send_paxos_phase1b(b.leader);
-    observe_ballot(b);
 }
 
 void
@@ -1118,7 +1068,7 @@ daemon :: process_paxos_phase1b(server_id si,
 
         for (size_t i = 0; i < missing.size(); ++i)
         {
-            if (!suspect_failed(missing[i]))
+            if (!m_ft.suspect_failed(missing[i], m_replica->current_settings().SUSPECT_TIMEOUT))
             {
                 all_missing_are_suspected = false;
             }
@@ -1130,11 +1080,8 @@ daemon :: process_paxos_phase1b(server_id si,
             m_leader.reset(new leader(*m_scout));
             m_leader->send_all_proposals(this);
             m_scout.reset();
-            m_first_scout = false;
         }
     }
-
-    observe_ballot(b);
 }
 
 void
@@ -1159,12 +1106,6 @@ daemon :: process_paxos_phase2a(server_id si,
 
     if (p.s < m_acceptor.lowest_acceptable_slot())
     {
-        size_t sz = BUSYBEE_HEADER_SIZE
-                  + pack_size(REPLNET_SUGGEST_REJOIN)
-                  + sizeof(uint64_t);
-        std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
-        msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_SUGGEST_REJOIN << m_acceptor.lowest_acceptable_slot();
-        send(si, msg);
         return;
     }
 
@@ -1212,8 +1153,6 @@ daemon :: process_paxos_phase2b(server_id si,
 
         LOG_IF(INFO, s_debug_mode) << "p2b: " << p;
     }
-
-    observe_ballot(b);
 }
 
 void
@@ -1238,17 +1177,8 @@ daemon :: process_paxos_learn(server_id si,
 
     if (si == p.b.leader)
     {
-        const std::vector<server>& servers(m_config.servers());
-
-        for (size_t i = 0; i < servers.size(); ++i)
-        {
-            if (servers[i].id == p.b.leader)
-            {
-                m_last_seen[i] = po6::monotonic_time();
-            }
-        }
-
         m_replica->learn(p);
+        m_ft.proof_of_life(p.b.leader);
 
         if (m_replica->config().version() > m_config.version())
         {
@@ -1316,6 +1246,8 @@ daemon :: process_paxos_learn(server_id si,
                 m_leader->garbage_collect(m_last_gc_slot);
             }
         }
+
+        e::atomic::store_32_nobarrier(&m_bootstrap_stop, 1);
     }
     else
     {
@@ -1335,6 +1267,11 @@ daemon :: send_paxos_submit(uint64_t slot_start,
     std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
     msg->pack_at(BUSYBEE_HEADER_SIZE)
         << REPLNET_PAXOS_SUBMIT << slot_start << slot_limit << command;
+    LOG_IF(INFO, s_debug_mode) << "submitting to "
+                               << m_acceptor.current_ballot().leader
+                               << " command: [" << slot_start << ", "
+                               << slot_limit << ") "
+                               << e::strescape(std::string(command.cdata(), command.size()));
     send(m_acceptor.current_ballot().leader, msg);
 }
 
@@ -1380,22 +1317,17 @@ daemon :: enqueue_paxos_command(server_id on_behalf_of,
 {
     unordered_command* uc = new unordered_command(on_behalf_of, request_nonce, t, command);
     uint64_t command_nonce;
+    po6::threads::mutex::hold hold(&m_unordered_mtx);
 
-    if ((m_unordered__cmds.size() >= REPLICANT_COMMANDS_TO_LEADER && t == SLOT_CALL) ||
+    if ((m_unordered_cmds.size() >= REPLICANT_COMMANDS_TO_LEADER && t == SLOT_CALL) ||
         !generate_nonce(&command_nonce))
     {
-        po6::threads::mutex::hold hold(&m_unordered_mtx);
         m_unassigned_cmds.push_back(uc);
         return;
     }
 
     uc->set_command_nonce(command_nonce);
-
-    {
-        po6::threads::mutex::hold hold(&m_unordered_mtx);
-        m_unordered__cmds[command_nonce] = uc;
-    }
-
+    m_unordered_cmds[command_nonce] = uc;
     send_unordered_command(uc);
 }
 
@@ -1412,7 +1344,7 @@ daemon :: enqueue_robust_paxos_command(server_id on_behalf_of,
 
     {
         po6::threads::mutex::hold hold(&m_unordered_mtx);
-        m_unordered__cmds[command_nonce] = uc;
+        m_unordered_cmds[command_nonce] = uc;
     }
 
     uc->set_lowest_possible_slot(min_slot);
@@ -1425,8 +1357,8 @@ daemon :: flush_enqueued_commands_with_stale_leader()
 {
     po6::threads::mutex::hold hold(&m_unordered_mtx);
 
-    for (unordered_map_t::iterator it = m_unordered__cmds.begin();
-            it != m_unordered__cmds.end(); ++it)
+    for (unordered_map_t::iterator it = m_unordered_cmds.begin();
+            it != m_unordered_cmds.end(); ++it)
     {
         unordered_command* uc = it->second;
 
@@ -1443,9 +1375,9 @@ daemon :: periodic_flush_enqueued_commands(uint64_t)
     convert_unassigned_to_unordered();
     po6::threads::mutex::hold hold(&m_unordered_mtx);
 
-    if (!m_unordered__cmds.empty())
+    if (!m_unordered_cmds.empty())
     {
-        send_unordered_command(m_unordered__cmds.begin()->second);
+        send_unordered_command(m_unordered_cmds.begin()->second);
     }
 }
 
@@ -1454,7 +1386,7 @@ daemon :: convert_unassigned_to_unordered()
 {
     po6::threads::mutex::hold hold(&m_unordered_mtx);
 
-    while (!m_unassigned_cmds.empty() && m_unordered__cmds.size() < REPLICANT_COMMANDS_TO_LEADER)
+    while (!m_unassigned_cmds.empty() && m_unordered_cmds.size() < REPLICANT_COMMANDS_TO_LEADER)
     {
         uint64_t command_nonce;
 
@@ -1466,7 +1398,7 @@ daemon :: convert_unassigned_to_unordered()
         unordered_command* uc = m_unassigned_cmds.front();
         m_unassigned_cmds.pop_front();
         uc->set_command_nonce(command_nonce);
-        m_unordered__cmds[command_nonce] = uc;
+        m_unordered_cmds[command_nonce] = uc;
         send_unordered_command(uc);
     }
 }
@@ -1511,73 +1443,96 @@ daemon :: send_unordered_command(unordered_command* uc)
 }
 
 void
-daemon :: observe_ballot(const ballot& b)
+daemon :: periodic_maintain(uint64_t)
 {
-    m_highest_ballot = std::max(b, m_highest_ballot);
-
-    if (m_scout.get() && m_scout->current_ballot() < m_highest_ballot)
+    if (m_scout.get())
     {
-        LOG(INFO) << "stopping " << *m_scout << " because " << m_highest_ballot << " is floating around";
-        m_scout.reset();
+        periodic_maintain_scout();
     }
-
-    if (m_leader.get() && m_leader->current_ballot() < m_highest_ballot)
+    else if (m_leader.get())
     {
-        LOG(INFO) << "stopping " << *m_leader << " because " << m_highest_ballot << " is floating around";
-        m_leader.reset();
+        periodic_maintain_leader();
+    }
+    else
+    {
+        periodic_start_scout();
     }
 }
 
 void
-daemon :: periodic_scout(uint64_t)
+daemon :: periodic_maintain_scout()
 {
-    if (m_leader.get())
-    {
-        return;
-    }
-
-    if (!m_scout.get() && m_scout_wait_cycles == 0)
-    {
-        if (!m_first_scout &&
-            !m_replica->discontinuous() &&
-            m_acceptor.current_ballot().leader != server_id() &&
-            m_acceptor.current_ballot().leader != m_us.id &&
-            !suspect_failed(m_acceptor.current_ballot().leader))
-        {
-            return;
-        }
-
-        std::vector<server_id> servers = m_config.server_ids();
-        ballot next_ballot(m_highest_ballot.number + 1, m_us.id);
-        LOG(INFO) << "starting scout for " << next_ballot;
-        m_scout.reset(new scout(next_ballot, &servers[0], servers.size()));
-        m_scout_wait_cycles =  1ULL << m_config.index(m_us.id);
-        uint64_t start;
-        uint64_t limit;
-        m_replica->window(&start, &limit);
-        m_scout->set_window(start, limit);
-    }
-
-    if (m_scout_wait_cycles > 0)
-    {
-        --m_scout_wait_cycles;
-        return;
-    }
-
     assert(m_scout.get());
-
-    if (m_acceptor.current_ballot() > m_scout->current_ballot())
-    {
-        m_scout.reset();
-        return;
-    }
-
     std::vector<server_id> sids = m_scout->missing();
 
     for (size_t i = 0; i < sids.size(); ++i)
     {
         send_paxos_phase1a(sids[i], m_scout->current_ballot());
     }
+}
+
+void
+daemon :: periodic_maintain_leader()
+{
+    assert(m_leader.get());
+    m_leader->send_all_proposals(this);
+}
+
+void
+daemon :: periodic_start_scout()
+{
+    if (m_scout_wait_cycles == 0)
+    {
+        m_scout_wait_cycles =  1ULL << m_config.index(m_us.id);
+    }
+    else if (m_scout_wait_cycles == 1)
+    {
+        m_scout_wait_cycles = 0;
+    }
+    else
+    {
+        --m_scout_wait_cycles;
+        return;
+    }
+
+    ballot next_ballot(m_acceptor.current_ballot().number + 1, m_us.id);
+
+    if (m_replica->discontinuous())
+    {
+        LOG(INFO) << "starting scout for " << next_ballot
+                  << " because our ledger is discontinuous";
+    }
+    else if (m_acceptor.current_ballot().leader == server_id())
+    {
+        LOG(INFO) << "starting scout for " << next_ballot
+                  << " because there is no ballot floating around";
+    }
+    else if (m_acceptor.current_ballot().leader == m_us.id)
+    {
+        LOG(INFO) << "starting scout for " << next_ballot
+                  << " because the currently adopted ballot"
+                  << " comes from this server in a previous"
+                  << " execution";
+    }
+    else if (m_ft.suspect_failed(m_acceptor.current_ballot().leader, m_replica->current_settings().SUSPECT_TIMEOUT))
+    {
+        LOG(INFO) << "starting scout for " << next_ballot
+                  << " because we suspect "
+                  << m_acceptor.current_ballot().leader
+                  << " is incapbable of leading";
+    }
+    else
+    {
+        return;
+    }
+
+    std::vector<server_id> servers = m_config.server_ids();
+    m_scout.reset(new scout(next_ballot, &servers[0], servers.size()));
+    uint64_t start;
+    uint64_t limit;
+    m_replica->window(&start, &limit);
+    m_scout->set_window(start, limit);
+    periodic_maintain_scout();
 }
 
 void
@@ -1593,7 +1548,7 @@ daemon :: periodic_warn_scout_stuck(uint64_t)
 
     for (size_t i = 0; i < missing.size(); ++i)
     {
-        if (!suspect_failed(missing[i]))
+        if (!m_ft.suspect_failed(missing[i], m_replica->current_settings().SUSPECT_TIMEOUT))
         {
             all_missing_are_suspected = false;
         }
@@ -1621,9 +1576,7 @@ daemon :: periodic_warn_scout_stuck(uint64_t)
 bool
 daemon :: post_config_change_hook()
 {
-    m_bootstrap = m_config.current_bootstrap();
-
-    while (!m_config.has(m_us.id))
+    if (!m_config.has(m_us.id))
     {
         LOG(WARNING) << "exiting because we were removed from the configuration";
         m_scout.reset();
@@ -1632,104 +1585,9 @@ daemon :: post_config_change_hook()
         return false;
     }
 
-    // don't move code above to below and vice versa
-    // this is a comment barrier
-
-    m_highest_ballot = std::max(m_highest_ballot, m_acceptor.current_ballot());
-    m_last_seen.resize(m_config.servers().size());
-    const uint64_t now = po6::monotonic_time();
-
-    for (size_t i = 0; i < m_last_seen.size(); ++i)
-    {
-        m_last_seen[i] = now;
-    }
-
-    periodic_generate_nonce_sequence(now);
+    m_ft.assume_all_alive();
     m_busybee_mapper.clear_aux();
     return true;
-}
-
-void
-daemon :: bootstrap_thread()
-{
-    sigset_t ss;
-
-    if (sigfillset(&ss) < 0)
-    {
-        PLOG(ERROR) << "sigfillset";
-        LOG(ERROR) << "could not successfully block signals; this could result in undefined behavior";
-        return;
-    }
-
-    if (pthread_sigmask(SIG_BLOCK, &ss, NULL) < 0)
-    {
-        PLOG(ERROR) << "could not block signals";
-        LOG(ERROR) << "could not successfully block signals; this could result in undefined behavior";
-        return;
-    }
-
-    bootstrap bs = m_saved_bootstrap;
-    const std::vector<po6::net::hostname>& hosts(bs.hosts());
-    timespec ts;
-    ts.tv_sec = 0;
-    ts.tv_nsec = 50 * 1000ULL * 1000ULL;
-    uint64_t count = 0;
-
-    while (__sync_fetch_and_add(&s_interrupts, 0) == 0)
-    {
-        nanosleep(&ts, NULL);
-        ++count;
-
-        if (count % 20 != 0)
-        {
-            continue;
-        }
-
-        configuration config;
-
-        {
-            po6::threads::mutex::hold hold(&m_config_mtx);
-            config = m_config;
-        }
-
-        for (size_t i = 0; i < hosts.size(); ++i)
-        {
-            const size_t sz = BUSYBEE_HEADER_SIZE
-                            + pack_size(REPLNET_WHO_ARE_YOU);
-            std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
-            msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_WHO_ARE_YOU;
-            busybee_single bbs(hosts[i]);
-
-            if (bbs.send(msg) != BUSYBEE_SUCCESS)
-            {
-                continue;
-            }
-
-            bbs.set_timeout(1000);
-
-            if (bbs.recv(&msg) != BUSYBEE_SUCCESS)
-            {
-                continue;
-            }
-
-            network_msgtype mt = REPLNET_NOP;
-            server s;
-            e::unpacker up = msg->unpack_from(BUSYBEE_HEADER_SIZE);
-            up >> mt >> s;
-
-            if (up.error() || mt != REPLNET_IDENTITY)
-            {
-                continue;
-            }
-
-            const server* sptr = config.get(s.id);
-
-            if (!sptr || sptr->bind_to != s.bind_to)
-            {
-                m_busybee_mapper.add_aux(s);
-            }
-        }
-    }
 }
 
 std::string
@@ -1937,16 +1795,16 @@ daemon :: callback_enqueued(uint64_t command_nonce,
     *request_nonce = 0;
     convert_unassigned_to_unordered();
     po6::threads::mutex::hold hold(&m_unordered_mtx);
-    unordered_map_t::iterator it = m_unordered__cmds.find(command_nonce);
+    unordered_map_t::iterator it = m_unordered_cmds.find(command_nonce);
 
-    if (it == m_unordered__cmds.end())
+    if (it == m_unordered_cmds.end())
     {
         return;
     }
 
     unordered_command* uc = it->second;
     assert(uc->command_nonce() == command_nonce);
-    m_unordered__cmds.erase(it);
+    m_unordered_cmds.erase(it);
     *si = uc->on_behalf_of();
     *request_nonce = uc->request_nonce();
     delete uc;
@@ -2096,11 +1954,6 @@ daemon :: periodic_tick(uint64_t)
 void
 daemon :: send_ping(server_id to)
 {
-    if (to == m_us.id)
-    {
-        return;
-    }
-
     size_t sz = BUSYBEE_HEADER_SIZE
               + pack_size(REPLNET_PING)
               + pack_size(m_acceptor.current_ballot());
@@ -2118,102 +1971,124 @@ daemon :: process_ping(server_id si,
     up = up >> b;
     CHECK_UNPACK(PING, up);
     send_pong(si);
-    m_highest_ballot = std::max(b, m_highest_ballot);
 }
 
 void
 daemon :: send_pong(server_id to)
 {
-    if (to == m_us.id)
-    {
-        return;
-    }
-
     size_t sz = BUSYBEE_HEADER_SIZE
-              + pack_size(REPLNET_PONG)
-              + pack_size(m_acceptor.current_ballot());
+              + pack_size(REPLNET_PONG);
     std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
-    msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_PONG << m_acceptor.current_ballot();
+    msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_PONG;
     send(to, msg);
 }
 
 void
 daemon :: process_pong(server_id si,
                        std::auto_ptr<e::buffer>,
-                       e::unpacker up)
+                       e::unpacker)
 {
-    if (si == m_us.id)
+    if (si != m_acceptor.current_ballot().leader)
     {
-        return;
+        m_ft.proof_of_life(si);
     }
+}
 
-    if (si == m_acceptor.current_ballot().leader)
-    {
-        return;
-    }
-
-    ballot b;
-    up = up >> b;
-    CHECK_UNPACK(PING, up);
-    m_highest_ballot = std::max(b, m_highest_ballot);
+void
+daemon :: periodic_ping_servers(uint64_t)
+{
     const std::vector<server>& servers(m_config.servers());
 
     for (size_t i = 0; i < servers.size(); ++i)
     {
-        if (servers[i].id == si)
+        if (servers[i].id != m_us.id)
         {
-            m_last_seen[i] = po6::monotonic_time();
+            send_ping(servers[i].id);
         }
     }
 }
 
 void
-daemon :: periodic_ping_acceptors(uint64_t)
+daemon :: rebootstrap(bootstrap bs)
 {
-    const std::vector<server>& servers(m_config.servers());
+    sigset_t ss;
 
-    for (size_t i = 0; i < servers.size(); ++i)
+    if (sigfillset(&ss) < 0)
     {
-        send_ping(servers[i].id);
+        PLOG(ERROR) << "sigfillset";
+        LOG(ERROR) << "could not successfully block signals; this could result in undefined behavior";
+        return;
     }
-}
 
-bool
-daemon :: suspect_failed(server_id si)
-{
-    assert(!m_last_seen.empty());
-    const std::vector<server>& servers(m_config.servers());
-    assert(m_last_seen.size() == servers.size());
-
-    for (size_t i = 0; i < servers.size(); ++i)
+    if (pthread_sigmask(SIG_BLOCK, &ss, NULL) < 0)
     {
-        if (servers[i].id == m_us.id)
+        PLOG(ERROR) << "could not block signals";
+        LOG(ERROR) << "could not successfully block signals; this could result in undefined behavior";
+        return;
+    }
+
+    const std::vector<po6::net::hostname>& hosts(bs.hosts());
+    timespec ts;
+    ts.tv_sec = 0;
+    ts.tv_nsec = 50 * 1000ULL * 1000ULL;
+    uint64_t count = 0;
+
+    while (__sync_fetch_and_add(&s_interrupts, 0) == 0 &&
+           e::atomic::load_32_nobarrier(&m_bootstrap_stop) == 0)
+    {
+        nanosleep(&ts, NULL);
+        ++count;
+
+        if (count % 20 != 0)
         {
-            m_last_seen[i] = *std::min_element(m_last_seen.begin(), m_last_seen.end());
+            continue;
+        }
+
+        configuration config;
+
+        {
+            po6::threads::mutex::hold hold(&m_config_mtx);
+            config = m_config;
+        }
+
+        for (size_t i = 0; i < hosts.size(); ++i)
+        {
+            const size_t sz = BUSYBEE_HEADER_SIZE
+                            + pack_size(REPLNET_WHO_ARE_YOU);
+            std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
+            msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_WHO_ARE_YOU;
+            busybee_single bbs(hosts[i]);
+
+            if (bbs.send(msg) != BUSYBEE_SUCCESS)
+            {
+                continue;
+            }
+
+            bbs.set_timeout(1000);
+
+            if (bbs.recv(&msg) != BUSYBEE_SUCCESS)
+            {
+                continue;
+            }
+
+            network_msgtype mt = REPLNET_NOP;
+            server s;
+            e::unpacker up = msg->unpack_from(BUSYBEE_HEADER_SIZE);
+            up >> mt >> s;
+
+            if (up.error() || mt != REPLNET_IDENTITY)
+            {
+                continue;
+            }
+
+            const server* sptr = config.get(s.id);
+
+            if (!sptr || sptr->bind_to != s.bind_to)
+            {
+                m_busybee_mapper.add_aux(s);
+            }
         }
     }
-
-
-    const uint64_t now = po6::monotonic_time();
-    const uint64_t last = *std::max_element(m_last_seen.begin(), m_last_seen.end());
-    const uint64_t self_suspicion = now - last;
-
-    if (si == m_us.id)
-    {
-        return false;
-    }
-
-    for (size_t i = 0; i < servers.size(); ++i)
-    {
-        if (servers[i].id == si)
-        {
-            const uint64_t diff = now - m_last_seen[i];
-            const uint64_t susp = diff - self_suspicion;
-            return susp > m_replica->current_settings().SUSPECT_TIMEOUT;
-        }
-    }
-
-    return true;
 }
 
 bool
@@ -2231,7 +2106,6 @@ daemon :: send(server_id si, std::auto_ptr<e::buffer> msg)
         case BUSYBEE_SUCCESS:
             return true;
         case BUSYBEE_DISRUPTED:
-            handle_disruption(si);
             return false;
         case BUSYBEE_SHUTDOWN:
         case BUSYBEE_POLLFAILED:
@@ -2248,23 +2122,28 @@ daemon :: send(server_id si, std::auto_ptr<e::buffer> msg)
 bool
 daemon :: send_from_non_main_thread(server_id si, std::auto_ptr<e::buffer> msg)
 {
-    if (e::atomic::load_32_acquire(&m_busybee_init) == 0)
-    {
-        po6::threads::mutex::hold hold(&m_busybee_queue_mtx);
+    busybee_mta* bb = NULL;
 
-        if (e::atomic::load_32_acquire(&m_busybee_init) == 0)
-        {
-            m_busybee_queue.push_back(deferred_msg(0, si, msg.release()));
-            return true;
-        }
+    while (!(bb = e::atomic::load_ptr_acquire(&m_busybee)) &&
+           __sync_fetch_and_add(&s_interrupts, 0) == 0)
+    {
+        struct timespec tv;
+        tv.tv_sec = 0;
+        tv.tv_nsec = 1000ULL * 1000ULL;
+        nanosleep(&tv, NULL);
+    }
+
+    if (__sync_fetch_and_add(&s_interrupts, 0) > 0)
+    {
+        return true;
     }
 
     if (si == m_us.id)
     {
-        return m_busybee->deliver(si.get(), msg);
+        return bb->deliver(si.get(), msg);
     }
 
-    busybee_returncode rc = m_busybee->send(si.get(), msg);
+    busybee_returncode rc = bb->send(si.get(), msg);
 
     switch (rc)
     {
@@ -2287,7 +2166,7 @@ daemon :: send_from_non_main_thread(server_id si, std::auto_ptr<e::buffer> msg)
 bool
 daemon :: send_when_acceptor_persistent(server_id si, std::auto_ptr<e::buffer> msg)
 {
-    m_deferred_msgs.push_back(deferred_msg(m_acceptor.write_cut(), si, msg.release()));
+    m_msgs_waiting_for_persistence.push_back(deferred_msg(m_acceptor.write_cut(), si, msg.release()));
     return true;
 }
 
@@ -2296,28 +2175,12 @@ daemon :: flush_acceptor_messages()
 {
     uint64_t when = m_acceptor.sync_cut();
 
-    while (!m_deferred_msgs.empty() && m_deferred_msgs.front().when <= when)
+    while (!m_msgs_waiting_for_persistence.empty() && m_msgs_waiting_for_persistence.front().when <= when)
     {
-        deferred_msg* dm = &m_deferred_msgs.front();
+        deferred_msg* dm = &m_msgs_waiting_for_persistence.front();
         std::auto_ptr<e::buffer> msg(dm->msg);
         send(dm->si, msg);
-        m_deferred_msgs.pop_front();
-    }
-}
-
-void
-daemon :: handle_disruption(server_id si)
-{
-    // suspect a disrupted server immediately
-    const std::vector<server>& servers(m_config.servers());
-    assert(m_last_seen.size() == servers.size());
-
-    for (size_t i = 0; i < servers.size(); ++i)
-    {
-        if (servers[i].id == si)
-        {
-            m_last_seen[i] = 0;
-        }
+        m_msgs_waiting_for_persistence.pop_front();
     }
 }
 
@@ -2328,7 +2191,7 @@ daemon :: debug_dump()
     LOG(INFO) << "============================ Debug Dump Begins Here ============================";
     LOG(INFO) << "we are " << m_us;
     LOG(INFO) << "our configuration is " << m_config;
-    LOG(INFO) << "we have " << m_unordered__cmds.size() << " unordered commands";
+    LOG(INFO) << "we have " << m_unordered_cmds.size() << " unordered commands";
     LOG(INFO) << "we have " << m_unassigned_cmds.size() << " unassigned commands";
     LOG(INFO) << "--------------------------------------------------------------------------------";
     LOG(INFO) << "Acceptor: currently adopted " << m_acceptor.current_ballot() << " and accepted pvalues:";
@@ -2434,7 +2297,7 @@ daemon :: register_periodic(unsigned interval_ms, periodic_fptr fp)
     m_periodic.push_back(periodic(interval_nanos, fp));
 }
 
-// round x up to a multiple of y
+// round x up to the lowest multiple of y greater than x
 static uint64_t
 next_interval(uint64_t x, uint64_t y)
 {

@@ -18,3 +18,4 @@ run replicant server-status --host 127.0.0.1 --port 1983
 run replicant server-status --host 127.0.0.1 --port 1984
 run replicant server-status --host 127.0.0.1 --port 1985
 run replicant server-status --host 127.0.0.1 --port 1986
+run replicant new-object --host 127.0.0.1 --port 1982 nop ${REPLICANT_BUILDDIR}/.libs/libreplicant-example-nop.so

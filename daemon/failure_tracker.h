@@ -1,4 +1,4 @@
-// Copyright (c) 2012-2015, Robert Escriva
+// Copyright (c) 2015, Robert Escriva
 // All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
@@ -25,60 +25,39 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
-#ifndef replicant_common_network_msgtype_h_
-#define replicant_common_network_msgtype_h_
-
-// e
-#include <e/buffer.h>
+#ifndef replicant_failure_tracker_h_
+#define replicant_failure_tracker_h_
 
 // Replicant
 #include "namespace.h"
+#include "common/configuration.h"
+#include "common/constants.h"
+#include "common/ids.h"
 
 BEGIN_REPLICANT_NAMESPACE
 
-enum network_msgtype
+class failure_tracker
 {
-    REPLNET_NOP                     = 0,
+    public:
+        failure_tracker(configuration* config);
+        ~failure_tracker() throw ();
 
-    REPLNET_BOOTSTRAP               = 28,
-    REPLNET_PING                    = 29,
-    REPLNET_PONG                    = 30,
-    REPLNET_STATE_TRANSFER          = 31,
-    // 26 is dead
-    REPLNET_WHO_ARE_YOU             = 25,
-    REPLNET_IDENTITY                = 24,
+    public:
+        void set_server_id(server_id us);
+        void assume_all_alive();
+        void proof_of_life(server_id si);
+        bool suspect_failed(server_id si, uint64_t timeout);
 
-    REPLNET_PAXOS_PHASE1A           = 32,
-    REPLNET_PAXOS_PHASE1B           = 33,
-    REPLNET_PAXOS_PHASE2A           = 34,
-    REPLNET_PAXOS_PHASE2B           = 35,
-    REPLNET_PAXOS_LEARN             = 36,
-    REPLNET_PAXOS_SUBMIT            = 37,
+    private:
+        failure_tracker(const failure_tracker&);
+        failure_tracker& operator = (const failure_tracker&);
 
-    REPLNET_SERVER_BECOME_MEMBER    = 48,
-    REPLNET_UNIQUE_NUMBER           = 63,
-    REPLNET_OBJECT_FAILED           = 62,
-    REPLNET_POKE                    = 64,
-    REPLNET_COND_WAIT               = 69,
-    REPLNET_CALL                    = 70,
-    REPLNET_GET_ROBUST_PARAMS       = 72,
-    REPLNET_CALL_ROBUST             = 73,
-
-    REPLNET_CLIENT_RESPONSE         = 224,
-
-    REPLNET_GARBAGE                 = 255
+    private:
+        configuration* m_config;
+        server_id m_us;
+        uint64_t m_last_seen[REPLICANT_MAX_REPLICAS];
 };
-
-std::ostream&
-operator << (std::ostream& lhs, network_msgtype rhs);
-
-e::packer
-operator << (e::packer lhs, const network_msgtype& rhs);
-e::unpacker
-operator >> (e::unpacker lhs, network_msgtype& rhs);
-size_t
-pack_size(const network_msgtype& rhs);
 
 END_REPLICANT_NAMESPACE
 
-#endif // replicant_common_network_msgtype_h_
+#endif // replicant_failure_tracker_h_

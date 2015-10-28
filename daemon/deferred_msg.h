@@ -1,4 +1,4 @@
-// Copyright (c) 2012-2015, Robert Escriva
+// Copyright (c) 2015, Robert Escriva
 // All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
@@ -25,60 +25,29 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
-#ifndef replicant_common_network_msgtype_h_
-#define replicant_common_network_msgtype_h_
-
-// e
-#include <e/buffer.h>
+#ifndef replicant_deferred_msg_h_
+#define replicant_deferred_msg_h_
 
 // Replicant
 #include "namespace.h"
+#include "common/constants.h"
+#include "common/ids.h"
 
 BEGIN_REPLICANT_NAMESPACE
 
-enum network_msgtype
+struct deferred_msg
 {
-    REPLNET_NOP                     = 0,
+    deferred_msg(uint64_t w, server_id t, e::buffer* m) : when(w), si(t), msg(m) {}
+    deferred_msg(const deferred_msg& other) : when(other.when), si(other.si), msg(other.msg) {}
+    ~deferred_msg() throw () {}
 
-    REPLNET_BOOTSTRAP               = 28,
-    REPLNET_PING                    = 29,
-    REPLNET_PONG                    = 30,
-    REPLNET_STATE_TRANSFER          = 31,
-    // 26 is dead
-    REPLNET_WHO_ARE_YOU             = 25,
-    REPLNET_IDENTITY                = 24,
+    deferred_msg& operator = (const deferred_msg&);
 
-    REPLNET_PAXOS_PHASE1A           = 32,
-    REPLNET_PAXOS_PHASE1B           = 33,
-    REPLNET_PAXOS_PHASE2A           = 34,
-    REPLNET_PAXOS_PHASE2B           = 35,
-    REPLNET_PAXOS_LEARN             = 36,
-    REPLNET_PAXOS_SUBMIT            = 37,
-
-    REPLNET_SERVER_BECOME_MEMBER    = 48,
-    REPLNET_UNIQUE_NUMBER           = 63,
-    REPLNET_OBJECT_FAILED           = 62,
-    REPLNET_POKE                    = 64,
-    REPLNET_COND_WAIT               = 69,
-    REPLNET_CALL                    = 70,
-    REPLNET_GET_ROBUST_PARAMS       = 72,
-    REPLNET_CALL_ROBUST             = 73,
-
-    REPLNET_CLIENT_RESPONSE         = 224,
-
-    REPLNET_GARBAGE                 = 255
+    uint64_t when;
+    server_id si;
+    e::buffer* msg;
 };
-
-std::ostream&
-operator << (std::ostream& lhs, network_msgtype rhs);
-
-e::packer
-operator << (e::packer lhs, const network_msgtype& rhs);
-e::unpacker
-operator >> (e::unpacker lhs, network_msgtype& rhs);
-size_t
-pack_size(const network_msgtype& rhs);
 
 END_REPLICANT_NAMESPACE
 
-#endif // replicant_common_network_msgtype_h_
+#endif // replicant_deferred_msg_h_
