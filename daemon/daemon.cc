@@ -2259,6 +2259,7 @@ daemon :: debug_dump()
         uint64_t limit;
         m_replica->window(&start, &limit);
         LOG(INFO) << "window: [" << start << ", " << limit << ")";
+        LOG(INFO) << "gc: " << m_replica->gc_up_to();
         LOG(INFO) << "discontinuous: " << (m_replica->discontinuous() ? "yes" : "no");
         std::vector<configuration> configs(m_replica->configs().begin(),
                                            m_replica->configs().end());
