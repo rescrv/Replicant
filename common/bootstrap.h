@@ -61,7 +61,7 @@ class bootstrap
         ~bootstrap() throw ();
 
     public:
-        bool valid() const { return m_valid; }
+        bool valid() const;
         replicant_returncode do_it(int timeout, configuration* config, e::error* err) const;
         std::string conn_str() const;
         const std::vector<po6::net::hostname>& hosts() const { return m_hosts; }

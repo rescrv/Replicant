@@ -557,6 +557,7 @@ object :: run()
             {
                 do_call(calls.front());
 
+                if (!failed())
                 {
                     po6::threads::mutex::hold hold(&m_snap_mtx);
                     e::packer pa(&m_snap, m_snap.size());

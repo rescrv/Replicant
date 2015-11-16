@@ -146,6 +146,7 @@ object_permanent_error(object_interface* obj_int, const char* format, ...)
         va_start(args, format);
         vfprintf(obj_int->debug_stream, format, args);
         va_end(args);
+        fprintf(obj_int->debug_stream, "\n");
     }
 
     obj_int->fd.close();

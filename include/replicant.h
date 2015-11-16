@@ -76,6 +76,10 @@ enum replicant_returncode
     REPLICANT_GARBAGE        = 5375
 };
 
+char* replicant_client_validate_conn_str(const char* conn_str);
+char* replicant_client_host_to_conn_str(const char* host, uint16_t port);
+char* replicant_client_add_to_conn_str(const char* conn_str, const char* host, uint16_t port);
+
 struct replicant_client*
 replicant_client_create(const char* host, uint16_t port);
 struct replicant_client*

@@ -36,6 +36,7 @@
 // Replicant
 #include <replicant.h>
 #include "visibility.h"
+#include "common/bootstrap.h"
 #include "common/macros.h"
 #include "client/client.h"
 #include "client/server_status.h"
@@ -99,6 +100,45 @@ inline void return_void() {}
 
 extern "C"
 {
+
+REPLICANT_API char*
+replicant_client_validate_conn_str(const char* conn_str)
+{
+    replicant::bootstrap bs(conn_str);
+
+    if (!bs.valid())
+    {
+        return NULL;
+    }
+
+    return strdup(bs.conn_str().c_str());
+}
+
+REPLICANT_API char*
+replicant_client_host_to_conn_str(const char* host, uint16_t port)
+{
+    replicant::bootstrap bs(host, port);
+
+    if (!bs.valid())
+    {
+        return NULL;
+    }
+
+    return strdup(bs.conn_str().c_str());
+}
+
+REPLICANT_API char*
+replicant_client_add_to_conn_str(const char* conn_str, const char* host, uint16_t port)
+{
+    replicant::bootstrap bs(host, port, conn_str);
+
+    if (!bs.valid())
+    {
+        return NULL;
+    }
+
+    return strdup(bs.conn_str().c_str());
+}
 
 REPLICANT_API replicant_client*
 replicant_client_create(const char* coordinator, uint16_t port)

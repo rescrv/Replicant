@@ -157,6 +157,25 @@ bootstrap :: ~bootstrap() throw ()
 {
 }
 
+bool
+bootstrap :: valid() const
+{
+    if (!m_valid)
+    {
+        return false;
+    }
+
+    for (size_t i = 0; i < m_hosts.size(); ++i)
+    {
+        if (m_hosts[i].port <= 0 || m_hosts[i].port >= (1 << 16))
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 #define MILLIS (1000ULL * 1000ULL)
 
 replicant_returncode
