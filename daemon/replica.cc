@@ -193,6 +193,8 @@ replica :: replica(daemon* d, const configuration& c)
 
 replica :: ~replica() throw ()
 {
+    m_objects.clear();
+    m_dying_objects.clear();
 }
 
 bool
