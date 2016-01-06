@@ -396,10 +396,23 @@ daemon :: run(bool daemonize,
             LOG(ERROR) << "error saving starting replica state to disk: " << po6::strerror(errno);
             return EXIT_FAILURE;
         }
+
+        e::atomic::store_ptr_release(&m_busybee, new busybee_mta(&m_gc, &m_busybee_mapper, m_us.bind_to, m_us.id.get(), 0));
     }
     // case 2: new node, joining an existing cluster
     else if (!saved && set_existing)
     {
+        uint64_t this_server = 0;
+
+        if (!generate_token(&this_server))
+        {
+            PLOG(ERROR) << "could not generate random identifier for this server";
+            return EXIT_FAILURE;
+        }
+
+        m_us.id = server_id(this_server);
+        saved_bootstrap = existing;
+        e::atomic::store_ptr_release(&m_busybee, new busybee_mta(&m_gc, &m_busybee_mapper, m_us.bind_to, m_us.id.get(), 0));
         setup_replica_from_bootstrap(existing, &m_replica);
 
         if (!m_replica.get())
@@ -413,20 +426,6 @@ daemon :: run(bool daemonize,
             LOG(ERROR) << "use the command line tools to remove said server and restart this one";
             return EXIT_FAILURE;
         }
-
-        uint64_t this_server = 0;
-
-        while (this_server == 0 || m_replica->config().get(server_id(this_server)))
-        {
-            if (!generate_token(&this_server))
-            {
-                PLOG(ERROR) << "could not generate random identifier for this server";
-                return EXIT_FAILURE;
-            }
-        }
-
-        m_us.id = server_id(this_server);
-        saved_bootstrap = existing;
     }
     // case 3: existing node, coming back online
     else
@@ -444,6 +443,7 @@ daemon :: run(bool daemonize,
         }
 
         LOG(INFO) << "re-joining cluster as " << m_us << " using bootstrap " << saved_bootstrap;
+        e::atomic::store_ptr_release(&m_busybee, new busybee_mta(&m_gc, &m_busybee_mapper, m_us.bind_to, m_us.id.get(), 0));
 
         e::slice snapshot;
         std::auto_ptr<e::buffer> snapshot_backing;
@@ -522,7 +522,6 @@ daemon :: run(bool daemonize,
     m_config_mtx.lock();
     m_config = m_replica->config();
     m_config_mtx.unlock();
-    e::atomic::store_ptr_release(&m_busybee, new busybee_mta(&m_gc, &m_busybee_mapper, m_us.bind_to, m_us.id.get(), 0));
     m_ft.set_server_id(m_us.id);
 
     if (!post_config_change_hook())
@@ -1078,6 +1077,12 @@ daemon :: process_paxos_phase1b(server_id si,
         {
             LOG(INFO) << "phase 1 complete: transitioning to phase 2 on " << b;
             m_leader.reset(new leader(*m_scout));
+
+            if (m_replica->fill_window())
+            {
+                m_leader->fill_window(this);
+            }
+
             m_leader->send_all_proposals(this);
             m_scout.reset();
         }
