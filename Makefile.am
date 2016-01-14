@@ -358,19 +358,23 @@ EXTRA_DIST += test/example-nop.gremlin
 ################################################################################
 
 EXTRA_DIST += test/env.sh
-EXTRA_DIST += test/5-node-cluster.gremlin
 
+check_SCRIPTS += test/5-node-cluster.gremlin
 check_SCRIPTS += test/chaos.gremlin
-EXTRA_DIST += test/chaos.gremlin
-TESTS += test/chaos.gremlin
-
 check_SCRIPTS += test/restart-diff-address.gremlin
-EXTRA_DIST += test/restart-diff-address.gremlin
-TESTS += test/restart-diff-address.gremlin
-
 check_SCRIPTS += test/leader-rotate.gremlin
+EXTRA_DIST += test/5-node-cluster.gremlin
+EXTRA_DIST += test/chaos.gremlin
+EXTRA_DIST += test/restart-diff-address.gremlin
 EXTRA_DIST += test/leader-rotate.gremlin
+
+TESTS += test/5-node-cluster.gremlin
+
+if ENABLE_EXAMPLES
+TESTS += test/chaos.gremlin
+TESTS += test/restart-diff-address.gremlin
 TESTS += test/leader-rotate.gremlin
+endif
 
 ################################################################################
 ################################### Benchmark ##################################

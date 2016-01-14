@@ -605,6 +605,7 @@ void
 replica :: snapshot_finished()
 {
     po6::threads::mutex::hold hold(&m_snapshots_mtx);
+    po6::threads::mutex::hold hold2(&m_robust_mtx);
     uint64_t snap_slot = 0;
 
     for (std::list<e::intrusive_ptr<snapshot> >::reverse_iterator it = m_snapshots.rbegin();
@@ -612,7 +613,7 @@ replica :: snapshot_finished()
     {
         if ((*it)->done())
         {
-            po6::threads::mutex::hold hold2(&m_latest_snapshot_mtx);
+            po6::threads::mutex::hold hold3(&m_latest_snapshot_mtx);
             m_latest_snapshot_slot = (*it)->slot();
             snap_slot = m_latest_snapshot_slot;
             const std::string& snap((*it)->contents());
@@ -1631,7 +1632,8 @@ replica :: executed(const pvalue& p,
         return;
     }
 
-    po6::threads::mutex::hold hold(&m_robust_mtx);
+    po6::threads::mutex::hold hold(&m_snapshots_mtx);
+    po6::threads::mutex::hold hold2(&m_robust_mtx);
 
     if (m_robust_history.empty())
     {
@@ -1665,7 +1667,7 @@ replica :: executed(const pvalue& p,
 
     m_robust_history_lookup.insert(command_nonce);
 
-    while (m_robust_history.size() > REPLICANT_SERVER_DRIVEN_NONCE_HISTORY)
+    while (m_snapshots.empty() && m_robust_history.size() > REPLICANT_SERVER_DRIVEN_NONCE_HISTORY)
     {
         m_robust_history_lookup.erase(m_robust_history.front().nonce);
         m_robust_history.pop_front();

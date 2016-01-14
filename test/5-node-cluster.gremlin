@@ -1,3 +1,5 @@
+#!/usr/bin/env gremlin
+
 env GLOG_logtostderr
 env GLOG_minloglevel 0
 env GLOG_logbufsecs 0
