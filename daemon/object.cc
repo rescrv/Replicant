@@ -231,6 +231,7 @@ object :: set_child(pid_t child, int fd)
     po6::threads::mutex::hold hold(&m_mtx);
     assert(m_obj_pid == 0);
     assert(m_fd.get() == -1);
+    assert(child > 0);
     m_obj_pid = child;
     m_fd = fd;
     m_cond.signal();
