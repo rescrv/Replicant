@@ -1,4 +1,4 @@
-## Copyright (c) 2012-2015, Robert Escriva
+## Copyright (c) 2012-2016, Robert Escriva
 ## All rights reserved.
 ##
 ## Redistribution and use in source and binary forms, with or without
@@ -130,6 +130,7 @@ replicant_daemon_SOURCES += daemon/mapper.cc
 replicant_daemon_SOURCES += daemon/object.cc
 replicant_daemon_SOURCES += daemon/pvalue.cc
 replicant_daemon_SOURCES += daemon/replica.cc
+replicant_daemon_SOURCES += daemon/robust_history.cc
 replicant_daemon_SOURCES += daemon/scout.cc
 replicant_daemon_SOURCES += daemon/settings.cc
 replicant_daemon_SOURCES += daemon/slot_type.cc
@@ -279,9 +280,6 @@ replicant_list_objects_LDADD = libreplicant.la $(PO6_LIBS) $(POPT_LIBS)
 
 replicant_conn_str_SOURCES = tools/conn-str.cc
 replicant_conn_str_LDADD = libreplicant.la $(PO6_LIBS) $(POPT_LIBS)
-
-replicant_list_servers_SOURCES = tools/list-servers.cc
-replicant_list_servers_LDADD = libreplicant.la $(PO6_LIBS) $(POPT_LIBS)
 
 replicant_kill_server_SOURCES = tools/kill-server.cc
 replicant_kill_server_LDADD = libreplicant.la $(PO6_LIBS) $(POPT_LIBS)

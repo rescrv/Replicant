@@ -31,18 +31,20 @@
 // Replicant
 #include "daemon/snapshot.h"
 
-#include <glog/logging.h>
 using replicant::snapshot;
 
-snapshot :: snapshot(uint64_t up_to)
+snapshot :: snapshot(uint64_t up_to, robust_history* rh)
     : m_ref(0)
     , m_up_to(up_to)
     , m_mtx()
     , m_cond(&m_mtx)
     , m_failed()
+    , m_history(rh)
     , m_objects()
-    , m_snapshot()
-    , m_packer(&m_snapshot)
+    , m_serialized_prefix()
+    , m_serialized_objects()
+    , m_obj_packer(&m_serialized_objects)
+    , m_serialized_altogether()
 {
 }
 
@@ -64,7 +66,7 @@ snapshot :: wait()
 void
 snapshot :: replica_internals(const e::slice& replica)
 {
-    m_packer = m_packer << e::pack_memmove(replica.data(), replica.size());
+    m_serialized_prefix.assign(replica.cdata(), replica.size());
 }
 
 void
@@ -83,7 +85,7 @@ snapshot :: finish_object(const std::string& name, const std::string& snap)
     if (it != m_objects.end())
     {
         m_objects.erase(it);
-        m_packer = m_packer << e::slice(name) << e::slice(snap);
+        m_obj_packer = m_obj_packer << e::slice(name) << e::slice(snap);
     }
 
     m_cond.broadcast();
@@ -113,7 +115,14 @@ const std::string&
 snapshot :: contents()
 {
     po6::threads::mutex::hold hold(&m_mtx);
-    return m_snapshot;
+    m_serialized_altogether = m_serialized_prefix;
+    robust_history rh;
+    m_history->copy_up_to(&rh, m_up_to);
+    std::string tmp;
+    e::packer(&tmp) << rh;
+    m_serialized_altogether += tmp;
+    m_serialized_altogether += m_serialized_objects;
+    return m_serialized_altogether;
 }
 
 bool

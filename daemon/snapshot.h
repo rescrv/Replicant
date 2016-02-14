@@ -45,13 +45,14 @@
 // Replicant
 #include "namespace.h"
 #include "common/packing.h"
+#include "daemon/robust_history.h"
 
 BEGIN_REPLICANT_NAMESPACE
 
 class snapshot
 {
     public:
-        snapshot(uint64_t up_to);
+        snapshot(uint64_t up_to, robust_history* rh);
         ~snapshot() throw ();
 
     public:
@@ -79,9 +80,12 @@ class snapshot
         po6::threads::mutex m_mtx;
         po6::threads::cond m_cond;
         bool m_failed;
+        robust_history* m_history;
         std::set<std::string> m_objects;
-        std::string m_snapshot;
-        e::packer m_packer;
+        std::string m_serialized_prefix;
+        std::string m_serialized_objects;
+        e::packer m_obj_packer;
+        std::string m_serialized_altogether;
 
     private:
         snapshot(const snapshot&);

@@ -51,6 +51,7 @@
 #include "daemon/condition.h"
 #include "daemon/object.h"
 #include "daemon/pvalue.h"
+#include "daemon/robust_history.h"
 #include "daemon/settings.h"
 #include "daemon/snapshot.h"
 
@@ -97,13 +98,10 @@ class replica
         void take_blocking_snapshot(uint64_t* snapshot_slot,
                                     e::slice* snapshot,
                                     std::auto_ptr<e::buffer>* snapshot_backing);
-        void initiate_snapshot();
-        void snapshot_barrier();
         uint64_t last_snapshot_num();
         void get_last_snapshot(uint64_t* snapshot_slot,
                                e::slice* snapshot,
                                std::auto_ptr<e::buffer>* snapshot_backing);
-        void snapshot_finished();
         static replica* from_snapshot(daemon* d, const e::slice& snap);
 
     // recovering from object failures
@@ -111,7 +109,6 @@ class replica
         void enqueue_failed_objects();
 
     public:
-        struct history;
         struct repair_info;
         struct defender;
         friend class object;
@@ -120,6 +117,9 @@ class replica
         typedef std::map<std::string, repair_info> failure_map_t;
 
     private:
+        void initiate_snapshot();
+        void snapshot_barrier();
+        void snapshot_finished();
         void execute(const pvalue& p);
         void execute_server_become_member(const pvalue& p, e::unpacker up);
         void execute_server_set_gc_thresh(e::unpacker up);
@@ -218,7 +218,7 @@ class replica
         uint64_t m_slot;
         std::list<pvalue> m_pvalues;
         std::list<configuration> m_configs;
-        std::vector<uint64_t> m_slots;
+        uint64_t m_gc_thresholds[REPLICANT_MAX_REPLICAS];
         condition m_cond_config;
         condition m_cond_tick;
         condition m_cond_strikes[REPLICANT_MAX_REPLICAS];
@@ -230,6 +230,7 @@ class replica
         object_map_t m_objects;
         object_list_t m_dying_objects;
         failure_map_t m_failed_objects;
+        robust_history m_robust;
 
         // manipulate snapshots
         po6::threads::mutex m_snapshots_mtx;
@@ -240,22 +241,10 @@ class replica
         uint64_t m_latest_snapshot_slot;
         std::auto_ptr<e::buffer> m_latest_snapshot_backing;
 
-        // protect the robust history
-        po6::threads::mutex m_robust_mtx;
-        std::list<history> m_robust_history;
-        google::dense_hash_set<uint64_t> m_robust_history_lookup;
-
     private:
         replica(const replica&);
         replica& operator = (const replica&);
 };
-
-e::packer
-operator << (e::packer lhs, const replica::history& rhs);
-e::unpacker
-operator >> (e::unpacker lhs, replica::history& rhs);
-size_t
-pack_size(const replica::history& rhs);
 
 e::packer
 operator << (e::packer lhs, const replica::defender& rhs);

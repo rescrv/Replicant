@@ -54,6 +54,7 @@
 #include "common/packing.h"
 #include "daemon/daemon.h"
 #include "daemon/replica.h"
+#include "daemon/robust_history.h"
 #include "daemon/slot_type.h"
 
 #pragma GCC diagnostic ignored "-Wunsafe-loop-optimizations"
@@ -61,21 +62,6 @@
 using replicant::replica;
 
 extern bool s_debug_mode;
-
-struct replica::history
-{
-    history()
-        : slot(), nonce(), status(), output() {}
-    history(uint64_t s, uint64_t n, replicant_returncode st, const std::string& o)
-        : slot(s), nonce(n), status(st), output(o) {}
-    history(const history& other)
-        : slot(other.slot), nonce(other.nonce), status(other.status), output(other.output) {}
-    ~history() throw () {}
-    uint64_t slot;
-    uint64_t nonce;
-    replicant_returncode status;
-    std::string output;
-};
 
 struct replica::repair_info
 {
@@ -87,28 +73,6 @@ struct replica::repair_info
     uint64_t snapshot_slot;
     std::string snapshot_content;
 };
-
-e::packer
-replicant :: operator << (e::packer lhs, const replica::history& rhs)
-{
-    return lhs << rhs.slot << rhs.nonce << rhs.status << e::slice(rhs.output);
-}
-
-e::unpacker
-replicant :: operator >> (e::unpacker lhs, replica::history& rhs)
-{
-    e::slice o;
-    lhs = lhs >> rhs.slot >> rhs.nonce >> rhs.status >> o;
-    rhs.output.assign(o.cdata(), o.size());
-    return lhs;
-}
-
-size_t
-replicant :: pack_size(const replica::history& rhs)
-{
-    e::slice o(rhs.output);
-    return 2 * sizeof(uint64_t) + pack_size(rhs.status) + pack_size(o);
-}
 
 struct replica::defender
 {
@@ -164,7 +128,6 @@ replica :: replica(daemon* d, const configuration& c)
     , m_slot(0)
     , m_pvalues()
     , m_configs()
-    , m_slots(c.servers().size(), c.first_slot())
     , m_cond_config(c.version().get())
     , m_cond_tick()
     , m_s()
@@ -175,19 +138,20 @@ replica :: replica(daemon* d, const configuration& c)
     , m_objects()
     , m_dying_objects()
     , m_failed_objects()
+    , m_robust()
     , m_snapshots_mtx()
     , m_snapshots()
     , m_latest_snapshot_mtx()
     , m_latest_snapshot_slot(0)
     , m_latest_snapshot_backing()
-    , m_robust_mtx()
-    , m_robust_history()
-    , m_robust_history_lookup()
 {
+    for (size_t i = 0; i < REPLICANT_MAX_REPLICAS; ++i)
+    {
+        m_gc_thresholds[i] = 0;
+    }
+
     m_command_nonces_lookup.set_empty_key(UINT64_MAX);
     m_command_nonces_lookup.set_deleted_key(UINT64_MAX - 1);
-    m_robust_history_lookup.set_empty_key(UINT64_MAX);
-    m_robust_history_lookup.set_deleted_key(UINT64_MAX - 1);
     m_configs.push_back(c);
 }
 
@@ -262,7 +226,6 @@ replica :: learn(const pvalue& p)
             e::packer(&packed) << c;
             m_cond_config.broadcast(m_daemon, packed.data(), packed.size());
             assert(m_cond_config.peek_state() == c.version().get());
-            m_slots = std::vector<uint64_t>(c.servers().size(), 0);
             initiate_snapshot();
         }
 
@@ -288,12 +251,14 @@ replica :: window(uint64_t* start, uint64_t* limit) const
 uint64_t
 replica :: gc_up_to() const
 {
-    if (m_slots.empty())
+    if (m_configs.empty())
     {
         return 0;
     }
 
-    std::vector<uint64_t> slots(m_slots);
+    const configuration& c(m_configs.front());
+    size_t sz = std::min(c.servers().size(), size_t(REPLICANT_MAX_REPLICAS));
+    std::vector<uint64_t> slots(m_gc_thresholds, m_gc_thresholds + sz);
     std::sort(slots.begin(), slots.end());
     return slots[0];
 }
@@ -365,32 +330,7 @@ replica :: has_output(uint64_t nonce,
                       replicant_returncode* status,
                       std::string* output)
 {
-    po6::threads::mutex::hold hold(&m_robust_mtx);
-
-    if (!m_robust_history.empty() && min_slot < m_robust_history.front().slot)
-    {
-        *status = REPLICANT_MAYBE;
-        *output = "";
-        return true;
-    }
-
-    if (m_robust_history_lookup.find(nonce) == m_robust_history_lookup.end())
-    {
-        return false;
-    }
-
-    for (std::list<history>::iterator it = m_robust_history.begin();
-            it != m_robust_history.end(); ++it)
-    {
-        if (it->nonce == nonce)
-        {
-            *status = it->status;
-            *output = it->output;
-            return true;
-        }
-    }
-
-    abort();
+    return m_robust.has_output(nonce, min_slot, status, output);
 }
 
 void
@@ -485,18 +425,18 @@ replica :: initiate_snapshot()
             }
         }
 
+        // don't take snapshots out of order or duplicate them
         if (!m_snapshots.empty() && m_snapshots.back()->slot() >= m_slot)
         {
             return;
         }
 
-        snap = new snapshot(m_slot);
+        snap = new snapshot(m_slot, &m_robust);
         m_snapshots.push_back(snap);
+        m_robust.inhibit_gc();
 
         assert(!m_configs.empty());
         std::vector<uint64_t> command_nonces(m_command_nonces.begin(), m_command_nonces.end());
-        po6::threads::mutex::hold hold2(&m_robust_mtx);
-        std::vector<history> robust_history(m_robust_history.begin(), m_robust_history.end());
         std::vector<defender> defended;
 
         for (std::map<uint64_t, defender>::iterator it = m_defended.begin();
@@ -505,34 +445,14 @@ replica :: initiate_snapshot()
             defended.push_back(it->second);
         }
 
-        size_t sz = sizeof(uint64_t)
-                  + sizeof(uint64_t)
-                  + pack_size(m_configs.front())
-                  + pack_size(m_cond_config)
-                  + pack_size(m_cond_tick)
-                  + pack_size(m_s)
-                  + sizeof(uint32_t) + sizeof(uint64_t) * m_slots.size()
-                  + sizeof(uint64_t) + sizeof(uint64_t) * command_nonces.size()
-                  + pack_size(robust_history)
-                  + pack_size(defended);
-
-        for (size_t i = 0; i < REPLICANT_MAX_REPLICAS; ++i)
-        {
-            sz += pack_size(m_cond_strikes[i]);
-        }
-
-        std::auto_ptr<e::buffer> tmp(e::buffer::create(sz));
-        e::packer pa = tmp->pack_at(0)
-            << m_slot << m_counter << m_configs.front() << m_slots
-            << m_cond_config << m_cond_tick << m_s;
-
-        for (size_t i = 0; i < REPLICANT_MAX_REPLICAS; ++i)
-        {
-            pa = pa << m_cond_strikes[i];
-        }
-
-        pa = pa << command_nonces << robust_history << defended;
-        snap->replica_internals(tmp->as_slice());
+        std::string serialized;
+        e::packer pa(&serialized);
+        pa = pa << m_slot << m_counter << m_configs
+                << e::pack_array<uint64_t>(m_gc_thresholds, REPLICANT_MAX_REPLICAS)
+                << m_cond_config << m_cond_tick
+                << e::pack_array<condition>(m_cond_strikes, REPLICANT_MAX_REPLICAS)
+                << m_s << command_nonces << defended;
+        snap->replica_internals(e::slice(serialized));
 
         for (object_map_t::iterator it = m_objects.begin();
                 it != m_objects.end(); ++it)
@@ -547,15 +467,92 @@ replica :: initiate_snapshot()
     }
 }
 
+replica*
+replica :: from_snapshot(daemon* d, const e::slice& snap)
+{
+    uint64_t slot;
+    uint64_t counter;
+    std::list<configuration> configs;
+    e::unpacker up(snap.data(), snap.size());
+    up = up >> slot >> counter >> configs;
+
+    if (up.error() || configs.empty())
+    {
+        LOG(ERROR) << "corrupt replica state";
+        return NULL;
+    }
+
+    std::auto_ptr<replica> rep(new replica(d, configs.front()));
+    rep->m_slot = slot;
+    rep->m_counter = counter;
+    rep->m_configs = configs;
+
+    std::vector<uint64_t> command_nonces;
+    std::vector<defender> defended;
+    up = up >> e::unpack_array<uint64_t>(rep->m_gc_thresholds, REPLICANT_MAX_REPLICAS)
+            >> rep->m_cond_config >> rep->m_cond_tick
+            >> e::unpack_array<condition>(rep->m_cond_strikes, REPLICANT_MAX_REPLICAS)
+            >> rep->m_s >> command_nonces >> defended >> rep->m_robust;
+
+    std::vector<std::pair<e::slice, e::slice> > objects;
+
+    while (up.remain() && !up.error())
+    {
+        e::slice obj_name;
+        e::slice snap_state;
+        up = up >> obj_name >> snap_state;
+
+        if (!up.error())
+        {
+            objects.push_back(std::make_pair(obj_name, snap_state));
+        }
+    }
+
+    if (up.error())
+    {
+        LOG(ERROR) << "corrupt replica state";
+        return NULL;
+    }
+
+    rep->m_command_nonces = std::deque<uint64_t>(command_nonces.begin(), command_nonces.end());
+
+    for (size_t i = 0; i < command_nonces.size(); ++i)
+    {
+        rep->m_command_nonces_lookup.insert(command_nonces[i]);
+    }
+
+    for (size_t i = 0; i < defended.size(); ++i)
+    {
+        rep->m_defended[defended[i].nonce] = defended[i];
+    }
+
+    for (size_t i = 0; i < objects.size(); ++i)
+    {
+        e::slice name(objects[i].first);
+        LOG(INFO) << "recreating object \"" << e::strescape(std::string(name.cdata(), name.size())) << "\"";
+
+        if (!rep->relaunch(objects[i].first, rep->m_slot, objects[i].second))
+        {
+            LOG(ERROR) << "could not create object:  corrupt replica state";
+            return NULL;
+        }
+    }
+
+    return rep.release();
+}
+
 void
 replica :: snapshot_barrier()
 {
     e::intrusive_ptr<snapshot> snap;
 
-    if (!m_snapshots.empty())
     {
         po6::threads::mutex::hold hold(&m_snapshots_mtx);
-        snap = m_snapshots.back();
+
+        if (!m_snapshots.empty())
+        {
+            snap = m_snapshots.back();
+        }
     }
 
     if (snap)
@@ -605,7 +602,6 @@ void
 replica :: snapshot_finished()
 {
     po6::threads::mutex::hold hold(&m_snapshots_mtx);
-    po6::threads::mutex::hold hold2(&m_robust_mtx);
     uint64_t snap_slot = 0;
 
     for (std::list<e::intrusive_ptr<snapshot> >::reverse_iterator it = m_snapshots.rbegin();
@@ -613,9 +609,8 @@ replica :: snapshot_finished()
     {
         if ((*it)->done())
         {
-            po6::threads::mutex::hold hold3(&m_latest_snapshot_mtx);
-            m_latest_snapshot_slot = (*it)->slot();
-            snap_slot = m_latest_snapshot_slot;
+            po6::threads::mutex::hold hold2(&m_latest_snapshot_mtx);
+            snap_slot = m_latest_snapshot_slot = (*it)->slot();
             const std::string& snap((*it)->contents());
             m_latest_snapshot_backing.reset(e::buffer::create(snap.size()));
             m_latest_snapshot_backing->resize(snap.size());
@@ -633,95 +628,11 @@ replica :: snapshot_finished()
 
         m_snapshots.pop_front();
     }
-}
 
-replica*
-replica :: from_snapshot(daemon* d, const e::slice& snap)
-{
-    uint64_t slot;
-    uint64_t counter;
-    configuration c;
-    e::unpacker up(snap.data(), snap.size());
-    up = up >> slot >> counter >> c;
-
-    if (up.error())
+    if (m_snapshots.empty())
     {
-        LOG(ERROR) << "corrupt replica state";
-        return NULL;
+        m_robust.allow_gc();
     }
-
-    std::auto_ptr<replica> rep(new replica(d, c));
-    rep->m_slot = slot;
-    rep->m_counter = counter;
-    std::vector<uint64_t> command_nonces;
-    std::vector<history> robust_history;
-    std::vector<defender> defended;
-    up = up >> rep->m_slots >> rep->m_cond_config >> rep->m_cond_tick >> rep->m_s;
-
-    for (size_t i = 0; i < REPLICANT_MAX_REPLICAS; ++i)
-    {
-        up = up >> rep->m_cond_strikes[i];
-    }
-
-    up = up >> command_nonces >> robust_history >> defended;
-
-    if (up.error() || c.servers().size() != rep->m_slots.size())
-    {
-        LOG(ERROR) << "corrupt replica state";
-        return NULL;
-    }
-
-    std::vector<std::pair<e::slice, e::slice> > objects;
-
-    while (up.remain() && !up.error())
-    {
-        e::slice obj_name;
-        e::slice snap_state;
-        up = up >> obj_name >> snap_state;
-
-        if (!up.error())
-        {
-            objects.push_back(std::make_pair(obj_name, snap_state));
-        }
-    }
-
-    if (up.error())
-    {
-        LOG(ERROR) << "corrupt replica state";
-        return NULL;
-    }
-
-    rep->m_command_nonces = std::deque<uint64_t>(command_nonces.begin(), command_nonces.end());
-    rep->m_robust_history = std::list<history>(robust_history.begin(), robust_history.end());
-
-    for (size_t i = 0; i < command_nonces.size(); ++i)
-    {
-        rep->m_command_nonces_lookup.insert(command_nonces[i]);
-    }
-
-    for (size_t i = 0; i < robust_history.size(); ++i)
-    {
-        rep->m_robust_history_lookup.insert(robust_history[i].nonce);
-    }
-
-    for (size_t i = 0; i < defended.size(); ++i)
-    {
-        rep->m_defended[defended[i].nonce] = defended[i];
-    }
-
-    for (size_t i = 0; i < objects.size(); ++i)
-    {
-        e::slice name(objects[i].first);
-        LOG(INFO) << "recreating object \"" << e::strescape(std::string(name.cdata(), name.size())) << "\"";
-
-        if (!rep->relaunch(objects[i].first, rep->m_slot, objects[i].second))
-        {
-            LOG(ERROR) << "could not create object:  corrupt replica state";
-            return NULL;
-        }
-    }
-
-    return rep.release();
 }
 
 void
@@ -889,13 +800,12 @@ replica :: execute_server_set_gc_thresh(e::unpacker up)
     }
 
     const configuration& c(m_configs.front());
-    assert(m_slots.size() == c.servers().size());
 
-    for (size_t i = 0; i < c.servers().size(); ++i)
+    for (size_t i = 0; i < c.servers().size() && i < REPLICANT_MAX_REPLICAS; ++i)
     {
         if (c.servers()[i].id == si)
         {
-            m_slots[i] = std::max(m_slots[i], threshold);
+            m_gc_thresholds[i] = std::max(m_gc_thresholds[i], threshold);
         }
     }
 }
@@ -1627,50 +1537,9 @@ replica :: executed(const pvalue& p,
         m_daemon->callback_client(si, request_nonce, status, result);
     }
 
-    if (!(flags & 1))
+    if ((flags & 1))
     {
-        return;
-    }
-
-    po6::threads::mutex::hold hold(&m_snapshots_mtx);
-    po6::threads::mutex::hold hold2(&m_robust_mtx);
-
-    if (m_robust_history.empty())
-    {
-        m_robust_history.push_back(history(p.s, command_nonce, status, result));
-    }
-    // in practice, we'll never hit the next two cases because the RSMs will be
-    // scheduled to never overrun the command_nonce history, but it's here as a
-    // safety measure.
-    else if (m_robust_history.front().slot > p.s)
-    {
-        m_robust_history.push_front(history(p.s, command_nonce, status, result));
-    }
-    else if (m_robust_history.front().slot == p.s)
-    {
-        return;
-    }
-    else
-    {
-        std::list<history>::iterator it = m_robust_history.end();
-        --it;
-
-        while (it != m_robust_history.begin() && it->slot >= p.s)
-        {
-            --it;
-        }
-
-        // it points to the history entry for the highest slot less than p.s
-        ++it; // move forward one
-        m_robust_history.insert(it, history(p.s, command_nonce, status, result));
-    }
-
-    m_robust_history_lookup.insert(command_nonce);
-
-    while (m_snapshots.empty() && m_robust_history.size() > REPLICANT_SERVER_DRIVEN_NONCE_HISTORY)
-    {
-        m_robust_history_lookup.erase(m_robust_history.front().nonce);
-        m_robust_history.pop_front();
+        m_robust.executed(p, command_nonce, status, result);
     }
 }
 
