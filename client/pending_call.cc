@@ -122,6 +122,11 @@ pending_call :: handle_response(client*, std::auto_ptr<e::buffer>, e::unpacker u
             memmove(*m_output, output.data(), output.size());
         }
     }
+    else if (st == REPLICANT_MAYBE && output.empty())
+    {
+        this->set_status(st);
+        this->error(__FILE__, __LINE__) << "operation may or may not have happened";
+    }
     else
     {
         this->set_status(st);
