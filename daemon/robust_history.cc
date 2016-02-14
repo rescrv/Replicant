@@ -72,7 +72,8 @@ robust_history :: has_output(uint64_t nonce,
 {
     po6::threads::mutex::hold hold(&m_mtx);
 
-    if (!m_history.empty() && min_slot < m_history.front().slot &&
+    if (m_history.size() >= REPLICANT_SERVER_DRIVEN_NONCE_HISTORY &&
+        min_slot < m_history.front().slot &&
         m_lookup.find(nonce) == m_lookup.end())
     {
         *status = REPLICANT_MAYBE;
