@@ -102,6 +102,7 @@ noinst_HEADERS += daemon/object.h
 noinst_HEADERS += daemon/object_interface.h
 noinst_HEADERS += daemon/pvalue.h
 noinst_HEADERS += daemon/replica.h
+noinst_HEADERS += daemon/robust_history.h
 noinst_HEADERS += daemon/rsm.h
 noinst_HEADERS += daemon/scout.h
 noinst_HEADERS += daemon/settings.h
