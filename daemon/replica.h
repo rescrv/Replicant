@@ -122,6 +122,7 @@ class replica
         void snapshot_finished();
         void execute(const pvalue& p);
         void execute_server_become_member(const pvalue& p, e::unpacker up);
+        bool execute_server_add(const pvalue& p, const server& s);
         void execute_server_set_gc_thresh(e::unpacker up);
         void execute_server_change_address(const pvalue& p, e::unpacker up);
         void execute_server_record_strike(e::unpacker up);
@@ -178,6 +179,12 @@ class replica
                                     server_id si,
                                     uint64_t request_nonce,
                                     const e::slice& input);
+        void execute_add_server(const pvalue& p,
+                                unsigned flags,
+                                uint64_t command_nonce,
+                                server_id si,
+                                uint64_t request_nonce,
+                                const e::slice& input);
         void execute_kill_server(const pvalue& p,
                                  unsigned flags,
                                  uint64_t command_nonce,

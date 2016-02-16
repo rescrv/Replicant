@@ -177,6 +177,20 @@ configuration :: get(server_id si) const
     return NULL;
 }
 
+const replicant::server*
+configuration :: get(const po6::net::location& bind_to) const
+{
+    for (size_t i = 0; i < m_servers.size(); ++i)
+    {
+        if (m_servers[i].bind_to == bind_to)
+        {
+            return &m_servers[i];
+        }
+    }
+
+    return NULL;
+}
+
 replicant::bootstrap
 configuration :: current_bootstrap() const
 {

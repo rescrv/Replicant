@@ -69,6 +69,7 @@ class configuration
         const std::vector<server>& servers() const { return m_servers; }
         std::vector<server_id> server_ids() const;
         const server* get(server_id si) const;
+        const server* get(const po6::net::location& bind_to) const;
         bootstrap current_bootstrap() const;
 
     private:

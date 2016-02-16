@@ -770,6 +770,14 @@ replica :: execute_server_become_member(const pvalue& p, e::unpacker up)
         return;
     }
 
+    LOG(WARNING) << s << " is using a deprecated method to join the cluster; "
+                         "please upgrade it to at least version 0.9";
+    execute_server_add(p, s);
+}
+
+bool
+replica :: execute_server_add(const pvalue& p, const server& s)
+{
     const configuration& c(m_configs.back());
 
     if (c.servers().size() >= REPLICANT_MAX_REPLICAS)
@@ -777,13 +785,34 @@ replica :: execute_server_become_member(const pvalue& p, e::unpacker up)
         LOG(ERROR) << "cannot add " << s << " to " << c.cluster()
                    << " because there are already " << REPLICANT_MAX_REPLICAS
                    << " servers in the cluster";
-        return;
+        return false;
     }
 
-    if (!c.has(s.id) && !c.has(s.bind_to))
+    const server* spid = c.get(s.id);
+    const server* spbt = c.get(s.bind_to);
+
+    if (spid && spid == spbt)
+    {
+        // duplicate; go silent
+        return true;
+    }
+    else if (spid)
+    {
+        LOG(ERROR) << "not adding " << s << " to " << c.cluster()
+                   << " because its ID is in use by " << *spid;
+        return false;
+    }
+    else if (spbt)
+    {
+        LOG(ERROR) << "not adding " << s << " to " << c.cluster()
+                   << " because its ID is in use by " << *spbt;
+        return false;
+    }
+    else
     {
         LOG(INFO) << "adding " << s << " to " << c.cluster();
         m_configs.push_back(configuration(c, s, p.s + REPLICANT_SLOTS_WINDOW));
+        return true;
     }
 }
 
@@ -1185,6 +1214,10 @@ replica :: execute_call(const pvalue& p,
         {
             execute_list_objects(p, flags, command_nonce, si, request_nonce, input);
         }
+        else if (func == e::slice("add_server"))
+        {
+            execute_add_server(p, flags, command_nonce, si, request_nonce, input);
+        }
         else if (func == e::slice("kill_server"))
         {
             execute_kill_server(p, flags, command_nonce, si, request_nonce, input);
@@ -1376,6 +1409,34 @@ replica :: execute_restore_object(const pvalue& p,
         }
 
         executed(p, flags, command_nonce, si, request_nonce, REPLICANT_MAYBE, "");
+    }
+}
+
+void
+replica :: execute_add_server(const pvalue& p,
+                              unsigned flags,
+                              uint64_t command_nonce,
+                              server_id si,
+                              uint64_t request_nonce,
+                              const e::slice& input)
+{
+    e::unpacker up(input.cdata(), input.size());
+    server s;
+    up = up >> s;
+
+    if (up.error())
+    {
+        LOG(ERROR) << "invalid command to add a server";
+        return;
+    }
+
+    if (execute_server_add(p, s))
+    {
+        executed(p, flags, command_nonce, si, request_nonce, REPLICANT_SUCCESS, "");
+    }
+    else
+    {
+        executed(p, flags, command_nonce, si, request_nonce, REPLICANT_SERVER_ERROR, "");
     }
 }
 

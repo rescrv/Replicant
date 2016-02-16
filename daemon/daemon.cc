@@ -748,13 +748,20 @@ void
 daemon :: become_cluster_member(const bootstrap& current)
 {
     LOG(INFO) << "trying to join the existing cluster using " << current;
-    configuration c;
     e::error err;
     bool has_err = false;
     bool success = false;
+    bool has_params = false;
+    uint64_t cluster_nonce;
+    uint64_t min_slot;
+    std::string us_packed;
+    e::packer(&us_packed) << m_us;
+    std::string call;
+    e::packer(&call) << e::slice("replicant") << e::slice("add_server") << e::slice(us_packed);
 
     for (unsigned iteration = 0; __sync_fetch_and_add(&s_interrupts, 0) == 0 && iteration < 100; ++iteration)
     {
+        configuration c;
         replicant_returncode rc = current.do_it(10000, &c, &err);
         atomically_allow_pending_blocked_signals();
 
@@ -788,7 +795,77 @@ daemon :: become_cluster_member(const bootstrap& current)
             atomically_allow_pending_blocked_signals();
         }
 
+        for (size_t i = 0; !has_params && i < c.servers().size(); ++i)
+        {
+            busybee_single bs(c.servers()[i].bind_to);
+            const size_t sz = BUSYBEE_HEADER_SIZE
+                            + pack_size(REPLNET_GET_ROBUST_PARAMS)
+                            + sizeof(uint64_t);
+            std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
+            msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_GET_ROBUST_PARAMS << uint64_t(0);
+            bs.send(msg);
+            bs.set_timeout(1000);
+            bs.recv(&msg);
+
+            if (!msg.get())
+            {
+                continue;
+            }
+
+            network_msgtype mt;
+            uint64_t nonce;
+            e::unpacker up = msg->unpack_from(BUSYBEE_HEADER_SIZE);
+            up = up >> mt >> nonce >> cluster_nonce >> min_slot;
+
+            if (up.error() || mt != REPLNET_CLIENT_RESPONSE)
+            {
+                continue;
+            }
+
+            has_params = true;
+        }
+
         for (size_t i = 0; i < c.servers().size(); ++i)
+        {
+            busybee_single bs(c.servers()[i].bind_to);
+            const size_t sz = BUSYBEE_HEADER_SIZE
+                            + pack_size(REPLNET_CALL_ROBUST)
+                            + 3 * sizeof(uint64_t)
+                            + call.size();
+            std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
+            msg->pack_at(BUSYBEE_HEADER_SIZE)
+                << REPLNET_CALL_ROBUST << uint64_t(iteration) << cluster_nonce
+                << min_slot << e::pack_memmove(call.data(), call.size());
+
+            bs.send(msg);
+            bs.set_timeout(1000);
+            bs.recv(&msg);
+
+            if (!msg.get())
+            {
+                continue;
+            }
+
+            network_msgtype mt;
+            uint64_t nonce;
+            e::unpacker up = msg->unpack_from(BUSYBEE_HEADER_SIZE);
+            up = up >> mt >> nonce >> rc;
+
+            if (rc == REPLICANT_SUCCESS)
+            {
+                success = true;
+                break;
+            }
+            else
+            {
+                has_err = true;
+                err.set_loc(__FILE__, __LINE__);
+                err.set_msg() << "joining cluster failed; check server logs on " << c.servers()[i]
+                              << " for details";
+            }
+        }
+
+        for (size_t i = 0; !success && i < c.servers().size(); ++i)
         {
             busybee_single bs(c.servers()[i].bind_to);
             const size_t sz = BUSYBEE_HEADER_SIZE
@@ -816,7 +893,7 @@ daemon :: become_cluster_member(const bootstrap& current)
                 c.cluster() == tmpc.cluster() &&
                 c.version() < tmpc.version())
             {
-                c = tmpc;
+                break;
             }
         }
     }
@@ -1617,6 +1694,8 @@ daemon :: process_server_become_member(server_id si,
     up = up >> s;
     CHECK_UNPACK(SERVER_BECOME_MEMBER, up);
     LOG(INFO) << "received request from " << s << " to become a member";
+    LOG(WARNING) << s << " is using an old method to join the cluster that is deprecated as of Replicant 0.9; "
+                         "please upgrade all machines to 0.9 before upgrading to a future release";
 
     if (m_replica.get() && m_replica->any_config_has(s.id))
     {
