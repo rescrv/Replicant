@@ -85,6 +85,10 @@ pending_cond_follow :: pending_cond_follow(int64_t id,
 
 pending_cond_follow :: ~pending_cond_follow() throw ()
 {
+    if (m_data)
+    {
+        free(m_data);
+    }
 }
 
 std::auto_ptr<e::buffer>
