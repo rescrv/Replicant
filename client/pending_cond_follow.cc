@@ -85,9 +85,9 @@ pending_cond_follow :: pending_cond_follow(int64_t id,
 
 pending_cond_follow :: ~pending_cond_follow() throw ()
 {
-    if (m_data)
+    if (m_data && *m_data)
     {
-        free(m_data);
+        free(*m_data);
     }
 }
 
