@@ -59,22 +59,10 @@ main(int argc, const char* argv[])
         return EXIT_FAILURE;
     }
 
-    try
-    {
-        replicant_client* r = replicant_client_create(conn.host(), conn.port());
-        replicant_returncode re = REPLICANT_GARBAGE;
-        int64_t rid = replicant_client_new_object(r, ap.args()[0], ap.args()[1], &re);
-
-        if (!cli_finish(r, rid, &re))
-        {
-            return EXIT_FAILURE;
-        }
-
-        return EXIT_SUCCESS;
-    }
-    catch (std::exception& e)
-    {
-        std::cerr << "error: " << e.what() << std::endl;
-        return EXIT_FAILURE;
-    }
+    replicant_client* r = replicant_client_create(conn.host(), conn.port());
+    replicant_returncode re = REPLICANT_GARBAGE;
+    int64_t rid = replicant_client_new_object(r, ap.args()[0], ap.args()[1], &re);
+    int ret = cli_finish(r, rid, &re) ? EXIT_SUCCESS : EXIT_FAILURE;
+    replicant_client_destroy(r);
+    return ret;
 }
