@@ -16,7 +16,7 @@ def lines():
         v = g[:-len('.gremlin')] + '.valgrind.gremlin'
         f = open(v, 'w')
         f.write('#!/usr/bin/env gremlin\n')
-        f.write("env GREMLIN_PREFIX 'libtool --mode=execute valgrind --tool=memcheck --trace-children=yes --error-exitcode=1 --leak-check=full --gen-suppressions=all --suppressions=\"${REPLICANT_SRCDIR}/replicant.supp\"'\n")
+        f.write("env GREMLIN_PREFIX 'libtool --mode=execute valgrind --tool=memcheck --trace-children=yes --error-exitcode=127 --leak-check=full --gen-suppressions=all --suppressions=\"${REPLICANT_SRCDIR}/replicant.supp\"'\n")
         f.write('include ' + os.path.basename(g) + '\n')
         f.flush()
         f.close()
