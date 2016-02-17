@@ -1,0 +1,38 @@
+{
+    <bash>
+    Memcheck:Leak
+    ...
+    obj:*/bash
+    ...
+}
+{
+    <sed>
+    Memcheck:Leak
+    ...
+    obj:*/sed
+    ...
+}
+{
+    <aio_fsync>
+    Memcheck:Leak
+    ...
+    obj:/usr/lib/librt*.so
+    fun:aio_fsync
+    ...
+}
+{
+    <popt>
+    Memcheck:Leak
+    ...
+    fun:poptGetNextOpt
+    ...
+}
+{
+    <glibc-tls-leak>
+    Memcheck:Leak
+    fun:calloc
+    fun:allocate_dtv
+    fun:_dl_allocate_tls
+    fun:pthread_create@@*
+    ...
+}

@@ -1,0 +1,3 @@
+#!/usr/bin/env gremlin
+env GREMLIN_PREFIX 'libtool --mode=execute valgrind --tool=memcheck --trace-children=yes --error-exitcode=1 --leak-check=full --gen-suppressions=all --suppressions="${REPLICANT_SRCDIR}/replicant.supp"'
+include example-tick.gremlin

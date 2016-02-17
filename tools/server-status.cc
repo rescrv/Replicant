@@ -97,5 +97,6 @@ main(int argc, const char* argv[])
 
     assert(desc);
     std::cerr << desc << std::flush;
+    free(desc);
     return EXIT_SUCCESS;
 }

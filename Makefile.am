@@ -309,48 +309,66 @@ replicantexec_LTLIBRARIES += libreplicant-example-echo.la
 replicantexec_LTLIBRARIES += libreplicant-example-log.la
 replicantexec_LTLIBRARIES += libreplicant-example-nop.la
 TESTS += test/example-tick.gremlin
+TESTS += test/example-tick.valgrind.gremlin
 TESTS += test/example-condition.gremlin
+TESTS += test/example-condition.valgrind.gremlin
 TESTS += test/example-counter.gremlin
+TESTS += test/example-counter.valgrind.gremlin
 TESTS += test/example-echo.gremlin
+TESTS += test/example-echo.valgrind.gremlin
 TESTS += test/example-log.gremlin
+TESTS += test/example-log.valgrind.gremlin
 TESTS += test/example-nop.gremlin
+TESTS += test/example-nop.valgrind.gremlin
 endif
 
 libreplicant_example_tick_la_SOURCES = examples/tick.c
 libreplicant_example_tick_la_CFLAGS = $(CFLAGS)
 libreplicant_example_tick_la_LIBADD = librsm.la
 check_SCRIPTS += test/example-tick.gremlin
+check_SCRIPTS += test/example-tick.valgrind.gremlin
 EXTRA_DIST += test/example-tick.gremlin
+EXTRA_DIST += test/example-tick.valgrind.gremlin
 
 libreplicant_example_condition_la_SOURCES = examples/condition.c
 libreplicant_example_condition_la_CFLAGS = $(CFLAGS)
 libreplicant_example_condition_la_LIBADD = librsm.la
 check_SCRIPTS += test/example-condition.gremlin
+check_SCRIPTS += test/example-condition.valgrind.gremlin
 EXTRA_DIST += test/example-condition.gremlin
+EXTRA_DIST += test/example-condition.valgrind.gremlin
 
 libreplicant_example_counter_la_SOURCES = examples/counter.c
 libreplicant_example_counter_la_CFLAGS = $(CFLAGS)
 libreplicant_example_counter_la_LIBADD = librsm.la
 check_SCRIPTS += test/example-counter.gremlin
+check_SCRIPTS += test/example-counter.valgrind.gremlin
 EXTRA_DIST += test/example-counter.gremlin
+EXTRA_DIST += test/example-counter.valgrind.gremlin
 
 libreplicant_example_echo_la_SOURCES = examples/echo.c
 libreplicant_example_echo_la_CFLAGS = $(CFLAGS)
 libreplicant_example_echo_la_LIBADD = librsm.la
 check_SCRIPTS += test/example-echo.gremlin
+check_SCRIPTS += test/example-echo.valgrind.gremlin
 EXTRA_DIST += test/example-echo.gremlin
+EXTRA_DIST += test/example-echo.valgrind.gremlin
 
 libreplicant_example_log_la_SOURCES = examples/log.c
 libreplicant_example_log_la_CFLAGS = $(CFLAGS)
 libreplicant_example_log_la_LIBADD = librsm.la
 check_SCRIPTS += test/example-log.gremlin
+check_SCRIPTS += test/example-log.valgrind.gremlin
 EXTRA_DIST += test/example-log.gremlin
+EXTRA_DIST += test/example-log.valgrind.gremlin
 
 libreplicant_example_nop_la_SOURCES = examples/nop.c
 libreplicant_example_nop_la_CFLAGS = $(CFLAGS)
 libreplicant_example_nop_la_LIBADD = librsm.la
 check_SCRIPTS += test/example-nop.gremlin
+check_SCRIPTS += test/example-nop.valgrind.gremlin
 EXTRA_DIST += test/example-nop.gremlin
+EXTRA_DIST += test/example-nop.valgrind.gremlin
 
 ################################################################################
 ##################################### Tests ####################################
@@ -359,20 +377,32 @@ EXTRA_DIST += test/example-nop.gremlin
 EXTRA_DIST += test/env.sh
 
 check_SCRIPTS += test/5-node-cluster.gremlin
+check_SCRIPTS += test/5-node-cluster.valgrind.gremlin
 check_SCRIPTS += test/chaos.gremlin
+check_SCRIPTS += test/chaos.valgrind.gremlin
 check_SCRIPTS += test/restart-diff-address.gremlin
+check_SCRIPTS += test/restart-diff-address.valgrind.gremlin
 check_SCRIPTS += test/leader-rotate.gremlin
+check_SCRIPTS += test/leader-rotate.valgrind.gremlin
 EXTRA_DIST += test/5-node-cluster.gremlin
+EXTRA_DIST += test/5-node-cluster.valgrind.gremlin
 EXTRA_DIST += test/chaos.gremlin
+EXTRA_DIST += test/chaos.valgrind.gremlin
 EXTRA_DIST += test/restart-diff-address.gremlin
+EXTRA_DIST += test/restart-diff-address.valgrind.gremlin
 EXTRA_DIST += test/leader-rotate.gremlin
+EXTRA_DIST += test/leader-rotate.valgrind.gremlin
 
 TESTS += test/5-node-cluster.gremlin
+TESTS += test/5-node-cluster.valgrind.gremlin
 
 if ENABLE_EXAMPLES
 TESTS += test/chaos.gremlin
+TESTS += test/chaos.valgrind.gremlin
 TESTS += test/restart-diff-address.gremlin
+TESTS += test/restart-diff-address.valgrind.gremlin
 TESTS += test/leader-rotate.gremlin
+TESTS += test/leader-rotate.valgrind.gremlin
 endif
 
 ################################################################################
@@ -383,3 +413,12 @@ EXTRA_PROGRAMS += replicant-benchmark
 
 replicant_benchmark_SOURCES = replicant-benchmark.cc
 replicant_benchmark_LDADD = libreplicant.la -lygor -lpthread $(POPT_LIBS)
+
+################################################################################
+################################## Maintenance #################################
+################################################################################
+
+EXTRA_DIST += maint/valgrind-gremlins
+
+maintainer-generate:
+	maint/valgrind-gremlins

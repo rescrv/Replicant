@@ -180,6 +180,7 @@ daemon :: ~daemon() throw ()
         m_msgs_waiting_for_nonces.pop_front();
     }
 
+    m_gc.collect(m_busybee, e::garbage_collector::free_ptr<busybee_mta>);
     m_gc.deregister_thread(&m_gc_ts);
 }
 
