@@ -487,8 +487,8 @@ daemon :: run(bool daemonize,
     if (!m_replica->config().has(m_us.id))
     {
         bootstrap current = m_replica->config().current_bootstrap();
-        LOG(WARNING) << m_us << " is not in configuration " << m_replica->config().version();
-        LOG(INFO) << "adding ourselves to the configuration now";
+        LOG(WARNING) << "this " << m_us << " is not in configuration " << m_replica->config().version()
+                     << "; adding it to the configuration now";
         m_replica.reset();
         become_cluster_member(current);
 
