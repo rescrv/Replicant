@@ -515,6 +515,13 @@ daemon :: run(bool daemonize,
         }
     }
 
+    if (__sync_fetch_and_add(&s_interrupts, 0) > 0)
+    {
+        return EXIT_FAILURE;
+    }
+
+    assert(m_replica.get());
+
     if (!m_replica->config().has(m_us.id))
     {
         LOG(ERROR) << "despite repeated efforts to rectify the situation, " << m_us
@@ -523,7 +530,6 @@ daemon :: run(bool daemonize,
         return EXIT_FAILURE;
     }
 
-    assert(m_replica.get());
     m_config_mtx.lock();
     m_config = m_replica->config();
     m_config_mtx.unlock();
