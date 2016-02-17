@@ -200,7 +200,9 @@ bootstrap :: do_it(int timeout, configuration* config, e::error* err) const
 
     int64_t now = po6::monotonic_time();
     const int64_t target = now + timeout * MILLIS;
-    replicant_returncode rc;
+    replicant_returncode rc = REPLICANT_TIMEOUT;
+    err->set_loc(__FILE__, __LINE__);
+    err->set_msg() << "timed out connecting to the cluster";
 
     while (timeout < 0 || now < target)
     {
