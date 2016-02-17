@@ -36,3 +36,27 @@
     fun:pthread_create@@*
     ...
 }
+{
+    <glog1>
+    Memcheck:Addr1
+    ...
+    fun:_ZN6google24glog_internal_namespace_26InitGoogleLoggingUtilitiesEPKc
+    ...
+}
+{
+    <glog2>
+    Memcheck:Addr1
+    fun:strlen
+    fun:_ZN6google14LogDestinationC1EiPKc
+    fun:_ZN6google11LogToStderrEv
+    ...
+}
+{
+    <glog3>
+    Memcheck:Addr8
+    fun:memcpy@@GLIBC_2.14
+    obj:/usr/lib/libglog.so.0.0.0
+    fun:_ZN6google14LogDestinationC1EiPKc
+    fun:_ZN6google11LogToStderrEv
+    ...
+}
