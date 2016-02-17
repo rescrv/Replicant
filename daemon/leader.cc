@@ -279,11 +279,15 @@ leader :: send_proposal(daemon* d, commander* c)
         return;
     }
 
+    uint64_t now = po6::monotonic_time();
+
     for (size_t i = 0; i < m_acceptors.size(); ++i)
     {
-        if (!c->accepted_by(m_acceptors[i]))
+        if (!c->accepted_by(m_acceptors[i]) &&
+            c->timestamp(i) + REPLICANT_MINIMUM_RETRANSMISSION < now)
         {
             d->send_paxos_phase2a(m_acceptors[i], c->pval());
+            c->timestamp(i, now);
         }
     }
 }

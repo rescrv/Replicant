@@ -37,12 +37,20 @@ commander :: commander(const pvalue& p)
     : m_pval(p)
     , m_accepted_by()
 {
+    for (size_t i = 0; i < REPLICANT_MAX_REPLICAS; ++i)
+    {
+        m_timestamps[i] = 0;
+    }
 }
 
 commander :: commander(const commander& other)
     : m_pval(other.m_pval)
     , m_accepted_by(other.m_accepted_by)
 {
+    for (size_t i = 0; i < REPLICANT_MAX_REPLICAS; ++i)
+    {
+        m_timestamps[i] = other.m_timestamps[i];
+    }
 }
 
 commander :: ~commander() throw ()
@@ -70,10 +78,30 @@ commander :: accepted()
     return m_accepted_by.size();
 }
 
+uint64_t
+commander :: timestamp(unsigned idx)
+{
+    assert(idx < REPLICANT_MAX_REPLICAS);
+    return m_timestamps[idx];
+}
+
+void
+commander :: timestamp(unsigned idx, uint64_t ts)
+{
+    assert(idx < REPLICANT_MAX_REPLICAS);
+    m_timestamps[idx] = ts;
+}
+
 commander&
 commander :: operator = (const commander& rhs)
 {
     m_pval = rhs.m_pval;
     m_accepted_by = rhs.m_accepted_by;
+
+    for (size_t i = 0; i < REPLICANT_MAX_REPLICAS; ++i)
+    {
+        m_timestamps[i] = rhs.m_timestamps[i];
+    }
+
     return *this;
 }

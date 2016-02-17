@@ -39,4 +39,6 @@
 
 #define REPLICANT_SERVER_DRIVEN_NONCE_HISTORY 65536
 
+#define REPLICANT_MINIMUM_RETRANSMISSION (PO6_SECONDS)
+
 #endif // replicant_common_constants_h_

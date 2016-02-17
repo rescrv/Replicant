@@ -30,6 +30,7 @@
 
 // Replicant
 #include "namespace.h"
+#include "common/constants.h"
 #include "daemon/pvalue.h"
 
 BEGIN_REPLICANT_NAMESPACE
@@ -47,6 +48,8 @@ class commander
         bool accepted_by(server_id si);
         void accept(server_id si);
         size_t accepted();
+        uint64_t timestamp(unsigned idx);
+        void timestamp(unsigned idx, uint64_t ts);
 
     public:
         commander& operator = (const commander&);
@@ -54,6 +57,7 @@ class commander
     private:
         pvalue m_pval;
         std::vector<server_id> m_accepted_by;
+        uint64_t m_timestamps[REPLICANT_MAX_REPLICAS];
 };
 
 END_REPLICANT_NAMESPACE
