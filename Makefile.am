@@ -375,6 +375,7 @@ EXTRA_DIST += test/example-nop.valgrind.gremlin
 ################################################################################
 
 EXTRA_DIST += test/env.sh
+EXTRA_DIST += replicant.supp
 
 check_SCRIPTS += test/5-node-cluster.gremlin
 check_SCRIPTS += test/5-node-cluster.valgrind.gremlin
