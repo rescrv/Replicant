@@ -37,31 +37,42 @@
     ...
 }
 {
-    <glog1>
+    <glog>
     Memcheck:Addr1
     ...
     fun:_ZN6google24glog_internal_namespace_26InitGoogleLoggingUtilitiesEPKc
     ...
 }
 {
-    <glog2>
+    <glog>
     Memcheck:Addr1
-    fun:strlen
-    fun:_ZN6google14LogDestinationC1EiPKc
+    ...
     fun:_ZN6google11LogToStderrEv
     ...
 }
 {
-    <glog3>
+    <glog>
+    Memcheck:Addr2
+    ...
+    fun:_ZN6google11LogToStderrEv
+    ...
+}
+{
+    <glog>
+    Memcheck:Addr4
+    ...
+    fun:_ZN6google11LogToStderrEv
+    ...
+}
+{
+    <glog>
     Memcheck:Addr8
-    fun:memcpy@@GLIBC_*
-    obj:/usr/lib/libglog.so.*
-    fun:_ZN6google14LogDestinationC1EiPKc
+    ...
     fun:_ZN6google11LogToStderrEv
     ...
 }
 {
-    <glog3>
+    <glog>
     Memcheck:Leak
     ...
     fun:_ZN6google11LogToStderrEv
