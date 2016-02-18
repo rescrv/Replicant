@@ -54,9 +54,16 @@
 {
     <glog3>
     Memcheck:Addr8
-    fun:memcpy@@GLIBC_2.14
-    obj:/usr/lib/libglog.so.0.0.0
+    fun:memcpy@@GLIBC_*
+    obj:/usr/lib/libglog.so.*
     fun:_ZN6google14LogDestinationC1EiPKc
+    fun:_ZN6google11LogToStderrEv
+    ...
+}
+{
+    <glog3>
+    Memcheck:Leak
+    ...
     fun:_ZN6google11LogToStderrEv
     ...
 }
