@@ -78,3 +78,10 @@
     fun:_ZN6google11LogToStderrEv
     ...
 }
+{
+    <glog>
+    Memcheck:Leak
+    ...
+    fun:_ZN3fLS25dont_pass0toDEFINE_stringEPcPKc
+    ...
+}
