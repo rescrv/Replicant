@@ -836,7 +836,7 @@ daemon :: become_cluster_member(const bootstrap& current)
             has_params = true;
         }
 
-        for (size_t i = 0; i < c.servers().size(); ++i)
+        for (size_t i = 0; has_params && i < c.servers().size(); ++i)
         {
             busybee_single bs(c.servers()[i].bind_to);
             const size_t sz = BUSYBEE_HEADER_SIZE
