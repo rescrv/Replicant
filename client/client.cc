@@ -400,13 +400,41 @@ client :: availability_check(unsigned servers, int timeout,
         m_busybee.set_timeout(100);
         int64_t ret = inner_loop(status);
 
-        if (ret < 0 && *status != REPLICANT_TIMEOUT)
+        if (ret < 0)
         {
-            return -1;
+            if (*status == REPLICANT_COMM_FAILED)
+            {
+                po6::sleep(100 * PO6_MILLIS);
+                continue;
+            }
+            else if (*status != REPLICANT_TIMEOUT)
+            {
+                return -1;
+            }
         }
 
         if (m_config.servers().size() >= servers)
         {
+            replicant_returncode lrc;
+            int64_t rid = this->poke(status);
+
+            if (timeout >= 0)
+            {
+                timeout *= 1000;
+                timeout -= (po6::monotonic_time() - start) / PO6_MILLIS;
+
+                if (timeout < 0)
+                {
+                    timeout = 0;
+                }
+            }
+
+            if (this->wait(rid, timeout, &lrc) != rid)
+            {
+                *status = lrc;
+                return -1;
+            }
+
             *status = REPLICANT_SUCCESS;
             return 0;
         }

@@ -25,6 +25,9 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
+// e
+#include <e/guard.h>
+
 // Replicant
 #include <replicant.h>
 #include "tools/common.h"
@@ -66,6 +69,14 @@ main(int argc, const char* argv[])
     }
 
     replicant_client* r = replicant_client_create(conn.host(), conn.port());
+
+    if (!r)
+    {
+        std::cerr << "could not create replicant client" << std::endl;
+        return EXIT_FAILURE;
+    }
+
+    e::guard g_r = e::makeguard(replicant_client_destroy, r);
     replicant_returncode re = REPLICANT_GARBAGE;
     int ret = replicant_client_availability_check(r, servers, timeout, &re);
 
