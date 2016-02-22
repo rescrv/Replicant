@@ -186,6 +186,11 @@ replicant_client_wait(struct replicant_client* client,
                       enum replicant_returncode* status);
 
 int
+replicant_client_availability_check(struct replicant_client* client,
+                                    unsigned servers, int timeout,
+                                    enum replicant_returncode* status);
+
+int
 replicant_client_kill(struct replicant_client* client, int64_t id);
 
 int

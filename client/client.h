@@ -55,6 +55,7 @@
 BEGIN_REPLICANT_NAMESPACE
 class pending;
 class pending_robust;
+class pending_cond_follow;
 
 class client
 {
@@ -105,6 +106,8 @@ class client
                               replicant_returncode* status);
         int conn_str(replicant_returncode* status, char** servers);
         int64_t kill_server(uint64_t token, replicant_returncode* status);
+        int availability_check(unsigned servers, int timeout,
+                               replicant_returncode* status);
         // looping/polling
         int64_t loop(int timeout, replicant_returncode* status);
         int64_t wait(int64_t id, int timeout, replicant_returncode* status);

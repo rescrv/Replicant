@@ -297,6 +297,16 @@ replicant_client_cond_wait(struct replicant_client* _cl,
     );
 }
 
+REPLICANT_API int
+replicant_client_availability_check(struct replicant_client* _cl,
+                                    unsigned servers, int timeout,
+                                    enum replicant_returncode* status)
+{
+    C_WRAP_EXCEPT(
+    return cl->availability_check(servers, timeout, status);
+    );
+}
+
 REPLICANT_API int64_t
 replicant_client_cond_follow(struct replicant_client* _cl,
                              const char* object,

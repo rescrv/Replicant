@@ -383,6 +383,41 @@ client :: kill_server(uint64_t token, replicant_returncode* status)
     return call("replicant", "kill_server", buf, 8, REPLICANT_CALL_ROBUST, status, NULL, 0);
 }
 
+int
+client :: availability_check(unsigned servers, int timeout,
+                             replicant_returncode* status)
+{
+    if (m_config.servers().size() >= servers)
+    {
+        *status = REPLICANT_SUCCESS;
+        return 0;
+    }
+
+    const uint64_t start = po6::monotonic_time();
+
+    while (timeout < 0 || start + PO6_SECONDS * timeout >= po6::monotonic_time())
+    {
+        m_busybee.set_timeout(100);
+        int64_t ret = inner_loop(status);
+
+        if (ret < 0 && *status != REPLICANT_TIMEOUT)
+        {
+            return -1;
+        }
+
+        if (m_config.servers().size() >= servers)
+        {
+            *status = REPLICANT_SUCCESS;
+            return 0;
+        }
+
+        // XXX check that a quorum are live, and report on each one
+    }
+
+    ERROR(TIMEOUT) << "operation timed out";
+    return -1;
+}
+
 int64_t
 client :: loop(int timeout, replicant_returncode* status)
 {

@@ -50,6 +50,7 @@ main(int argc, const char* argv[])
     cmds.push_back(e::subcommand("conn-str",          "Output a connection string for the current cluster"));
     cmds.push_back(e::subcommand("kill-server",       "Remove a server from the cluster"));
     cmds.push_back(e::subcommand("server-status",     "Directly check the status of a server"));
+    cmds.push_back(e::subcommand("availability-check","Check if the cluster consists of N or more servers"));
     cmds.push_back(e::subcommand("generate-unique-number", "Generate a unique number, using the cluster to guarantee its uniqueness"));
     cmds.push_back(e::subcommand("debug",             "Debug tools for replicant developers"));
     return dispatch_to_subcommands(argc, argv,

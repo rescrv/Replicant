@@ -18,3 +18,4 @@ daemon replicant daemon --debug --foreground --data=replica3 --listen 127.0.0.1 
 run replicant server-status --host 127.0.0.1 --port 1985
 daemon replicant daemon --debug --foreground --data=replica4 --listen 127.0.0.1 --listen-port 1986 --connect-port 1985
 run replicant server-status --host 127.0.0.1 --port 1986
+run replicant availability-check --servers 5 --timeout 10

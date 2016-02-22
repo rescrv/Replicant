@@ -26,6 +26,7 @@
 /Makefile.in
 /missing
 /replicant
+/replicant-availability-check
 /replicant-backup-object
 /replicant-benchmark
 /replicant-block
@@ -46,11 +47,11 @@
 /replicant-list-servers
 /replicant-new_object
 /replicant-new-object
-/replicant-server-status
 /replicant.pc
 /replicant-poke
 /replicant-restore-object
 /replicant-rsm-dlopen
+/replicant-server-status
 /replicant.upack
 /stamp-h1
 /test-driver

@@ -235,6 +235,7 @@ replicantexec_PROGRAMS += replicant-list-objects
 replicantexec_PROGRAMS += replicant-conn-str
 replicantexec_PROGRAMS += replicant-kill-server
 replicantexec_PROGRAMS += replicant-server-status
+replicantexec_PROGRAMS += replicant-availability-check
 replicantexec_PROGRAMS += replicant-debug-call
 replicantexec_PROGRAMS += replicant-debug-condition
 replicantexec_PROGRAMS += replicant-debug-defended-call
@@ -287,6 +288,9 @@ replicant_kill_server_LDADD = libreplicant.la $(PO6_LIBS) $(POPT_LIBS)
 
 replicant_server_status_SOURCES = tools/server-status.cc
 replicant_server_status_LDADD = libreplicant.la $(PO6_LIBS) $(POPT_LIBS)
+
+replicant_availability_check_SOURCES = tools/availability-check.cc
+replicant_availability_check_LDADD = libreplicant.la $(PO6_LIBS) $(POPT_LIBS)
 
 replicant_debug_call_SOURCES = tools/debug-call.cc
 replicant_debug_call_LDADD = libreplicant.la $(E_LIBS) $(PO6_LIBS) $(POPT_LIBS)
