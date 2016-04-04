@@ -420,6 +420,19 @@ replicant_benchmark_SOURCES = replicant-benchmark.cc
 replicant_benchmark_LDADD = libreplicant.la -lygor -lpthread $(POPT_LIBS)
 
 ################################################################################
+################################# Documentation ################################
+################################################################################
+
+EXTRA_DIST += $(wildcard doc/*.tex)
+EXTRA_DIST += $(wildcard doc/*.xtx)
+EXTRA_DIST += $(wildcard doc/*/*.tex)
+EXTRA_DIST += $(wildcard doc/*/*/*.tex)
+EXTRA_DIST += $(wildcard doc/*/*/*/*.tex)
+EXTRA_DIST += $(wildcard doc/*/*/*/*/*.tex)
+EXTRA_DIST += doc/Makefile
+EXTRA_DIST += doc/latex.py
+
+################################################################################
 ################################## Maintenance #################################
 ################################################################################
 
