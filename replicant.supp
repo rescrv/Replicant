@@ -45,6 +45,7 @@
     fun:allocate_stack
     fun:pthread_create@@GLIBC_2.2.5
     ...
+}
 {
     <glog>
     Memcheck:Addr1
