@@ -609,7 +609,7 @@ daemon :: run(bool daemonize,
     }
 
     e::atomic::store_32_nobarrier(&m_bootstrap_stop, 0);
-    m_bootstrap_thread.reset(new po6::threads::thread(po6::threads::make_thread_wrapper(&daemon::rebootstrap, this, saved_bootstrap)));
+    m_bootstrap_thread.reset(new po6::threads::thread(po6::threads::make_obj_func(&daemon::rebootstrap, this, saved_bootstrap)));
     m_bootstrap_thread->start();
 
     while (__sync_fetch_and_add(&s_interrupts, 0) == 0)

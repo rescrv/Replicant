@@ -188,7 +188,7 @@ object :: object(replica* r, uint64_t slot, const std::string& n, object_t t, co
     , m_keepalive(false)
     , m_snap_mtx()
     , m_snap()
-    , m_thread(po6::threads::make_thread_wrapper(&object::run, this))
+    , m_thread(po6::threads::make_obj_func(&object::run, this))
     , m_conditions()
     , m_tick_func()
     , m_tick_interval()

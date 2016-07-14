@@ -239,7 +239,7 @@ class acceptor::garbage_collector
 
 acceptor :: garbage_collector :: garbage_collector(acceptor* a)
     : m_acceptor(a)
-    , m_thread(po6::threads::make_thread_wrapper(&garbage_collector::run, this))
+    , m_thread(po6::threads::make_obj_func(&garbage_collector::run, this))
     , m_mtx()
     , m_cnd(&m_mtx)
     , m_below_lognum(0)
