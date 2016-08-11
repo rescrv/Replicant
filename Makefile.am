@@ -30,7 +30,9 @@ ACLOCAL_AMFLAGS = -I m4 ${ACLOCAL_FLAGS}
 AM_CPPFLAGS  = -DREPLICANT_EXEC_DIR="\"$(replicantexecdir)\"" -I${abs_top_srcdir}/include $(SPARSEHASH_CFLAGS) $(PO6_CFLAGS) $(E_CFLAGS) $(BUSYBEE_CFLAGS)
 AM_CFLAGS    = -fvisibility=hidden $(WANAL_CFLAGS)
 AM_CXXFLAGS  = -fvisibility=hidden -fvisibility-inlines-hidden $(SPARSEHASH_CFLAGS) $(PO6_CFLAGS) $(E_CFLAGS) $(BUSYBEE_CFLAGS) $(WANAL_CXXFLAGS)
+if MAKE_NO_PRINT_DIRECTORY
 AM_MAKEFLAGS = --no-print-directory
+endif
 HELP2MAN_FLAGS = --no-discard-stderr --libtool --no-info --version-string=$(VERSION) --manual="Replicant User Manual"
 TESTS_ENVIRONMENT = . $(abs_top_srcdir)/test/env.sh "${abs_top_srcdir}" "${abs_top_builddir}" "${VERSION}";
 AM_DISTCHECK_CONFIGURE_FLAGS = --enable-example-state-machines
