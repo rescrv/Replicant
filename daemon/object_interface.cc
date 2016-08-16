@@ -97,7 +97,7 @@ object_interface :: read(char* data, size_t sz)
 {
     if (fd.xread(data, sz) != ssize_t(sz))
     {
-        if (errno == EINTR)
+        if (errno == EINTR || shutdown)
         {
             abort();
         }
@@ -113,7 +113,7 @@ object_interface :: write(const char* data, size_t sz)
 {
     if (fd.xwrite(data, sz) != ssize_t(sz))
     {
-        if (errno == EINTR)
+        if (errno == EINTR || shutdown)
         {
             abort();
         }
