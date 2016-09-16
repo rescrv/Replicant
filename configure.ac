@@ -72,11 +72,12 @@ AM_CONDITIONAL([ENABLE_DAEMON], [test x"${enable_daemon}" = xyes])
 AM_CONDITIONAL([ENABLE_REPLICANT_STUB], [test x"${enable_daemon}" = xyes -o x"${enable_tools}" = xyes])
 
 # Checks for libraries.
+AS_IF([test "x$POPT_LIBS" = x], [
 AC_CHECK_LIB([popt], [poptGetContext], [has_popt=true], [AC_MSG_ERROR([
 ---------------------------------------
 Replicant relies upon the popt library.
 Please install popt to continue.
----------------------------------------])])
+---------------------------------------])])])
 AC_CHECK_LIB([dl], [dlopen], [needs_ldl=yes], [needs_ldl=no])
 
 if test x"${needs_ldl}" = xyes; then
