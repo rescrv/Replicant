@@ -162,7 +162,7 @@ librsm_la_LIBADD = libreplicant_object_interface.la $(E_LIBS)
 
 libreplicant_object_interface_la_SOURCES = daemon/object_interface.cc
 
-replicant_rsm_dlopen_SOURCES = daemon/rsm-dlopen.c
+replicant_rsm_dlopen_SOURCES = daemon/rsm-dlopen.c daemon/dummy.cc
 replicant_rsm_dlopen_LDADD =
 replicant_rsm_dlopen_LDADD += librsm.la
 replicant_rsm_dlopen_LDADD += $(PO6_LIBS)
