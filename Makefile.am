@@ -152,15 +152,12 @@ replicant_daemon_LDADD += -lpthread
 ################################################################################
 
 lib_LTLIBRARIES += librsm.la
-noinst_LTLIBRARIES += libreplicant_object_interface.la
 include_HEADERS += include/rsm.h
 
 replicantexec_PROGRAMS += replicant-rsm-dlopen
 
-librsm_la_SOURCES = daemon/rsm.cc
-librsm_la_LIBADD = libreplicant_object_interface.la $(E_LIBS)
-
-libreplicant_object_interface_la_SOURCES = daemon/object_interface.cc
+librsm_la_SOURCES = daemon/rsm.cc daemon/object_interface.cc
+librsm_la_LIBADD = $(E_LIBS)
 
 replicant_rsm_dlopen_SOURCES = daemon/rsm-dlopen.c daemon/dummy.cc
 replicant_rsm_dlopen_LDADD =
