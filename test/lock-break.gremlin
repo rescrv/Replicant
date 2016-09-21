@@ -1,0 +1,9 @@
+#!/usr/bin/env gremlin
+include 5-node-cluster.gremlin
+
+run replicant new-object --host 127.0.0.1 --port 1982 lock ${REPLICANT_BUILDDIR}/.libs/libreplicant-example-lock.so
+
+run with-lock "going to fail" false
+daemon with-lock "sleeper" sleep 10
+run sleep 5
+run break-lock 0 "going to fail"

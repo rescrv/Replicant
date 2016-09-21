@@ -54,6 +54,7 @@ noinst_LTLIBRARIES =
 
 bin_PROGRAMS =
 noinst_PROGRAMS =
+check_PROGRAMS =
 EXTRA_PROGRAMS =
 
 check_SCRIPTS =
@@ -311,6 +312,9 @@ replicantexec_LTLIBRARIES += libreplicant-example-counter.la
 replicantexec_LTLIBRARIES += libreplicant-example-echo.la
 replicantexec_LTLIBRARIES += libreplicant-example-log.la
 replicantexec_LTLIBRARIES += libreplicant-example-nop.la
+replicantexec_LTLIBRARIES += libreplicant-example-lock.la
+check_PROGRAMS += examples/lock/break-lock
+check_PROGRAMS += examples/lock/with-lock
 TESTS += test/example-tick.gremlin
 TESTS += test/example-tick.valgrind.gremlin
 TESTS += test/example-condition.gremlin
@@ -323,6 +327,8 @@ TESTS += test/example-log.gremlin
 TESTS += test/example-log.valgrind.gremlin
 TESTS += test/example-nop.gremlin
 TESTS += test/example-nop.valgrind.gremlin
+TESTS += test/lock-normal.gremlin
+TESTS += test/lock-break.gremlin
 endif
 
 libreplicant_example_tick_la_SOURCES = examples/tick.c
@@ -372,6 +378,19 @@ check_SCRIPTS += test/example-nop.gremlin
 check_SCRIPTS += test/example-nop.valgrind.gremlin
 EXTRA_DIST += test/example-nop.gremlin
 EXTRA_DIST += test/example-nop.valgrind.gremlin
+
+noinst_HEADERS += examples/lock/common.h
+libreplicant_example_lock_la_SOURCES = examples/lock/object.c
+libreplicant_example_lock_la_CFLAGS = $(CFLAGS)
+libreplicant_example_lock_la_LIBADD = librsm.la
+examples_lock_break_lock_SOURCES = examples/lock/break-lock.c
+examples_lock_break_lock_LDADD = libreplicant.la
+examples_lock_with_lock_SOURCES = examples/lock/with-lock.c
+examples_lock_with_lock_LDADD = libreplicant.la
+check_SCRIPTS += test/lock-normal.gremlin
+check_SCRIPTS += test/lock-break.gremlin
+EXTRA_DIST += test/lock-normal.gremlin
+EXTRA_DIST += test/lock-break.gremlin
 
 ################################################################################
 ##################################### Tests ####################################
