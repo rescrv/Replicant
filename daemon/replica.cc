@@ -36,6 +36,7 @@
 
 // POSIX
 #include <signal.h>
+#include <spawn.h>
 #include <sys/stat.h>
 
 // STL
@@ -1296,10 +1297,11 @@ replica :: execute_new_object(const pvalue& p,
 
     const std::string lib(input.cdata() + name_sz + 1, input.size() - name_sz - 1);
     LOG(INFO) << "creating object \"" << e::strescape(name) << "\"";
-    object* obj = launch_library(name, p.s, lib);
+    e::intrusive_ptr<object> obj = launch_library(name, p.s, lib);
 
     if (obj)
     {
+        assert(m_objects[name] == obj);
         obj->ctor();
         executed(p, flags, command_nonce, si, request_nonce, REPLICANT_SUCCESS, "");
     }
@@ -1613,7 +1615,7 @@ library_name(const std::string& name, uint64_t slot)
 }
 
 bool
-replica :: launch(object* obj, const char* executable, const char* const * args)
+replica :: launch(object* obj, const char* executable, char* const * args)
 {
     // Open a Unix socket for communication
     int fds[2];
@@ -1629,14 +1631,32 @@ replica :: launch(object* obj, const char* executable, const char* const * args)
     char fdbuf[24];
     sprintf(fdbuf, "FD=%d", fds[1]);
     char* const envp[] = {fdbuf, 0};
-    pid_t child = vfork();
+    pid_t child;
+    posix_spawn_file_actions_t file_actions;
 
-    if (child == 0)
+    if (posix_spawn_file_actions_init(&file_actions) != 0)
     {
-        execve(executable, const_cast<char*const*>(args), envp);
-        _exit(EXIT_FAILURE);
+        PLOG(ERROR) << "could not create object \"" << e::strescape(obj->name()) << "\"";
+        return false;
     }
-    else if (child < 0)
+
+    e::guard g_fa = e::makeguard(posix_spawn_file_actions_destroy, &file_actions);
+
+    for (int i = 0; i < sysconf(_SC_OPEN_MAX); ++i)
+    {
+        if (i == fds[1])
+        {
+            continue;
+        }
+
+        if (posix_spawn_file_actions_addclose(&file_actions, i) != 0)
+        {
+            PLOG(ERROR) << "could not create object \"" << e::strescape(obj->name()) << "\"";
+            return false;
+        }
+    }
+
+    if (posix_spawn(&child, executable, NULL, NULL, args, envp) != 0)
     {
         PLOG(ERROR) << "could not create object \"" << e::strescape(obj->name()) << "\"";
         return false;
@@ -1701,14 +1721,14 @@ locate_rsm_dlopen(std::string* path)
 
 #pragma GCC diagnostic pop
 
-replicant::object*
+e::intrusive_ptr<replicant::object>
 replica :: launch_library(const std::string& name, uint64_t slot, const std::string& lib)
 {
     e::intrusive_ptr<object> obj = new object(this, slot, name, OBJECT_LIBRARY, lib);
     m_objects[name] = obj;
     std::string libname = library_name(name, slot);
 
-    if (!atomic_write(AT_FDCWD, libname.c_str(), lib))
+    if (!atomic_write(AT_FDCWD, libname.c_str(), S_IRWXU, lib))
     {
         PLOG(ERROR) << "could not spawn library for " << name;
         return NULL;
@@ -1722,14 +1742,32 @@ replica :: launch_library(const std::string& name, uint64_t slot, const std::str
         return NULL;
     }
 
-    const char* const args[] = {exe.c_str(), libname.c_str(), 0};
+    char* exe_c_str = strdup((exe.c_str()));
+
+    if (!exe_c_str)
+    {
+        PLOG(ERROR) << "could not spawn library for " << name;
+        return NULL;
+    }
+
+    e::guard g_exe = e::makeguard(free, exe_c_str);
+    char* libname_c_str = strdup((libname.c_str()));
+
+    if (!libname_c_str)
+    {
+        PLOG(ERROR) << "could not spawn library for " << name;
+        return NULL;
+    }
+
+    e::guard g_libname = e::makeguard(free, libname_c_str);
+    char* const args[] = {exe_c_str, libname_c_str, 0};
 
     if (!launch(obj.get(), exe.c_str(), args))
     {
         return NULL;
     }
 
-    return obj.get();
+    return obj;
 }
 
 bool
@@ -1745,7 +1783,7 @@ replica :: relaunch(const e::slice& name, uint64_t slot, const e::slice& snap)
         return false;
     }
 
-    object* obj = NULL;
+    e::intrusive_ptr<object> obj = NULL;
 
     switch (t)
     {

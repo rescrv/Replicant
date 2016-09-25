@@ -216,8 +216,8 @@ class replica
                       uint64_t request_nonce,
                       replicant_returncode status,
                       const std::string& result);
-        bool launch(object* obj, const char* executable, const char* const * args);
-        object* launch_library(const std::string& name, uint64_t slot, const std::string& lib);
+        bool launch(object* obj, const char* executable, char* const * args);
+        e::intrusive_ptr<object> launch_library(const std::string& name, uint64_t slot, const std::string& lib);
         bool relaunch(const e::slice& name, uint64_t slot, const e::slice& state);
 
     private:

@@ -507,7 +507,7 @@ object :: run()
     std::list<enqueued_cond_wait> cond_waits;
     std::list<enqueued_call> calls;
     std::list<e::intrusive_ptr<snapshot> > snapshots;
-    uint64_t failed_at = m_fail_at;
+    uint64_t failed_at = UINT64_MAX;
     bool keepalive = false;
 
     while (true)
@@ -1132,7 +1132,7 @@ object :: fail()
         if (p <= 0)
         {
             kill(m_obj_pid, SIGKILL);
-            p = waitpid(m_obj_pid, &status, 0);
+            waitpid(m_obj_pid, &status, 0);
         }
     }
 

@@ -64,13 +64,19 @@ replicant :: atomic_read(int dir, const char* path, std::string* contents)
 }
 
 bool
-replicant :: atomic_write(int dir, const char* path, const std::string& contents)
+replicant :: atomic_write(int dir, const char* path, mode_t mode, const std::string& contents)
 {
-    po6::io::fd fd(openat(dir, ".atomic.tmp", O_WRONLY|O_CREAT|O_TRUNC, S_IRUSR|S_IWUSR));
+    po6::io::fd fd(openat(dir, ".atomic.tmp", O_WRONLY|O_CREAT|O_TRUNC, mode));
     return fd.get() >= 0 &&
            fd.xwrite(contents.data(), contents.size()) == ssize_t(contents.size()) &&
            fsync(fd.get()) >= 0 &&
            (dir == AT_FDCWD || fsync(dir) >= 0) &&
            renameat(dir, ".atomic.tmp", dir, path) >= 0 &&
            (dir == AT_FDCWD || fsync(dir) >= 0);
+}
+
+bool
+replicant :: atomic_write(int dir, const char* path, const std::string& contents)
+{
+    return atomic_write(dir, path, S_IRUSR|S_IWUSR, contents);
 }

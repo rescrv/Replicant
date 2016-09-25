@@ -42,6 +42,8 @@ bool
 atomic_read(int dir, const char* path, std::string* contents);
 
 bool
+atomic_write(int dir, const char* path, mode_t mode, const std::string& contents);
+bool
 atomic_write(int dir, const char* path, const std::string& contents);
 
 END_REPLICANT_NAMESPACE
