@@ -136,6 +136,7 @@ main(int argc, char* argv[])
         if (!WIFEXITED(wstatus) || WEXITSTATUS(wstatus) != 0)
         {
             fprintf(stderr, "called process terminated abnormally; retaining lock\n");
+            replicant_client_destroy(repl);
             return EXIT_SUCCESS;
         }
     }
@@ -154,7 +155,9 @@ main(int argc, char* argv[])
     id = replicant_client_call(repl, "lock", "unlock",
                                output, output_sz, REPLICANT_CALL_ROBUST,
                                &rc, NULL, NULL);
+    free(output);
     replicant_finish(repl, id, &rc);
+    replicant_client_destroy(repl);
     return EXIT_SUCCESS;
 
 usage:
