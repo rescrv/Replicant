@@ -1628,43 +1628,37 @@ replica :: launch(object* obj, const char* executable, char* const * args)
 
     e::guard g_fd0 = e::makeguard(close, fds[0]);
     e::guard g_fd1 = e::makeguard(close, fds[1]);
-    char fdbuf[24];
-    sprintf(fdbuf, "FD=%d", fds[1]);
-    char* const envp[] = {fdbuf, 0};
-    pid_t child;
-    posix_spawn_file_actions_t file_actions;
+    char* const envp[] = {0};
+    pid_t child = fork();
 
-    if (posix_spawn_file_actions_init(&file_actions) != 0)
+    if (child < 0)
     {
         PLOG(ERROR) << "could not create object \"" << e::strescape(obj->name()) << "\"";
         return false;
     }
-
-    e::guard g_fa = e::makeguard(posix_spawn_file_actions_destroy, &file_actions);
-
-    for (int i = 0; i < sysconf(_SC_OPEN_MAX); ++i)
+    else if (child == 0)
     {
-        if (i == fds[1])
+        if (dup2(fds[1], 0) < 0)
         {
-            continue;
+            abort();
         }
 
-        if (posix_spawn_file_actions_addclose(&file_actions, i) != 0)
+        int limit = sysconf(_SC_OPEN_MAX);
+
+        for (int i = 1; i < limit; ++i)
         {
-            PLOG(ERROR) << "could not create object \"" << e::strescape(obj->name()) << "\"";
-            return false;
+            close(i);
         }
-    }
 
-    if (posix_spawn(&child, executable, NULL, NULL, args, envp) != 0)
+        execve(executable, args, envp);
+        abort();
+    }
+    else
     {
-        PLOG(ERROR) << "could not create object \"" << e::strescape(obj->name()) << "\"";
-        return false;
+        obj->set_child(child, fds[0]);
+        g_fd0.dismiss();
+        return true;
     }
-
-    obj->set_child(child, fds[0]);
-    g_fd0.dismiss();
-    return true;
 }
 
 #pragma GCC diagnostic push

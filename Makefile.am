@@ -328,9 +328,7 @@ TESTS += test/example-log.valgrind.gremlin
 TESTS += test/example-nop.gremlin
 TESTS += test/example-nop.valgrind.gremlin
 TESTS += test/lock-normal.gremlin
-TESTS += test/lock-normal.valgrind.gremlin
 TESTS += test/lock-break.gremlin
-TESTS += test/lock-break.valgrind.gremlin
 endif
 
 libreplicant_example_tick_la_SOURCES = examples/tick.c

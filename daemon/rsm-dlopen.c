@@ -66,11 +66,6 @@ action_nop(struct state_machine* rsm,
 int
 main(int argc, const char* argv[])
 {
-    const long max_open_files = sysconf(_SC_OPEN_MAX);
-    char* socket_str = NULL;
-    long socket_fd = -1;
-    long li = 0;
-    char* end = NULL;
     void* lib = NULL;
     struct state_machine* rsm = NULL;
     void* state = NULL;
@@ -80,31 +75,6 @@ main(int argc, const char* argv[])
     if (argc != 2)
     {
         return EXIT_FAILURE;
-    }
-
-    socket_str = getenv("FD");
-
-    if (!socket_str)
-    {
-        return EXIT_FAILURE;
-    }
-
-    errno = 0;
-    socket_fd = strtol(socket_str, &end, 10);
-
-    if (socket_fd < 0 || errno != 0 || *end != '\0')
-    {
-        return EXIT_FAILURE;
-    }
-
-    if (dup2(socket_fd, 0) < 0)
-    {
-        return EXIT_FAILURE;
-    }
-
-    for (li = 1; li < max_open_files; ++li)
-    {
-        close(li);
     }
 
     obj_int = object_interface_create(0);
