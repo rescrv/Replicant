@@ -328,7 +328,9 @@ TESTS += test/example-log.valgrind.gremlin
 TESTS += test/example-nop.gremlin
 TESTS += test/example-nop.valgrind.gremlin
 TESTS += test/lock-normal.gremlin
+TESTS += test/lock-normal.valgrind.gremlin
 TESTS += test/lock-break.gremlin
+TESTS += test/lock-break.valgrind.gremlin
 endif
 
 libreplicant_example_tick_la_SOURCES = examples/tick.c
@@ -388,9 +390,13 @@ examples_lock_break_lock_LDADD = libreplicant.la
 examples_lock_with_lock_SOURCES = examples/lock/with-lock.c
 examples_lock_with_lock_LDADD = libreplicant.la
 check_SCRIPTS += test/lock-normal.gremlin
+check_SCRIPTS += test/lock-normal.valgrind.gremlin
 check_SCRIPTS += test/lock-break.gremlin
+check_SCRIPTS += test/lock-break.valgrind.gremlin
 EXTRA_DIST += test/lock-normal.gremlin
+EXTRA_DIST += test/lock-normal.valgrind.gremlin
 EXTRA_DIST += test/lock-break.gremlin
+EXTRA_DIST += test/lock-break.valgrind.gremlin
 
 ################################################################################
 ##################################### Tests ####################################
