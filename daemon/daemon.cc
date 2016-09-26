@@ -168,6 +168,12 @@ daemon :: ~daemon() throw ()
         delete it->second;
     }
 
+    for (unordered_list_t::iterator it = m_unassigned_cmds.begin();
+            it != m_unassigned_cmds.end(); ++it)
+    {
+        delete *it;
+    }
+
     while (!m_msgs_waiting_for_persistence.empty())
     {
         delete m_msgs_waiting_for_persistence.front().msg;
