@@ -76,7 +76,8 @@ enum command_response_t
     COMMAND_RESPONSE_COND_BROADCAST_DATA    = 5,
     COMMAND_RESPONSE_COND_CURRENT_VALUE     = 6,
     COMMAND_RESPONSE_TICK_INTERVAL          = 7,
-    COMMAND_RESPONSE_OUTPUT                 = 16
+    COMMAND_RESPONSE_OUTPUT                 = 16,
+    COMMAND_FAILURE                         = 31
 };
 
 void object_read_snapshot(struct object_interface* obj_int, const char** data, size_t* data_sz);

@@ -108,6 +108,7 @@ class object
         void do_call_cond_current_value();
         void do_call_tick_interval();
         void do_call_output(const enqueued_call& c);
+        void do_failure();
         void fail();
         bool read(char* data, size_t sz);
         bool write(const char* data, size_t sz);

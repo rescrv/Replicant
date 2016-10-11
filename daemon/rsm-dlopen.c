@@ -88,7 +88,9 @@ main(int argc, const char* argv[])
 
     if (!lib)
     {
-        object_permanent_error(obj_int, "could not load library %s : %s", argv[1], dlerror());
+        const char* err = dlerror();
+        err = err ? err : "<no error provided>";
+        object_permanent_error(obj_int, "could not load library %s: %s", argv[1], err);
         return EXIT_FAILURE;
     }
 

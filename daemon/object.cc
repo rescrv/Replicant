@@ -493,6 +493,9 @@ object :: run()
                 do_call_output(c_output);
                 tor_done = true;
                 break;
+            case COMMAND_FAILURE:
+                do_failure();
+                return;
             default:
                 fail();
                 return;
@@ -742,6 +745,9 @@ object :: do_call(const enqueued_call& c)
                 break;
             case COMMAND_RESPONSE_OUTPUT:
                 return do_call_output(c);
+            case COMMAND_FAILURE:
+                do_failure();
+                return;
             default:
                 fail();
                 return;
@@ -1100,6 +1106,54 @@ object :: do_call_output(const enqueued_call& c)
     replicant_returncode status = static_cast<replicant_returncode>(s);
     std::string output(&output_buf[0], o);
     m_replica->executed(c.p, c.flags, c.command_nonce, c.si, c.request_nonce, status, output);
+}
+
+void
+object :: do_failure()
+{
+    char buf[4];
+
+    if (!read(buf, 4))
+    {
+        return;
+    }
+
+    uint32_t o;
+    e::unpack32be(buf, &o);
+    std::vector<char> log_buf(o);
+
+    if (!read(&log_buf[0], o))
+    {
+        return;
+    }
+
+    const char* ptr = &log_buf[0];
+    const char* end = &log_buf[0] + log_buf.size();
+
+    while (ptr < end)
+    {
+        const void* ptr_nl = memchr(ptr, '\n', end - ptr);
+        const void* ptr_0  = memchr(ptr, '\0', end - ptr);
+        const char* eol = end;
+
+        if (ptr_nl && ptr_0 && ptr_0 <= ptr_nl)
+        {
+            eol = static_cast<const char*>(ptr_0);
+        }
+        else if (ptr_nl)
+        {
+            eol = static_cast<const char*>(ptr_nl);
+        }
+        else if (ptr_0)
+        {
+            eol = static_cast<const char*>(ptr_0);
+        }
+
+        LOG(INFO) << m_obj_name << " failed: " << std::string(ptr, eol);
+        ptr = eol + 1;
+    }
+
+    fail();
 }
 
 void

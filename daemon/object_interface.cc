@@ -154,15 +154,32 @@ object_interface_destroy(object_interface* obj_int)
 REPLICANT_API void
 object_permanent_error(object_interface* obj_int, const char* format, ...)
 {
+    va_list args;
+    va_start(args, format);
+
     if (obj_int->debug_stream)
     {
-        va_list args;
-        va_start(args, format);
         vfprintf(obj_int->debug_stream, format, args);
         va_end(args);
         fprintf(obj_int->debug_stream, "\n");
     }
 
+    char* buf = NULL;
+    int ret = 0;
+
+    if ((ret = vasprintf(&buf, format, args)) < 0)
+    {
+        object_permanent_error(obj_int, "failed to allocate memory");
+    }
+
+    uint8_t c = static_cast<uint8_t>(COMMAND_FAILURE);
+    uint32_t o = ret;
+    char head[5];
+    e::pack8be(c, head);
+    e::pack32be(o, head + 1);
+    obj_int->write(head, 5);
+    obj_int->write(buf, ret);
+    free(buf);
     obj_int->fd.close();
     abort();
 }
