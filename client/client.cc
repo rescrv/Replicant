@@ -983,7 +983,7 @@ client :: maintain_connection(replicant_returncode* status)
     {
         configuration c;
         e::error e;
-        replicant_returncode rc = m_bootstrap.do_it(1000, &c, &e);
+        replicant_returncode rc = m_bootstrap.do_it(10000, &c, &e);
 
         if (rc != REPLICANT_SUCCESS)
         {
