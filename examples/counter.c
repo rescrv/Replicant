@@ -35,7 +35,7 @@
 /* Replicant */
 #include <rsm.h>
 
-inline char*
+char*
 pack64be(uint64_t number, char* buffer)
 {
     buffer[0] = (number >> 56) & 0xffU;
@@ -49,7 +49,7 @@ pack64be(uint64_t number, char* buffer)
     return buffer + sizeof(uint64_t);
 }
 
-inline const char*
+const char*
 unpack64be(const char* buffer, uint64_t* number)
 {
     *number = 0;

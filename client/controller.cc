@@ -25,35 +25,30 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
-#ifndef replicant_client_mapper_h_
-#define replicant_client_mapper_h_
-
-// BusyBee
-#include <busybee_mapper.h>
-
 // Replicant
-#include "namespace.h"
-#include "common/configuration.h"
+#include "client/controller.h"
 
-BEGIN_REPLICANT_NAMESPACE
+using replicant::controller;
 
-class mapper : public busybee_mapper
+controller :: controller(configuration* c)
+    : m_c(c)
 {
-    public:
-        mapper(configuration* c);
-        ~mapper() throw ();
+}
 
-    public:
-        virtual bool lookup(uint64_t si, po6::net::location* bound_to);
+controller :: ~controller() throw ()
+{
+}
 
-    private:
-        configuration* m_c;
+po6::net::location
+controller :: lookup(uint64_t si)
+{
+    for (size_t i = 0; i < m_c->servers().size(); ++i)
+    {
+        if (m_c->servers()[i].id.get() == si)
+        {
+            return m_c->servers()[i].bind_to;
+        }
+    }
 
-    private:
-        mapper(const mapper&);
-        mapper& operator = (const mapper&);
-};
-
-END_REPLICANT_NAMESPACE
-
-#endif // replicant_client_mapper_h_
+    return po6::net::location();
+}

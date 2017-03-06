@@ -1,4 +1,5 @@
 // Copyright (c) 2012-2015, Robert Escriva
+// Copyright (c) 2017, Robert Escriva, Cornell University
 // All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
@@ -47,7 +48,7 @@
 #include <po6/threads/thread.h>
 
 // BusyBee
-#include <busybee_mta.h>
+#include <busybee.h>
 
 // Replicant
 #include "namespace.h"
@@ -55,9 +56,9 @@
 #include "common/configuration.h"
 #include "daemon/acceptor.h"
 #include "daemon/ballot.h"
+#include "daemon/controller.h"
 #include "daemon/deferred_msg.h"
 #include "daemon/failure_tracker.h"
-#include "daemon/mapper.h"
 #include "daemon/pvalue.h"
 #include "daemon/replica.h"
 #include "daemon/settings.h"
@@ -92,8 +93,8 @@ class daemon
 
     // getting to steady state
     public:
-        void become_cluster_member(const bootstrap& bs);
-        void setup_replica_from_bootstrap(const bootstrap& bs,
+        void become_cluster_member(bootstrap bs);
+        void setup_replica_from_bootstrap(bootstrap bs,
                                           std::auto_ptr<replica>* rep);
         void send_bootstrap(server_id si);
         void process_bootstrap(server_id si,
@@ -254,10 +255,10 @@ class daemon
         // accessed outside the main thread that loops from "run".
         po6::threads::mutex m_config_mtx;
         configuration m_config;
-        // This mapper uses the above lock to access the config (potentially
+        // This controller uses the above lock to access the config (potentially
         // from other threads).
-        mapper m_busybee_mapper;
-        busybee_mta* m_busybee;
+        controller m_busybee_controller;
+        busybee_server* m_busybee;
         failure_tracker m_ft;
         std::vector<periodic> m_periodic;
 

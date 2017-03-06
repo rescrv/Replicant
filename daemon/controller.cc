@@ -26,23 +26,23 @@
 // POSSIBILITY OF SUCH DAMAGE.
 
 // Replicant
-#include "daemon/mapper.h"
+#include "daemon/controller.h"
 
-using replicant::mapper;
+using replicant::controller;
 
-mapper :: mapper(po6::threads::mutex* mtx, configuration* c)
+controller :: controller(po6::threads::mutex* mtx, configuration* c)
     : m_mtx(mtx)
     , m_c(c)
     , m_aux()
 {
 }
 
-mapper :: ~mapper() throw ()
+controller :: ~controller() throw ()
 {
 }
 
-bool
-mapper :: lookup(uint64_t si, po6::net::location* bound_to)
+po6::net::location
+controller :: lookup(uint64_t si)
 {
     po6::threads::mutex::hold hold(m_mtx);
 
@@ -50,8 +50,7 @@ mapper :: lookup(uint64_t si, po6::net::location* bound_to)
     {
         if (m_aux[i].id.get() == si)
         {
-            *bound_to = m_aux[i].bind_to;
-            return true;
+            return m_aux[i].bind_to;
         }
     }
 
@@ -59,16 +58,15 @@ mapper :: lookup(uint64_t si, po6::net::location* bound_to)
     {
         if (m_c->servers()[i].id.get() == si)
         {
-            *bound_to = m_c->servers()[i].bind_to;
-            return true;
+            return m_c->servers()[i].bind_to;
         }
     }
 
-    return false;
+    return po6::net::location();
 }
 
 void
-mapper :: add_aux(const server& s)
+controller :: add_aux(const server& s)
 {
     po6::threads::mutex::hold hold(m_mtx);
     const std::vector<server>& servers(m_c->servers());
@@ -94,7 +92,7 @@ mapper :: add_aux(const server& s)
 }
 
 void
-mapper :: clear_aux()
+controller :: clear_aux()
 {
     po6::threads::mutex::hold hold(m_mtx);
     m_aux.clear();

@@ -25,14 +25,14 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
-#ifndef replicant_daemon_mapper_h_
-#define replicant_daemon_mapper_h_
+#ifndef replicant_daemon_controller_h_
+#define replicant_daemon_controller_h_
 
 // po6
 #include <po6/threads/mutex.h>
 
 // BusyBee
-#include <busybee_mapper.h>
+#include <busybee.h>
 
 // Replicant
 #include "namespace.h"
@@ -40,14 +40,14 @@
 
 BEGIN_REPLICANT_NAMESPACE
 
-class mapper : public busybee_mapper
+class controller : public busybee_controller
 {
     public:
-        mapper(po6::threads::mutex* mtx, configuration* c);
-        ~mapper() throw ();
+        controller(po6::threads::mutex* mtx, configuration* c);
+        ~controller() throw ();
 
     public:
-        virtual bool lookup(uint64_t si, po6::net::location* bound_to);
+        virtual po6::net::location lookup(uint64_t si);
         void add_aux(const server& s);
         void clear_aux();
 
@@ -57,10 +57,10 @@ class mapper : public busybee_mapper
         std::vector<server> m_aux;
 
     private:
-        mapper(const mapper&);
-        mapper& operator = (const mapper&);
+        controller(const controller&);
+        controller& operator = (const controller&);
 };
 
 END_REPLICANT_NAMESPACE
 
-#endif // replicant_daemon_mapper_h_
+#endif // replicant_daemon_controller_h_

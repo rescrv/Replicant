@@ -45,7 +45,7 @@
 #include <e/guard.h>
 
 // BusyBee
-#include <busybee_constants.h>
+#include <busybee.h>
 
 // Replicant
 #include "common/network_msgtype.h"

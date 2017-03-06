@@ -28,6 +28,9 @@
 // po6
 #include <po6/io/fd.h>
 
+// BusyBee
+#include <busybee.h>
+
 // Replicant
 #include "common/generate_token.h"
 
@@ -41,9 +44,14 @@ replicant :: generate_token(uint64_t* token)
         return false;
     }
 
-    if (sysrand.read(token, sizeof(*token)) != sizeof(*token))
+    *token = 0;
+
+    while (*token == 0 || BUSYBEE_IS_ANONYMOUS(*token))
     {
-        return false;
+        if (sysrand.read(token, sizeof(*token)) != sizeof(*token))
+        {
+            return false;
+        }
     }
 
     return true;

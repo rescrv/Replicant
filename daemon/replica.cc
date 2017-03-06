@@ -1643,7 +1643,7 @@ replica :: launch(object* obj, const char* executable, char* const * args)
             abort();
         }
 
-        int limit = sysconf(_SC_OPEN_MAX);
+        long limit = sysconf(_SC_OPEN_MAX);
 
         for (int i = 1; i < limit; ++i)
         {

@@ -1,4 +1,5 @@
 // Copyright (c) 2015, Robert Escriva
+// Copyright (c) 2017, Robert Escriva, Cornell University
 // All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
@@ -25,8 +26,8 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
-#ifndef replicant_client_client_h_
-#define replicant_client_client_h_
+#ifndef replicant_common_client_h_
+#define replicant_common_client_h_
 
 // C
 #include <stdint.h>
@@ -43,14 +44,14 @@
 #include <e/intrusive_ptr.h>
 
 // BusyBee
-#include <busybee_st.h>
+#include <busybee.h>
 
 // Replicant
 #include <replicant.h>
 #include "namespace.h"
 #include "common/bootstrap.h"
 #include "common/ids.h"
-#include "client/mapper.h"
+#include "client/controller.h"
 
 BEGIN_REPLICANT_NAMESPACE
 class pending;
@@ -125,7 +126,7 @@ class client
 
     public:
         void reset_busybee();
-        int64_t inner_loop(replicant_returncode* status);
+        int64_t inner_loop(int timeout, replicant_returncode* status);
         bool maintain_connection(replicant_returncode* status);
         void handle_disruption(server_id si);
         int64_t send(pending* p);
@@ -142,8 +143,8 @@ class client
         typedef std::list<e::intrusive_ptr<pending_robust> > pending_robust_list_t;
         // communication
         bootstrap m_bootstrap;
-        mapper m_busybee_mapper;
-        busybee_st m_busybee;
+        controller m_busybee_controller;
+        const std::auto_ptr<busybee_client> m_busybee;
         // server selection
         uint64_t m_random_token;
         // configuration
@@ -185,4 +186,4 @@ class client
 
 END_REPLICANT_NAMESPACE
 
-#endif // replicant_client_client_h_
+#endif // replicant_common_client_h_

@@ -1,4 +1,5 @@
 // Copyright (c) 2012-2015, Robert Escriva
+// Copyright (c) 2017, Robert Escriva, Cornell University
 // All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
@@ -55,15 +56,15 @@
 
 // e
 #include <e/compat.h>
+#include <e/daemon.h>
+#include <e/daemonize.h>
 #include <e/endian.h>
 #include <e/guard.h>
 #include <e/error.h>
 #include <e/strescape.h>
 
 // BusyBee
-#include <busybee_constants.h>
-#include <busybee_mta.h>
-#include <busybee_single.h>
+#include <busybee.h>
 
 // Replicant
 #include "common/atomic_io.h"
@@ -122,7 +123,7 @@ daemon :: daemon()
     , m_us()
     , m_config_mtx()
     , m_config()
-    , m_busybee_mapper(&m_config_mtx, &m_config)
+    , m_busybee_controller(&m_config_mtx, &m_config)
     , m_busybee(NULL)
     , m_ft(&m_config)
     , m_periodic()
@@ -194,16 +195,6 @@ daemon :: ~daemon() throw ()
     m_gc.deregister_thread(&m_gc_ts);
 }
 
-static bool
-install_signal_handler(int signum, void (*f)(int))
-{
-    struct sigaction handle;
-    handle.sa_handler = f;
-    sigfillset(&handle.sa_mask);
-    handle.sa_flags = SA_RESTART;
-    return sigaction(signum, &handle, NULL) >= 0;
-}
-
 static void
 atomically_allow_pending_blocked_signals()
 {
@@ -222,7 +213,7 @@ atomically_allow_pending_blocked_signals()
 }
 
 int
-daemon :: run(bool daemonize,
+daemon :: run(bool background,
               std::string data,
               std::string log,
               std::string pidfile,
@@ -236,114 +227,26 @@ daemon :: run(bool daemonize,
               const char* init_str,
               const char* init_rst)
 {
-    if (!install_signal_handler(SIGHUP, exit_on_signal))
+    if (!e::block_all_signals())
     {
-        std::cerr << "could not install SIGHUP handler; exiting" << std::endl;
+        std::cerr << "could not block signals; exiting" << std::endl;
         return EXIT_FAILURE;
     }
 
-    if (!install_signal_handler(SIGINT, exit_on_signal))
+    if (!e::daemonize(background, log, "replicant-daemon-", pidfile, has_pidfile))
     {
-        std::cerr << "could not install SIGINT handler; exiting" << std::endl;
         return EXIT_FAILURE;
     }
 
-    if (!install_signal_handler(SIGTERM, exit_on_signal))
+    if (!e::install_signal_handler(SIGHUP, exit_on_signal) ||
+        !e::install_signal_handler(SIGINT, exit_on_signal) ||
+        !e::install_signal_handler(SIGTERM, exit_on_signal) ||
+        !e::install_signal_handler(SIGQUIT, exit_on_signal) ||
+        !e::install_signal_handler(SIGUSR1, handle_debug_dump) ||
+        !e::install_signal_handler(SIGUSR2, handle_debug_mode))
     {
-        std::cerr << "could not install SIGTERM handler; exiting" << std::endl;
+        PLOG(ERROR) << "could not install signal handlers";
         return EXIT_FAILURE;
-    }
-
-    if (!install_signal_handler(SIGQUIT, exit_on_signal))
-    {
-        std::cerr << "could not install SIGTERM handler; exiting" << std::endl;
-        return EXIT_FAILURE;
-    }
-
-    if (!install_signal_handler(SIGUSR1, handle_debug_dump))
-    {
-        std::cerr << "could not install SIGUSR2 handler; exiting" << std::endl;
-        return EXIT_FAILURE;
-    }
-
-    if (!install_signal_handler(SIGUSR2, handle_debug_mode))
-    {
-        std::cerr << "could not install SIGUSR2 handler; exiting" << std::endl;
-        return EXIT_FAILURE;
-    }
-
-    sigset_t ss;
-
-    if (sigfillset(&ss) < 0 ||
-        pthread_sigmask(SIG_SETMASK, &ss, NULL) < 0)
-    {
-        std::cerr << "could not block signals" << std::endl;
-        return EXIT_FAILURE;
-    }
-
-    google::LogToStderr();
-
-    if (daemonize)
-    {
-        char buf[PATH_MAX];
-        char* cwd = getcwd(buf, PATH_MAX);
-
-        if (!cwd)
-        {
-            LOG(ERROR) << "could not get current working directory";
-            return EXIT_FAILURE;
-        }
-
-        log = po6::path::join(cwd, log);
-
-        struct stat x;
-
-        if (lstat(log.c_str(), &x) < 0 || !S_ISDIR(x.st_mode))
-        {
-            LOG(ERROR) << "cannot fork off to the background because "
-                       << log.c_str() << " does not exist or is not writable";
-            return EXIT_FAILURE;
-        }
-
-        if (!has_pidfile)
-        {
-            LOG(INFO) << "forking off to the background";
-            LOG(INFO) << "you can find the log at " << log.c_str() << "/replicant-daemon-YYYYMMDD-HHMMSS.sssss";
-            LOG(INFO) << "provide \"--foreground\" on the command-line if you want to run in the foreground";
-        }
-
-        google::SetLogSymlink(google::INFO, "");
-        google::SetLogSymlink(google::WARNING, "");
-        google::SetLogSymlink(google::ERROR, "");
-        google::SetLogSymlink(google::FATAL, "");
-        log = po6::path::join(log, "replicant-daemon-");
-        google::SetLogDestination(google::INFO, log.c_str());
-
-        if (::daemon(1, 0) < 0)
-        {
-            PLOG(ERROR) << "could not daemonize";
-            return EXIT_FAILURE;
-        }
-
-        if (has_pidfile)
-        {
-            char pidbuf[21];
-            ssize_t pidbuf_sz = sprintf(pidbuf, "%d\n", getpid());
-            assert(pidbuf_sz < static_cast<ssize_t>(sizeof(pidbuf)));
-            po6::io::fd pid(open(pidfile.c_str(), O_WRONLY|O_CREAT|O_TRUNC, S_IRUSR|S_IWUSR));
-
-            if (pid.get() < 0 || pid.xwrite(pidbuf, pidbuf_sz) != pidbuf_sz)
-            {
-                PLOG(ERROR) << "could not create pidfile " << pidfile.c_str();
-                return EXIT_FAILURE;
-            }
-        }
-    }
-    else
-    {
-        LOG(INFO) << "running in the foreground";
-        LOG(INFO) << "no log will be generated; instead, the log messages will print to the terminal";
-        LOG(INFO) << "provide \"--daemon\" on the command-line if you want to run in the background";
     }
 
     bool saved = false;
@@ -408,7 +311,7 @@ daemon :: run(bool daemonize,
             return EXIT_FAILURE;
         }
 
-        e::atomic::store_ptr_release(&m_busybee, new busybee_mta(&m_gc, &m_busybee_mapper, m_us.bind_to, m_us.id.get(), 0));
+        e::atomic::store_ptr_release(&m_busybee, busybee_server::create(&m_busybee_controller, m_us.id.get(), m_us.bind_to, &m_gc));
     }
     // case 2: new node, joining an existing cluster
     else if (!saved && set_existing)
@@ -423,7 +326,7 @@ daemon :: run(bool daemonize,
 
         m_us.id = server_id(this_server);
         saved_bootstrap = existing;
-        e::atomic::store_ptr_release(&m_busybee, new busybee_mta(&m_gc, &m_busybee_mapper, m_us.bind_to, m_us.id.get(), 0));
+        e::atomic::store_ptr_release(&m_busybee, busybee_server::create(&m_busybee_controller, m_us.id.get(), m_us.bind_to, &m_gc));
         setup_replica_from_bootstrap(existing, &m_replica);
 
         if (!m_replica.get())
@@ -454,7 +357,7 @@ daemon :: run(bool daemonize,
         }
 
         LOG(INFO) << "re-joining cluster as " << m_us << " using bootstrap " << saved_bootstrap;
-        e::atomic::store_ptr_release(&m_busybee, new busybee_mta(&m_gc, &m_busybee_mapper, m_us.bind_to, m_us.id.get(), 0));
+        e::atomic::store_ptr_release(&m_busybee, busybee_server::create(&m_busybee_controller, m_us.id.get(), m_us.bind_to, &m_gc));
 
         e::slice snapshot;
         std::auto_ptr<e::buffer> snapshot_backing;
@@ -635,8 +538,7 @@ daemon :: run(bool daemonize,
         bool debug_mode = s_debug_mode;
         uint64_t token;
         std::auto_ptr<e::buffer> msg;
-        m_busybee->set_timeout(1);
-        busybee_returncode rc = m_busybee->recv(&m_gc_ts, &token, &msg);
+        busybee_returncode rc = m_busybee->recv(&m_gc_ts, 1, &token, &msg);
 
         switch (rc)
         {
@@ -666,13 +568,14 @@ daemon :: run(bool daemonize,
                 continue;
             case BUSYBEE_DISRUPTED:
                 continue;
+            case BUSYBEE_SEE_ERRNO:
+                LOG(ERROR) << "receive error: " << po6::strerror(errno);
+                continue;
             case BUSYBEE_SHUTDOWN:
-            case BUSYBEE_POLLFAILED:
-            case BUSYBEE_ADDFDFAIL:
             case BUSYBEE_EXTERNAL:
             default:
                 LOG(ERROR) << "BusyBee returned " << rc << " during a \"recv\" call";
-                return false;
+                continue;
         }
 
         assert(msg.get());
@@ -762,7 +665,7 @@ daemon :: run(bool daemonize,
 }
 
 void
-daemon :: become_cluster_member(const bootstrap& current)
+daemon :: become_cluster_member(bootstrap current)
 {
     LOG(INFO) << "trying to join the existing cluster using " << current;
     e::error err;
@@ -814,15 +717,14 @@ daemon :: become_cluster_member(const bootstrap& current)
 
         for (size_t i = 0; !has_params && i < c.servers().size(); ++i)
         {
-            busybee_single bs(c.servers()[i].bind_to);
+            std::auto_ptr<busybee_single> bbs(busybee_single::create(c.servers()[i].bind_to));
             const size_t sz = BUSYBEE_HEADER_SIZE
                             + pack_size(REPLNET_GET_ROBUST_PARAMS)
                             + sizeof(uint64_t);
             std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
             msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_GET_ROBUST_PARAMS << uint64_t(0);
-            bs.send(msg);
-            bs.set_timeout(1000);
-            bs.recv(&msg);
+            bbs->send(msg);
+            bbs->recv(1000, &msg);
 
             if (!msg.get())
             {
@@ -844,7 +746,7 @@ daemon :: become_cluster_member(const bootstrap& current)
 
         for (size_t i = 0; has_params && i < c.servers().size(); ++i)
         {
-            busybee_single bs(c.servers()[i].bind_to);
+            std::auto_ptr<busybee_single> bbs(busybee_single::create(c.servers()[i].bind_to));
             const size_t sz = BUSYBEE_HEADER_SIZE
                             + pack_size(REPLNET_CALL_ROBUST)
                             + 3 * sizeof(uint64_t)
@@ -854,9 +756,8 @@ daemon :: become_cluster_member(const bootstrap& current)
                 << REPLNET_CALL_ROBUST << uint64_t(iteration) << cluster_nonce
                 << min_slot << e::pack_memmove(call.data(), call.size());
 
-            bs.send(msg);
-            bs.set_timeout(1000);
-            bs.recv(&msg);
+            bbs->send(msg);
+            bbs->recv(1000, &msg);
 
             if (!msg.get())
             {
@@ -884,7 +785,7 @@ daemon :: become_cluster_member(const bootstrap& current)
 
         for (size_t i = 0; !success && i < c.servers().size(); ++i)
         {
-            busybee_single bs(c.servers()[i].bind_to);
+            std::auto_ptr<busybee_single> bbs(busybee_single::create(c.servers()[i].bind_to));
             const size_t sz = BUSYBEE_HEADER_SIZE
                             + pack_size(REPLNET_SERVER_BECOME_MEMBER)
                             + pack_size(m_us);
@@ -892,9 +793,8 @@ daemon :: become_cluster_member(const bootstrap& current)
             msg->pack_at(BUSYBEE_HEADER_SIZE)
                 << REPLNET_SERVER_BECOME_MEMBER << m_us;
 
-            bs.send(msg);
-            bs.set_timeout(1000);
-            bs.recv(&msg);
+            bbs->send(msg);
+            bbs->recv(1000, &msg);
 
             if (!msg.get())
             {
@@ -929,7 +829,7 @@ daemon :: become_cluster_member(const bootstrap& current)
 }
 
 void
-daemon :: setup_replica_from_bootstrap(const bootstrap& current,
+daemon :: setup_replica_from_bootstrap(bootstrap current,
                                        std::auto_ptr<replica>* rep)
 {
     LOG(INFO) << "copying replica state from existing cluster using " << current;
@@ -955,13 +855,13 @@ daemon :: setup_replica_from_bootstrap(const bootstrap& current,
 
         for (size_t i = 0; !rep->get() && i < c.servers().size(); ++i)
         {
-            busybee_single bs(c.servers()[i].bind_to);
+            std::auto_ptr<busybee_single> bbs(busybee_single::create(c.servers()[i].bind_to));
             const size_t sz = BUSYBEE_HEADER_SIZE
                             + pack_size(REPLNET_STATE_TRANSFER);
             std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
             msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_STATE_TRANSFER;
-            bs.send(msg);
-            bs.recv(&msg);
+            bbs->send(msg);
+            bbs->recv(60000, &msg);
 
             if (!msg.get())
             {
@@ -1685,7 +1585,7 @@ daemon :: post_config_change_hook()
     }
 
     m_ft.assume_all_alive();
-    m_busybee_mapper.clear_aux();
+    m_busybee_controller.clear_aux();
     return true;
 }
 
@@ -2158,16 +2058,14 @@ daemon :: rebootstrap(bootstrap bs)
                             + pack_size(REPLNET_WHO_ARE_YOU);
             std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
             msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_WHO_ARE_YOU;
-            busybee_single bbs(hosts[i]);
+            std::auto_ptr<busybee_single> bbs(busybee_single::create(hosts[i]));
 
-            if (bbs.send(msg) != BUSYBEE_SUCCESS)
+            if (bbs->send(msg) != BUSYBEE_SUCCESS)
             {
                 continue;
             }
 
-            bbs.set_timeout(1000);
-
-            if (bbs.recv(&msg) != BUSYBEE_SUCCESS)
+            if (bbs->recv(1000, &msg) != BUSYBEE_SUCCESS)
             {
                 continue;
             }
@@ -2186,7 +2084,7 @@ daemon :: rebootstrap(bootstrap bs)
 
             if (!sptr || sptr->bind_to != s.bind_to)
             {
-                m_busybee_mapper.add_aux(s);
+                m_busybee_controller.add_aux(s);
             }
         }
     }
@@ -2208,9 +2106,10 @@ daemon :: send(server_id si, std::auto_ptr<e::buffer> msg)
             return true;
         case BUSYBEE_DISRUPTED:
             return false;
+        case BUSYBEE_SEE_ERRNO:
+            LOG(ERROR) << "could not send message: " << po6::strerror(errno);
+            return false;
         case BUSYBEE_SHUTDOWN:
-        case BUSYBEE_POLLFAILED:
-        case BUSYBEE_ADDFDFAIL:
         case BUSYBEE_TIMEOUT:
         case BUSYBEE_EXTERNAL:
         case BUSYBEE_INTERRUPTED:
@@ -2223,7 +2122,7 @@ daemon :: send(server_id si, std::auto_ptr<e::buffer> msg)
 bool
 daemon :: send_from_non_main_thread(server_id si, std::auto_ptr<e::buffer> msg)
 {
-    busybee_mta* bb = NULL;
+    busybee_server* bb = NULL;
 
     while (!(bb = e::atomic::load_ptr_acquire(&m_busybee)) &&
            __sync_fetch_and_add(&s_interrupts, 0) == 0)
@@ -2252,9 +2151,10 @@ daemon :: send_from_non_main_thread(server_id si, std::auto_ptr<e::buffer> msg)
             return true;
         case BUSYBEE_DISRUPTED:
             return false;
+        case BUSYBEE_SEE_ERRNO:
+            LOG(ERROR) << "could not send message: " << po6::strerror(errno);
+            return false;
         case BUSYBEE_SHUTDOWN:
-        case BUSYBEE_POLLFAILED:
-        case BUSYBEE_ADDFDFAIL:
         case BUSYBEE_TIMEOUT:
         case BUSYBEE_EXTERNAL:
         case BUSYBEE_INTERRUPTED:

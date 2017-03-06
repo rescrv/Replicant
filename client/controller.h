@@ -1,4 +1,5 @@
 // Copyright (c) 2012, Robert Escriva
+// Copyright (c) 2017, Robert Escriva, Cornell University
 // All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
@@ -25,31 +26,35 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 
+#ifndef replicant_client_controller_h_
+#define replicant_client_controller_h_
+
+// BusyBee
+#include <busybee.h>
+
 // Replicant
-#include "client/mapper.h"
+#include "namespace.h"
+#include "common/configuration.h"
 
-using replicant::mapper;
+BEGIN_REPLICANT_NAMESPACE
 
-mapper :: mapper(configuration* c)
-    : m_c(c)
+class controller : public busybee_controller
 {
-}
+    public:
+        controller(configuration* c);
+        ~controller() throw ();
 
-mapper :: ~mapper() throw ()
-{
-}
+    public:
+        virtual po6::net::location lookup(uint64_t server_id);
 
-bool
-mapper :: lookup(uint64_t si, po6::net::location* bound_to)
-{
-    for (size_t i = 0; i < m_c->servers().size(); ++i)
-    {
-        if (m_c->servers()[i].id.get() == si)
-        {
-            *bound_to = m_c->servers()[i].bind_to;
-            return true;
-        }
-    }
+    private:
+        configuration* m_c;
 
-    return false;
-}
+    private:
+        controller(const controller&);
+        controller& operator = (const controller&);
+};
+
+END_REPLICANT_NAMESPACE
+
+#endif // replicant_client_controller_h_

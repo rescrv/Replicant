@@ -37,6 +37,9 @@
 // e
 #include <e/error.h>
 
+// BusyBee
+#include <busybee.h>
+
 // Replicant
 #include <replicant.h>
 #include "namespace.h"
@@ -62,7 +65,7 @@ class bootstrap
 
     public:
         bool valid() const;
-        replicant_returncode do_it(int timeout, configuration* config, e::error* err) const;
+        replicant_returncode do_it(int timeout, configuration* config, e::error* err);
         std::string conn_str() const;
         const std::vector<po6::net::hostname>& hosts() const { return m_hosts; }
 
@@ -70,7 +73,11 @@ class bootstrap
         bootstrap& operator = (const bootstrap& rhs);
 
     private:
+        replicant_returncode send_bootstrap(size_t i, e::error* err);
+
+    private:
         std::vector<po6::net::hostname> m_hosts;
+        std::vector<e::compat::shared_ptr<busybee_single> > m_conns;
         bool m_valid;
 };
 

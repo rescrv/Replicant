@@ -34,10 +34,6 @@
 // po6
 #include <po6/time.h>
 
-// BusyBee
-#include <busybee_constants.h>
-#include <busybee_single.h>
-
 // Replicant
 #include "common/bootstrap.h"
 #include "common/configuration.h"
@@ -115,12 +111,14 @@ bootstrap :: conn_str(const po6::net::hostname* hns, size_t hns_sz)
 
 bootstrap :: bootstrap()
     : m_hosts()
+    , m_conns()
     , m_valid(true)
 {
 }
 
 bootstrap :: bootstrap(const char* host, uint16_t port)
     : m_hosts()
+    , m_conns()
     , m_valid(true)
 {
     m_hosts.push_back(po6::net::hostname(host, port));
@@ -128,6 +126,7 @@ bootstrap :: bootstrap(const char* host, uint16_t port)
 
 bootstrap :: bootstrap(const char* cs)
     : m_hosts()
+    , m_conns()
     , m_valid(true)
 {
     m_valid = parse_hosts(cs, &m_hosts);
@@ -135,6 +134,7 @@ bootstrap :: bootstrap(const char* cs)
 
 bootstrap :: bootstrap(const char* host, uint16_t port, const char* cs)
     : m_hosts()
+    , m_conns()
     , m_valid(true)
 {
     m_valid = parse_hosts(cs, &m_hosts);
@@ -143,12 +143,14 @@ bootstrap :: bootstrap(const char* host, uint16_t port, const char* cs)
 
 bootstrap :: bootstrap(const std::vector<po6::net::hostname>& h)
     : m_hosts(h)
+    , m_conns()
     , m_valid(true)
 {
 }
 
 bootstrap :: bootstrap(const bootstrap& other)
     : m_hosts(other.m_hosts)
+    , m_conns()
     , m_valid(other.m_valid)
 {
 }
@@ -176,10 +178,8 @@ bootstrap :: valid() const
     return true;
 }
 
-#define MILLIS (1000ULL * 1000ULL)
-
 replicant_returncode
-bootstrap :: do_it(int timeout, configuration* config, e::error* err) const
+bootstrap :: do_it(int timeout, configuration* config, e::error* err)
 {
     if (!m_valid)
     {
@@ -195,79 +195,35 @@ bootstrap :: do_it(int timeout, configuration* config, e::error* err) const
         return REPLICANT_COMM_FAILED;
     }
 
-    std::vector<e::compat::shared_ptr<busybee_single> > conns;
-    conns.resize(m_hosts.size());
-
-    int64_t now = po6::monotonic_time();
-    const int64_t target = now + timeout * MILLIS;
+    m_conns.resize(m_hosts.size());
     replicant_returncode rc = REPLICANT_TIMEOUT;
     err->set_loc(__FILE__, __LINE__);
     err->set_msg() << "timed out connecting to the cluster";
+    std::vector<pollfd> pfds;
+    pfds.resize(m_conns.size());
 
-    while (timeout < 0 || now < target)
+    for (size_t i = 0; i < m_hosts.size(); ++i)
     {
-        for (size_t i = 0; i < m_hosts.size(); ++i)
+        if (!m_conns[i].get())
         {
-            if (conns[i].get())
-            {
-                continue;
-            }
+            m_conns[i].reset(busybee_single::create(m_hosts[i]));
+        }
+    }
 
-            conns[i].reset(new busybee_single(m_hosts[i]));
-            const size_t sz = BUSYBEE_HEADER_SIZE
-                            + pack_size(REPLNET_BOOTSTRAP);
-            std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
-            msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_BOOTSTRAP;
-
-            switch (conns[i]->send(msg))
-            {
-                case BUSYBEE_SUCCESS:
-                    break;
-                case BUSYBEE_TIMEOUT:
-                    err->set_loc(__FILE__, __LINE__);
-                    err->set_msg() << "timed out connecting to " << m_hosts[i];
-                    rc = REPLICANT_TIMEOUT;
-                    conns[i].reset();
-                    break;
-                case BUSYBEE_SHUTDOWN:
-                case BUSYBEE_POLLFAILED:
-                case BUSYBEE_DISRUPTED:
-                case BUSYBEE_ADDFDFAIL:
-                case BUSYBEE_EXTERNAL:
-                case BUSYBEE_INTERRUPTED:
-                    err->set_loc(__FILE__, __LINE__);
-                    err->set_msg() << "communication error with " << m_hosts[i];
-                    rc = REPLICANT_COMM_FAILED;
-                    conns[i].reset();
-                    break;
-                default:
-                    abort();
-            }
+    while (true)
+    {
+        for (size_t i = 0; i < m_conns.size(); ++i)
+        {
+            rc = send_bootstrap(i, err);
+            pfds[i].fd = m_conns[i]->poll_fd();
+            pfds[i].events = POLLIN|POLLOUT|POLLHUP|POLLERR;
+            pfds[i].revents = 0;
         }
 
-        bool failures = false;
-        std::vector<pollfd> pfds;
-        pfds.resize(m_hosts.size());
-
-        for (size_t i = 0; i < m_hosts.size(); ++i)
-        {
-            if (!conns[i].get())
-            {
-                failures = true;
-                pfds[i].fd = -1;
-            }
-            else
-            {
-                pfds[i].fd = conns[i]->poll_fd();
-                pfds[i].events = POLLIN|POLLOUT|POLLHUP|POLLERR;
-                pfds[i].revents = 0;
-            }
-        }
-
-        const int64_t remain = (target - now) / MILLIS;
-        const int this_timeout = timeout < 0 ? -1 : remain;
-        int ret = poll(&pfds[0], pfds.size(), failures ? std::min(this_timeout, 100) : this_timeout);
-        now = po6::monotonic_time();
+        rc = REPLICANT_TIMEOUT;
+        err->set_loc(__FILE__, __LINE__);
+        err->set_msg() << "timed out connecting to the cluster";
+        int ret = poll(&pfds[0], pfds.size(), timeout);
 
         if (ret < 0)
         {
@@ -279,68 +235,57 @@ bootstrap :: do_it(int timeout, configuration* config, e::error* err) const
         }
         else if (ret == 0)
         {
-            continue;
+            return rc;
         }
 
-        assert(ret > 0);
-        size_t idx = m_hosts.size();
-
-        for (size_t i = 0; i < m_hosts.size(); ++i)
+        for (size_t i = 0; i < m_conns.size(); ++i)
         {
-            if (pfds[i].revents != 0)
+            if (pfds[i].fd < 0 || pfds[i].revents == 0)
             {
-                idx = i;
-                break;
+                continue;
             }
-        }
 
-        std::auto_ptr<e::buffer> msg;
-        conns[idx]->set_timeout(0);
+            std::auto_ptr<e::buffer> msg;
 
-        switch (conns[idx]->recv(&msg))
-        {
-            case BUSYBEE_SUCCESS:
-                break;
-            case BUSYBEE_TIMEOUT:
-                break;
-            case BUSYBEE_SHUTDOWN:
-            case BUSYBEE_POLLFAILED:
-            case BUSYBEE_DISRUPTED:
-            case BUSYBEE_ADDFDFAIL:
-            case BUSYBEE_EXTERNAL:
-            case BUSYBEE_INTERRUPTED:
+            switch (m_conns[i]->recv(timeout, &msg))
+            {
+                case BUSYBEE_SUCCESS:
+                    break;
+                case BUSYBEE_TIMEOUT:
+                    break;
+                case BUSYBEE_SHUTDOWN:
+                case BUSYBEE_DISRUPTED:
+                case BUSYBEE_EXTERNAL:
+                case BUSYBEE_INTERRUPTED:
+                case BUSYBEE_SEE_ERRNO:
+                    err->set_loc(__FILE__, __LINE__);
+                    err->set_msg() << "communication error with " << m_hosts[i];
+                    rc = REPLICANT_COMM_FAILED;
+                    continue;
+                default:
+                    abort();
+            }
+
+            if (!msg.get())
+            {
+                continue;
+            }
+
+            network_msgtype mt = REPLNET_NOP;
+            e::unpacker up = msg->unpack_from(BUSYBEE_HEADER_SIZE);
+            up >> mt >> *config;
+
+            if (up.error() || mt != REPLNET_BOOTSTRAP || !config->validate())
+            {
                 err->set_loc(__FILE__, __LINE__);
-                err->set_msg() << "communication error with " << m_hosts[idx];
+                err->set_msg() << "received a malformed bootstrap message from " << m_hosts[i];
                 rc = REPLICANT_COMM_FAILED;
-                conns[idx].reset();
-                break;
-            default:
-                abort();
+                continue;
+            }
+
+            return REPLICANT_SUCCESS;
         }
-
-        if (!msg.get())
-        {
-            continue;
-        }
-
-        network_msgtype mt = REPLNET_NOP;
-        e::unpacker up = msg->unpack_from(BUSYBEE_HEADER_SIZE);
-        up >> mt >> *config;
-
-        if (up.error() || mt != REPLNET_BOOTSTRAP || !config->validate())
-        {
-            err->set_loc(__FILE__, __LINE__);
-            err->set_msg() << "received a malformed bootstrap message from " << m_hosts[idx];
-            rc = REPLICANT_COMM_FAILED;
-            conns[idx].reset();
-            continue;
-        }
-
-        return REPLICANT_SUCCESS;
     }
-
-    // return the error corresponding to the last failure
-    return rc;
 }
 
 std::string
@@ -359,6 +304,40 @@ bootstrap :: operator = (const bootstrap& rhs)
     }
 
     return *this;
+}
+
+replicant_returncode
+bootstrap :: send_bootstrap(size_t i, e::error* err)
+{
+    replicant_returncode rc = REPLICANT_SUCCESS;
+    const size_t sz = BUSYBEE_HEADER_SIZE
+                    + pack_size(REPLNET_BOOTSTRAP);
+    std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
+    msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_BOOTSTRAP;
+
+    switch (m_conns[i]->send(msg))
+    {
+        case BUSYBEE_SUCCESS:
+            break;
+        case BUSYBEE_TIMEOUT:
+            err->set_loc(__FILE__, __LINE__);
+            err->set_msg() << "timed out connecting to " << m_hosts[i];
+            rc = REPLICANT_TIMEOUT;
+            break;
+        case BUSYBEE_SHUTDOWN:
+        case BUSYBEE_DISRUPTED:
+        case BUSYBEE_EXTERNAL:
+        case BUSYBEE_INTERRUPTED:
+        case BUSYBEE_SEE_ERRNO:
+            err->set_loc(__FILE__, __LINE__);
+            err->set_msg() << "communication error with " << m_hosts[i];
+            rc = REPLICANT_COMM_FAILED;
+            break;
+        default:
+            abort();
+    }
+
+    return rc;
 }
 
 std::ostream&

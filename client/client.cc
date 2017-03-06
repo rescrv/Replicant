@@ -1,4 +1,5 @@
 // Copyright (c) 2015, Robert Escriva
+// Copyright (c) 2017, Robert Escriva, Cornell University
 // All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
@@ -32,13 +33,18 @@
 #include <poll.h>
 #include <signal.h>
 
+// STL
+#include <algorithm>
+
+// po6
+#include <po6/time.h>
+
 // e
 #include <e/endian.h>
 #include <e/pow2.h>
 
 // BusyBee
-#include <busybee_constants.h>
-#include <busybee_st.h>
+#include <busybee.h>
 
 // Replicant
 #include "common/atomic_io.h"
@@ -69,8 +75,8 @@ using replicant::client;
 
 client :: client(const char* coordinator, uint16_t port)
     : m_bootstrap(coordinator, port)
-    , m_busybee_mapper(&m_config)
-    , m_busybee(&m_busybee_mapper, 0)
+    , m_busybee_controller(&m_config)
+    , m_busybee(busybee_client::create(&m_busybee_controller))
     , m_random_token(0)
     , m_config_state(0)
     , m_config_data(NULL)
@@ -112,8 +118,8 @@ client :: client(const char* coordinator, uint16_t port)
 
 client :: client(const char* cs)
     : m_bootstrap(cs)
-    , m_busybee_mapper(&m_config)
-    , m_busybee(&m_busybee_mapper, 0)
+    , m_busybee_controller(&m_config)
+    , m_busybee(busybee_client::create(&m_busybee_controller))
     , m_random_token(0)
     , m_config_state(0)
     , m_config_data(NULL)
@@ -397,8 +403,7 @@ client :: availability_check(unsigned servers, int timeout,
 
     while (timeout < 0 || start + PO6_SECONDS * timeout >= po6::monotonic_time())
     {
-        m_busybee.set_timeout(100);
-        int64_t ret = inner_loop(status);
+        int64_t ret = inner_loop(100, status);
 
         if (ret < 0)
         {
@@ -455,8 +460,7 @@ client :: loop(int timeout, replicant_returncode* status)
             !m_pending_robust_retry.empty()) &&
            m_complete.empty())
     {
-        m_busybee.set_timeout(timeout);
-        int64_t ret = inner_loop(status);
+        int64_t ret = inner_loop(timeout, status);
 
         if (ret < 0 && *status == REPLICANT_TIMEOUT)
         {
@@ -601,8 +605,7 @@ client :: wait(int64_t id, int timeout, replicant_returncode* status)
             break;
         }
 
-        m_busybee.set_timeout(timeout);
-        int64_t ret = inner_loop(status);
+        int64_t ret = inner_loop(timeout, status);
 
         if (ret < 0)
         {
@@ -703,7 +706,7 @@ client :: kill(int64_t id)
 int
 client :: poll_fd()
 {
-    return m_busybee.poll_fd();
+    return m_busybee->poll_fd();
 }
 
 void
@@ -800,8 +803,8 @@ client :: set_error_message(const char* msg)
 void
 client :: reset_busybee()
 {
-    m_busybee.reset();
-    m_busybee.set_external_fd(m_flagfd.poll_fd());
+    m_busybee->reset();
+    m_busybee->set_external_fd(m_flagfd.poll_fd());
 
     for (pending_list_t::iterator it = m_persistent.begin();
             it != m_persistent.end(); ++it)
@@ -811,7 +814,7 @@ client :: reset_busybee()
 }
 
 int64_t
-client :: inner_loop(replicant_returncode* status)
+client :: inner_loop(int timeout, replicant_returncode* status)
 {
     if (m_backoff)
     {
@@ -864,7 +867,7 @@ client :: inner_loop(replicant_returncode* status)
     std::auto_ptr<e::buffer> msg;
     const bool isset = m_flagfd.isset();
     m_flagfd.clear();
-    busybee_returncode rc = m_busybee.recv(&id, &msg);
+    busybee_returncode rc = m_busybee->recv(timeout, &id, &msg);
 
     if (isset)
     {
@@ -884,9 +887,10 @@ client :: inner_loop(replicant_returncode* status)
         case BUSYBEE_TIMEOUT:
             ERROR(TIMEOUT) << "operation timed out";
             return -1;
+        case BUSYBEE_SEE_ERRNO:
+            ERROR(TIMEOUT) << po6::strerror(errno);
+            return -1;
         case BUSYBEE_SHUTDOWN:
-        case BUSYBEE_POLLFAILED:
-        case BUSYBEE_ADDFDFAIL:
         case BUSYBEE_EXTERNAL:
         default:
             ERROR(INTERNAL)
@@ -1119,7 +1123,7 @@ client :: send_robust(pending_robust* p)
 bool
 client :: send(server_id si, std::auto_ptr<e::buffer> msg, replicant_returncode* status)
 {
-    busybee_returncode rc = m_busybee.send(si.get(), msg);
+    busybee_returncode rc = m_busybee->send(si.get(), msg);
 
     switch (rc)
     {
@@ -1128,9 +1132,10 @@ client :: send(server_id si, std::auto_ptr<e::buffer> msg, replicant_returncode*
         case BUSYBEE_DISRUPTED:
             handle_disruption(si);
             return false;
+        case BUSYBEE_SEE_ERRNO:
+            ERROR(COMM_FAILED) << po6::strerror(errno);
+            return false;
         case BUSYBEE_SHUTDOWN:
-        case BUSYBEE_POLLFAILED:
-        case BUSYBEE_ADDFDFAIL:
         case BUSYBEE_TIMEOUT:
         case BUSYBEE_EXTERNAL:
         case BUSYBEE_INTERRUPTED:
@@ -1205,7 +1210,6 @@ client :: callback_config()
         {
             if (!std::binary_search(new_servers.begin(), new_servers.end(), old_servers[i]))
             {
-                m_busybee.drop(old_servers[i].get());
                 handle_disruption(old_servers[i]);
             }
         }
