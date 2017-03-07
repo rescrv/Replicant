@@ -283,6 +283,7 @@ bootstrap :: do_it(int timeout, configuration* config, e::error* err)
                 continue;
             }
 
+            m_conns.clear();
             return REPLICANT_SUCCESS;
         }
     }
