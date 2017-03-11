@@ -13,6 +13,13 @@
     ...
 }
 {
+    <g++>
+    Memcheck:Leak
+    ...
+    obj:*/g++-4.8
+    ...
+}
+{
     <aio_fsync>
     Memcheck:Leak
     ...
