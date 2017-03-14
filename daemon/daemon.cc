@@ -911,9 +911,10 @@ daemon :: send_bootstrap(server_id si)
 {
     size_t sz = BUSYBEE_HEADER_SIZE
               + pack_size(REPLNET_BOOTSTRAP)
+              + pack_size(m_us)
               + pack_size(m_config);
     std::auto_ptr<e::buffer> msg(e::buffer::create(sz));
-    msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_BOOTSTRAP << m_config;
+    msg->pack_at(BUSYBEE_HEADER_SIZE) << REPLNET_BOOTSTRAP << m_us << m_config;
     send(si, msg);
 }
 

@@ -855,7 +855,7 @@ acceptor :: parse_identity(const std::string& ident,
     std::string bind_to_str(ptr, paren - ptr);
     std::vector<po6::net::hostname> hns;
 
-    if (!bootstrap::parse_hosts(bind_to_str.c_str(), &hns) || hns.size() != 1)
+    if (!parse_hosts(bind_to_str.c_str(), &hns) || hns.size() != 1)
     {
         LOG(ERROR) << "bad server in stored identity";
         return false;

@@ -132,6 +132,7 @@ class client
         int64_t send(pending* p);
         int64_t send_robust(pending_robust* p);
         bool send(server_id si, std::auto_ptr<e::buffer> msg, replicant_returncode* status);
+        void adopt_config(const configuration& c);
         void callback_config();
         void callback_tick();
         void add_defense(uint64_t nonce) { m_defended.insert(nonce); }
@@ -142,12 +143,13 @@ class client
         typedef std::list<e::intrusive_ptr<pending> > pending_list_t;
         typedef std::list<e::intrusive_ptr<pending_robust> > pending_robust_list_t;
         // communication
-        bootstrap m_bootstrap;
+        std::string m_conn_str;
         controller m_busybee_controller;
         const std::auto_ptr<busybee_client> m_busybee;
         // server selection
         uint64_t m_random_token;
         // configuration
+        uint64_t m_last_bootstrap_attempt;
         uint64_t m_config_state;
         char* m_config_data;
         size_t m_config_data_sz;

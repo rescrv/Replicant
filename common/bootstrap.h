@@ -47,12 +47,22 @@
 BEGIN_REPLICANT_NAMESPACE
 class configuration;
 
+bool
+parse_hosts(const char* conn_str,
+            std::vector<po6::net::hostname>* hosts);
+
+std::string conn_str(const char* host, uint16_t port);
+std::string conn_str(const char* host, uint16_t port, const char* conn_str);
+std::string conn_str(const po6::net::hostname* hns, size_t hns_sz);
+
+replicant_returncode
+start_bootstrap(busybee_client* cl, const std::string& conn_str, e::error* e);
+replicant_returncode
+start_bootstrap(busybee_client* cl, const std::vector<po6::net::hostname>& hosts, e::error* e);
+
 class bootstrap
 {
     public:
-        static bool parse_hosts(const char* conn_str,
-                                std::vector<po6::net::hostname>* hosts);
-        static std::string conn_str(const po6::net::hostname* hns, size_t hns_sz);
 
     public:
         bootstrap();
@@ -73,11 +83,9 @@ class bootstrap
         bootstrap& operator = (const bootstrap& rhs);
 
     private:
-        replicant_returncode send_bootstrap(size_t i, e::error* err);
-
-    private:
         std::vector<po6::net::hostname> m_hosts;
-        std::vector<e::compat::shared_ptr<busybee_single> > m_conns;
+        busybee_controller m_busybee_controller;
+        const std::auto_ptr<busybee_client> m_busybee;
         bool m_valid;
 };
 

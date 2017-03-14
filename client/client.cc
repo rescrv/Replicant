@@ -74,10 +74,11 @@ using replicant::client;
     p->error(__FILE__, __LINE__)
 
 client :: client(const char* coordinator, uint16_t port)
-    : m_bootstrap(coordinator, port)
+    : m_conn_str(replicant::conn_str(coordinator, port))
     , m_busybee_controller(&m_config)
     , m_busybee(busybee_client::create(&m_busybee_controller))
     , m_random_token(0)
+    , m_last_bootstrap_attempt(0)
     , m_config_state(0)
     , m_config_data(NULL)
     , m_config_data_sz(0)
@@ -117,10 +118,11 @@ client :: client(const char* coordinator, uint16_t port)
 }
 
 client :: client(const char* cs)
-    : m_bootstrap(cs)
+    : m_conn_str(cs)
     , m_busybee_controller(&m_config)
     , m_busybee(busybee_client::create(&m_busybee_controller))
     , m_random_token(0)
+    , m_last_bootstrap_attempt(0)
     , m_config_state(0)
     , m_config_data(NULL)
     , m_config_data_sz(0)
@@ -816,7 +818,7 @@ client :: reset_busybee()
 int64_t
 client :: inner_loop(int timeout, replicant_returncode* status)
 {
-    if (m_backoff)
+    if (m_backoff && m_config.version() != version_id())
     {
         ERROR(COMM_FAILED) << "lost communication with the cluster; backoff before trying again";
         m_backoff = false;
@@ -854,13 +856,11 @@ client :: inner_loop(int timeout, replicant_returncode* status)
         m_pending_robust_retry.size() == pending_robust_retry_sz)
     {
         m_backoff = true;
-        return 0;
     }
 
     if (m_pending.empty() && m_pending_robust.empty())
     {
         m_backoff = true;
-        return 0;
     }
 
     uint64_t id;
@@ -911,7 +911,28 @@ client :: inner_loop(int timeout, replicant_returncode* status)
         return -1;
     }
 
-    if (mt != REPLNET_CLIENT_RESPONSE)
+    m_backoff = false;
+
+    if (mt == REPLNET_BOOTSTRAP)
+    {
+        server s;
+        configuration c;
+        up = up >> s >> c;
+
+        if (up.error())
+        {
+            ERROR(COMM_FAILED) << "received a malformed bootstrap message from " << si;
+            return -1;
+        }
+
+        if (si == s.id && c.has(s.id))
+        {
+            adopt_config(c);
+        }
+
+        return 0;
+    }
+    else if (mt != REPLNET_CLIENT_RESPONSE)
     {
         ERROR(SERVER_ERROR) << "received a " << mt << " from " << si
                             << " which is not handled by clients";
@@ -985,18 +1006,23 @@ client :: maintain_connection(replicant_returncode* status)
 
     if (m_config.version() == version_id())
     {
-        configuration c;
-        e::error e;
-        replicant_returncode rc = m_bootstrap.do_it(10000, &c, &e);
+        const uint64_t now = po6::monotonic_time();
 
-        if (rc != REPLICANT_SUCCESS)
+        if (m_last_bootstrap_attempt + PO6_SECONDS > now)
         {
-            *status = rc;
+            return true;
+        }
+
+        e::error e;
+        *status = start_bootstrap(m_busybee.get(), m_conn_str, &e);
+
+        if (*status != REPLICANT_SUCCESS)
+        {
             m_last_error = e;
             return false;
         }
 
-        m_config = c;
+        m_last_bootstrap_attempt = now;
     }
 
     return true;
@@ -1056,7 +1082,7 @@ client :: send(pending* p)
     server_selector ss(m_config.server_ids(), m_random_token);
     server_id si;
 
-    while ((si = ss.next()) != server_id())
+    while ((si = ss.next()) != server_id() && m_config.version() != version_id())
     {
         const uint64_t nonce = m_next_nonce++;
         std::auto_ptr<e::buffer> msg = p->request(nonce);
@@ -1075,19 +1101,10 @@ client :: send(pending* p)
         }
     }
 
-    if (p->resend_on_failure())
-    {
-        m_flagfd.set();
-        m_backoff = true;
-        m_pending_retry.push_back(p);
-        return p->client_visible_id();
-    }
-    else
-    {
-        PERROR(COMM_FAILED) << "communication failed while sending operation";
-        m_last_error = p->error();
-        return -1;
-    }
+    m_flagfd.set();
+    m_backoff = true;
+    m_pending_retry.push_back(p);
+    return p->client_visible_id();
 }
 
 int64_t
@@ -1097,7 +1114,7 @@ client :: send_robust(pending_robust* p)
     server_selector ss(m_config.server_ids(), m_random_token);
     server_id si;
 
-    while ((si = ss.next()) != server_id())
+    while ((si = ss.next()) != server_id() && m_config.version() != version_id())
     {
         const uint64_t nonce = m_next_nonce++;
         const size_t sz = BUSYBEE_HEADER_SIZE
@@ -1147,18 +1164,8 @@ client :: send(server_id si, std::auto_ptr<e::buffer> msg, replicant_returncode*
 }
 
 void
-client :: callback_config()
+client :: adopt_config(const configuration& new_config)
 {
-    configuration new_config;
-    e::unpacker up(m_config_data, m_config_data_sz);
-    up = up >> new_config;
-
-    if (up.error() || !new_config.validate())
-    {
-        // technically not incorrect, but we could expose more info to the user
-        return;
-    }
-
     bool changed = false;
 
     if (m_config.cluster() != new_config.cluster())
@@ -1221,8 +1228,22 @@ client :: callback_config()
     {
         m_config = new_config;
     }
+}
 
-    return;
+void
+client :: callback_config()
+{
+    configuration new_config;
+    e::unpacker up(m_config_data, m_config_data_sz);
+    up = up >> new_config;
+
+    if (up.error() || !new_config.validate())
+    {
+        // technically not incorrect, but we could expose more info to the user
+        return;
+    }
+
+    adopt_config(new_config);
 }
 
 void
