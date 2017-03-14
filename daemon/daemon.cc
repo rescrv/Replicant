@@ -1260,6 +1260,12 @@ daemon :: send_paxos_submit(uint64_t slot_start,
                             uint64_t slot_limit,
                             const e::slice& command)
 {
+    if (m_acceptor.current_ballot() == ballot())
+    {
+        LOG_IF(INFO, s_debug_mode) << "dropping command submission because the leader is unknown";
+        return;
+    }
+
     const size_t sz = BUSYBEE_HEADER_SIZE
                     + pack_size(REPLNET_PAXOS_SUBMIT)
                     + 2 * sizeof(uint64_t)
