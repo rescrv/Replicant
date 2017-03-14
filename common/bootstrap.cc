@@ -283,7 +283,7 @@ bootstrap :: do_it(int timeout, configuration* config, e::error* err)
     const uint64_t start = po6::monotonic_time();
     uint64_t now = start;
 
-    while (timeout < 0 || start + timeout * PO6_MILLIS > now)
+    while (timeout < 0 || start + timeout * PO6_MILLIS >= now)
     {
         uint64_t id = 0;
         std::auto_ptr<e::buffer> msg;

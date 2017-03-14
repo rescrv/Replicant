@@ -81,6 +81,11 @@ main(int argc, const char* argv[])
         return EXIT_FAILURE;
     }
 
+    if (timeout < 0)
+    {
+        timeout = -1;
+    }
+
     replicant_returncode status;
     char* desc = NULL;
 
