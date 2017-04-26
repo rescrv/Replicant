@@ -375,30 +375,6 @@ replica :: strike_number(server_id si) const
 }
 
 void
-replica :: set_defense_threshold(uint64_t tick)
-{
-    for (std::map<uint64_t, defender>::iterator it = m_defended.begin();
-            it != m_defended.end(); ++it)
-    {
-        defender* d = &it->second;
-
-        if (d->last_seen < tick)
-        {
-            std::string input;
-            e::packer pa(&input);
-            pa = pa << it->first << d->last_seen << tick;
-
-            e::slice obj("replicant");
-            e::slice func("takedown");
-            std::string cmd;
-            pa = e::packer(&cmd);
-            pa = pa << obj << func << input;
-            m_daemon->enqueue_paxos_command(SLOT_CALL, cmd);
-        }
-    }
-}
-
-void
 replica :: take_blocking_snapshot(uint64_t* snapshot_slot,
                                   e::slice* snapshot,
                                   std::auto_ptr<e::buffer>* snapshot_backing)
@@ -1153,14 +1129,43 @@ replica :: execute_tick(const pvalue& p,
         return;
     }
 
-    if (m_cond_tick.peek_state() == tick)
+    if (m_cond_tick.peek_state() != tick)
     {
-        m_cond_tick.broadcast(m_daemon);
+        return;
+    }
 
-        for (object_map_t::iterator it = m_objects.begin();
-                it != m_objects.end(); ++it)
+    m_cond_tick.broadcast(m_daemon);
+
+    for (object_map_t::iterator it = m_objects.begin();
+            it != m_objects.end(); ++it)
+    {
+        it->second->call("__tick__", t, p, flags, command_nonce, si, request_nonce);
+    }
+
+    const uint64_t DEFEND_TIMEOUT = m_s.DEFEND_TIMEOUT;
+
+    if (tick < DEFEND_TIMEOUT)
+    {
+        return;
+    }
+
+    for (std::map<uint64_t, defender>::iterator it = m_defended.begin();
+            it != m_defended.end(); ++it)
+    {
+        defender* d = &it->second;
+
+        if (d->last_seen < tick - DEFEND_TIMEOUT)
         {
-            it->second->call("__tick__", t, p, flags, command_nonce, si, request_nonce);
+            std::string input;
+            e::packer pa(&input);
+            pa = pa << it->first << d->last_seen << tick;
+
+            e::slice obj("replicant");
+            e::slice func("takedown");
+            std::string cmd;
+            pa = e::packer(&cmd);
+            pa = pa << obj << func << input;
+            m_daemon->enqueue_paxos_command(SLOT_CALL, cmd);
         }
     }
 }
@@ -1568,6 +1573,12 @@ replica :: execute_takedown(const pvalue& p,
     uint64_t tick;
     e::unpacker up(input);
     up = up >> takedown_nonce >> last_seen >> tick;
+
+    if (m_cond_tick.peek_state() != tick)
+    {
+        return;
+    }
+
     std::map<uint64_t, defender>::iterator it = m_defended.find(takedown_nonce);
 
     if (it == m_defended.end())

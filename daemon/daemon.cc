@@ -1951,12 +1951,6 @@ daemon :: periodic_tick(uint64_t)
     e::packer pa(&cmd);
     pa = pa << m_replica->last_tick();
     enqueue_paxos_command(SLOT_TICK, cmd);
-    const uint64_t DEFEND_TIMEOUT = m_replica->current_settings().DEFEND_TIMEOUT;
-
-    if (tick >= DEFEND_TIMEOUT)
-    {
-        m_replica->set_defense_threshold(tick - DEFEND_TIMEOUT);
-    }
 }
 
 void
